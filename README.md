@@ -134,7 +134,7 @@ Two refusals have a cause the message cannot see:
 
 ## Examples
 
-Both run on Anvil, and CI runs them (`e2e/e2e.sh`).
+Both run on Anvil, and CI runs them (`test/e2e/e2e.sh`).
 
 - [`examples/token-vault`](examples/token-vault): one chain, a dependent unit, a dated step, `recover`.
 - [`examples/two-chain`](examples/two-chain): two chains, a step on the second that reads the first, a
