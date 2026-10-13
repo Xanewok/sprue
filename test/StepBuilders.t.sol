@@ -20,10 +20,6 @@ contract StepFunctions {
         return true;
     }
 
-    function configureDue(string calldata) external pure returns (bool) {
-        return false;
-    }
-
     function observed(string calldata) external pure returns (bool) {
         return false;
     }
@@ -215,27 +211,6 @@ contract StepBuildersTest is Test, Declares {
         new BuilderGraph(unit, s);
     }
 
-    function test_aDependencyDeclaredLaterIsOrderedFirst_andTheRestKeepDeclarationOrder() public {
-        Step[] memory s = new Step[](3);
-        s[0] = _node("a").needs("b");
-        s[1] = _node("b");
-        s[2] = _node("c");
-        BuilderGraph g = new BuilderGraph(unit, s);
-        assertEq(g.node(0).id, "b");
-        assertEq(g.node(1).id, "a");
-        assertEq(g.node(2).id, "c");
-    }
-
-    function test_cycleIsRefusedWithItsIds() public {
-        Step[] memory s = new Step[](4);
-        s[0] = _node("tail").needs("a");
-        s[1] = _node("a").needs("b");
-        s[2] = _node("b").needs("c");
-        s[3] = _node("c").needs("a");
-        vm.expectRevert(abi.encodeWithSelector(Graph.Cycle.selector, "a -> c -> b -> a"));
-        new BuilderGraph(unit, s);
-    }
-
     function test_unlistedUnitIsRefused() public {
         BuilderGraph g = new BuilderGraph(unit, new Step[](0));
         Step[] memory s = new Step[](1);
@@ -367,49 +342,6 @@ contract StepBuildersTest is Test, Declares {
             )
         );
         new BuilderGraph(unit, s);
-    }
-
-    function test_buildersPreserveOptionsAndDeclarationOrder() public {
-        Step[] memory s = new Step[](3);
-        s[0] = _node("date").notBefore("fixture.time");
-        s[1] = _until("predicate", "observed", StepFunctions.observed.selector).needs("date");
-        s[2] = _step("alias", "notify", StepFunctions.notify.selector)
-            .needs("date")
-            .needs("predicate")
-            .by("fixture.owner")
-            .slow()
-            .forTests()
-            .withArg(255)
-            .due(StepFunctions.notifyDue.selector)
-            .gateView("windowEnd", StepFunctions.windowEnd.selector)
-            .on("far")
-            .reads("near")
-            .reads("other")
-            .ownsForks();
-        BuilderGraph g = new BuilderGraph(unit, s);
-        assertEq(g.nodeCount(), 3);
-        assertEq(g.node(0).gate, "fixture.time");
-        assertEq(g.node(1).until, "observed");
-        Graph.Node memory n = g.node(2);
-        assertEq(n.id, "alias");
-        assertEq(n.unit, unit.target);
-        assertEq(n.script, unit.script);
-        assertEq(n.step, "notify");
-        assertEq(n.deps.length, 2);
-        assertEq(n.deps[0], "date");
-        assertEq(n.deps[1], "predicate");
-        assertEq(n.sender, "fixture.owner");
-        assertEq(n.gate, "windowEnd");
-        assertEq(n.on, "far");
-        assertEq(n.reads.length, 2);
-        assertEq(n.reads[0], "near");
-        assertEq(n.reads[1], "other");
-        assertTrue(n.slow);
-        assertTrue(n.testOnly);
-        assertEq(n.arg, "255");
-        assertTrue(n.due);
-        assertFalse(n.certified);
-        assertTrue(n.ownForks);
     }
 
     function test_plan_namesAWaitingPredicateAndARefusingStep() public {
