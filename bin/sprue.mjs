@@ -137,7 +137,7 @@ function graph(GRAPH, tag, sig, ...rest) {
     throw new Exit(1);
   }
   return r.text.split("\n").flatMap((l) => {
-    const m = new RegExp(`^ *${tag} (.*)$`).exec(l.replace(/\r$/, ""));
+    const m = new RegExp(`^ *${tag} (.*)$`, "s").exec(l.replace(/\r$/, ""));
     return m ? [m[1]] : [];
   });
 }
@@ -493,7 +493,7 @@ async function main(argv) {
     if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
     // transactions but names no file, they cannot be shown, so refuse.
-    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23)] : []));
+    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
     const show = (v) => (v == null ? "null" : typeof v === "string" ? v : JSON.stringify(v));
     for (const f of records) {
       try {

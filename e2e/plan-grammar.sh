@@ -98,5 +98,11 @@ using=$(grep -m1 -e '--rpc-url \$B_RPC' "$CORPUS" || true)
 if [ -n "$using" ] && { (unset B_RPC; run_line "$using"); }; then
   fail=$((fail + 1)); echo "FAIL ran with B_RPC unset" >&2
 fi
+# A line JavaScript ends at U+2028 is still one plan line, and refused: dropped, the plan would look
+# empty and the target reached.
+total=$((total + 1))
+printf '%s\n' $'# unexpected\u2028payload' >plan
+rc=0; node "${RUNNER:-$HERE/../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
+[ "$rc" = 2 ] || { fail=$((fail + 1)); echo "FAIL a U+2028 plan line exited $rc, not 2" >&2; }
 echo "$total cases, $fail wrong"
 [ "$fail" = 0 ]
