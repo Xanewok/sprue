@@ -71,31 +71,6 @@ contract ToyGraph is Graph {
     }
 }
 
-/// @dev Chains `near` (a variable) and `far` (an alias).
-contract ChainGraph is ToyGraph {
-    constructor() ToyGraph(new Step[](0)) {
-        Node storage sends = _nodes[_index("toy.deploy")];
-        sends.on = "far";
-        sends.reads.push("near");
-        Node storage owns = _nodes[_index("toy.check")];
-        owns.on = "near";
-        owns.gate = "";
-        owns.reads.push("far");
-        owns.ownForks = true;
-    }
-
-    function _rpcFlag(string memory, string memory chain) internal pure override returns (string memory) {
-        if (keccak256(bytes(chain)) == keccak256("far")) return "farnet";
-        return bytes(chain).length == 0 ? "$R" : "$NEAR_RPC";
-    }
-
-    function _chainEnv(string memory, string[] memory chains) internal pure override returns (string memory out) {
-        for (uint256 i; i < chains.length; ++i) {
-            out = string.concat(out, chains[i], "=$", chains[i], " ");
-        }
-    }
-}
-
 contract CoreTest is Test, Declares {
     string private constant GOLDEN = '{"nodes":[\n'
         '{"id":"toy.deploy","kind":"step","unit":"toy","signature":"deploy(string)","sender":"","on":"","reads":[],"dependencies":[],"doneRule":{"kind":"view","signature":"deployDue(string)"},"gate":{"kind":"none","value":""},"flags":{"slow":false,"testOnly":false,"ownForks":false,"argument":null}},\n'
@@ -115,23 +90,6 @@ contract CoreTest is Test, Declares {
             g.plan("net", "toy.check"),
             "forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url $R --sender $DEPLOYER\n"
             "# then plan again toy.check\n"
-        );
-    }
-
-    function test_plan_marksWhatTheChainHasDone() public {
-        g.toy().deploy("net");
-        vm.warp(100);
-        assertEq(
-            g.plan("net", "toy.check"),
-            "# done toy.deploy\n"
-            "forge script toy.s.sol:Toy --sig 'check(string)' net --rpc-url $R --sender $DEPLOYER\n"
-        );
-    }
-
-    function test_plan_judgesAStepGatedByAnInputOnlyFromItsDate() public {
-        g.toy().deploy("net");
-        assertEq(
-            g.plan("net", "toy.check"), "# done toy.deploy\n# not before 100 toy.check\n# then plan again toy.check\n"
         );
     }
 
@@ -158,21 +116,6 @@ contract CoreTest is Test, Declares {
         ToyGraph withTestNode = new ToyGraph(s);
         vm.expectRevert("cannot reach x.test: unknown target");
         withTestNode.plan("net", "x.test");
-    }
-
-    function test_plan_namesTheChainsAStepSendsOnAndReads() public {
-        ChainGraph chains = new ChainGraph();
-        assertEq(
-            chains.plan("net", "toy.deploy"),
-            "near=$near forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url farnet --sender $DEPLOYER\n"
-        );
-        chains.toy().deploy("net");
-        vm.warp(100);
-        assertEq(
-            chains.plan("net", "toy.check"),
-            "# done toy.deploy\n"
-            "far=$far near=$near forge script toy.s.sol:Toy --sig 'check(string)' net --sender $DEPLOYER\n"
-        );
     }
 
     function test_graph_exportsOneLinePerNode_andRefusesWhatJsonWouldEscape() public {

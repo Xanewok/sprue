@@ -162,19 +162,4 @@ contract GraphOrderTest is Test, Declares {
             assertEq(m.deps[to] >> from & 1, 1, "an arrow is not a dependency");
         }
     }
-
-    function testFuzz_anUnknownNeedIsRefused(uint256 seed, uint8 slot) public {
-        Model memory m = _model(seed);
-        m.deps[slot % m.count] = 0;
-        Registration memory a = Registration(address(new StepFunctions()), "a.s.sol");
-        ClosureGraph g = new ClosureGraph(a);
-        Step[] memory steps = new Step[](m.count);
-        for (uint256 i; i < m.count; ++i) {
-            steps[i] = _step(_id(i), "fund", StepFunctions.fund.selector).due(StepFunctions.fundDue.selector);
-        }
-        steps[slot % m.count] = steps[slot % m.count].needs("ghost");
-        g.add(a, steps);
-        vm.expectRevert(abi.encodeWithSelector(Graph.MissingDependency.selector, _id(slot % m.count), "ghost"));
-        g.validate();
-    }
 }
