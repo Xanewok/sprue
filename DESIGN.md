@@ -154,8 +154,7 @@ Sphinx asks before a proposal; forge has no general confirmation for public netw
 
 ## Open
 
-On the ROADMAP: recovery from the chain alone, calldata from chain values, the nonce fence from a start
-nonce, concurrent runs, what an approval covers, a per-chain journal.
+Planned work is in [ROADMAP.md](ROADMAP.md).
 
 - **Bind the approval to the previewed transactions.** The run compares state around the question and then
   reruns the command. Sending exactly the dry run's transactions (`forge script --resume` on its sequence, or

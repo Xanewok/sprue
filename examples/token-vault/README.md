@@ -43,6 +43,6 @@ $G run local vault.check                 # refused: prints the `recover` command
   node), and list the id in `sprue.json`'s `chains.test` if it is a test chain.
 - Set `openAt` in `vault.input.json` to the real date. Off Anvil, `run` exits 4 until the chain's clock
   reaches it, or waits with `--wait`.
-- A non-local `run` is attended ([Public chains](../../README.md#public-chains)). Commit
+- A non-local `run` is attended ([Your own project](https://github.com/Xanewok/sprue#your-own-project), step 7). Commit
   `deployments/<network>` and `broadcast/`: `recover` reads them.
 - Replace `Token` and `Vault`, and their constructor arguments, with your own contracts.
