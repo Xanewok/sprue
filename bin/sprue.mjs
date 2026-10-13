@@ -16,7 +16,7 @@ const DEV_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2f
 // console.log of every contract the plan calls, so a line is run only if it matches whole.
 const COMMAND =
   /^([A-Z][A-Z0-9_]*_RPC=\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
-const SPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/; // jq's \s, not JS's
+const SPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/; // not JS's \s: it counts U+FEFF and misses U+0085
 const WIN = process.platform === "win32";
 
 const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
@@ -206,7 +206,7 @@ function mermaid(g, target) {
     ns = ns.filter((n) => keep.has(n.id));
   }
   const k = (s) => "n" + String(s).replace(/[^A-Za-z0-9]/gu, "_");
-  // jq sorts strings by code point, which is UTF-8 byte order.
+  // By code point, which is UTF-8 byte order and not JS's UTF-16 order.
   const units = [...new Set(ns.map((n) => n.unit))].sort((a, b) => Buffer.compare(Buffer.from(String(a)), Buffer.from(String(b))));
   const lines = ["flowchart TD"];
   for (const unit of units) {
