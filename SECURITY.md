@@ -37,4 +37,17 @@ end-to-end scenario for each invariant.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
+## Limits
+
+- A step journals each role's intent and address before forge sends. If the broadcast fails partway,
+  some journaled addresses have no code yet. Rerun the step; a pending intent is sent again only as
+  the same transaction.
+- Chains in `chains.local` and `chains.test` have no nonce fence. Losing a journal and its broadcast
+  records there can deploy a role twice.
+- sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
+  reads the role through `_checked` re-reads its certified code before it sends and refuses if the
+  code is gone; a `.needs(...)` edge alone does not re-read it.
+- A failing RPC stops the runner. A receipt that cannot be read while a step journals its deployment
+  is left out of the journal, and the step goes on.
+
 An external security audit is not part of this project.

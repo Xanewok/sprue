@@ -1,12 +1,45 @@
 # sprue
 
-Deploy graphs for Foundry. A deployment is a graph of Solidity steps, each one `forge script`
-command. The graph runs only the steps the chain and the journals show undone, so a rerun finishes
-an interrupted deployment and a rerun of a finished one sends nothing. A step may run on any chain
-of the network, wait for a date, or follow a node that waits for a fact on chain.
+sprue makes multi-step Foundry deployments repeatable, inspectable and recoverable. You declare the
+steps, and what each one needs, in Solidity. `plan` prints the commands still to run and sends
+nothing. `run` sends only the missing steps; on a network with a chain that is not local, it shows each
+step's dry run and waits for you to type `yes`. A rerun finishes an interrupted deployment, and a rerun of a
+finished one sends nothing. Steps may span chains, wait for a date, or wait for a fact on chain.
+
+Each step is one `forge script` command. The graph orders the steps, and a journal per unit records
+what landed, so a lost journal can be rebuilt from forge's records. How sprue compares with plain
+`forge script` and other tools is in [DESIGN.md](DESIGN.md#prior-art).
 
 v0.1: the API may change in any 0.x release. [DESIGN.md](DESIGN.md) holds the assumptions, invariants
 and decisions; [SECURITY.md](SECURITY.md) what the guards check and what stays with you.
+
+## A first local run
+
+[`examples/token-vault`](examples/token-vault) is a complete project that CI runs. From a clone of
+this repository:
+
+```sh
+cp -R examples/token-vault ../my-deploy && cd ../my-deploy
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
+anvil &                                   # chain 31337 on :8545
+export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
+node lib/sprue/bin/sprue.mjs run local vault.check    # deploys, checks, funds, checks
+```
+
+The first `plan` prints:
+
+```
+# chain l2 31337 local
+forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'deploy(string)' local --rpc-url $R --sender $DEPLOYER
+forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'check(string)' local --rpc-url $R --sender $DEPLOYER
+# then plan again vault.deploy
+```
+
+The vault needs the token's address, so the plan stops until those two land. `run` sends them,
+plans again, and repeats; afterwards the same `plan` prints `# done` for all five steps and a second
+`run` sends nothing. The example's [README](examples/token-vault/README.md) explains each step, and
+then loses a journal and rebuilds it.
 
 ## The model
 
@@ -35,23 +68,6 @@ The remapping is `sprue/=lib/sprue/src/` and the runner `node lib/sprue/bin/spru
 (`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
 Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge` 1.8 or later
 (CI pins v1.8.5). It starts no shell; Windows without WSL is not yet tested.
-
-## A first local run
-
-[`examples/token-vault`](examples/token-vault) is a complete project that CI runs. From a clone of
-this repository:
-
-```sh
-cp -R examples/token-vault ../my-deploy && cd ../my-deploy
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
-anvil &                                   # chain 31337 on :8545
-export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
-node lib/sprue/bin/sprue.mjs run local vault.check    # deploys, checks, funds, checks
-```
-
-Its [README](examples/token-vault/README.md) explains each step, and then loses a journal and
-rebuilds it.
 
 ## Your own project
 

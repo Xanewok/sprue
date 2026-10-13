@@ -52,4 +52,4 @@ that chain's clock reaches the date.
   `[rpc_endpoints]`, or export `SOURCE_RPC` and `RECEIVER_RPC`; list the ids in `sprue.json`'s `chains.test`
   (or leave them unlisted for a live chain); `$R` serves the source.
 - Deploy your receiver on its chain, and put its address and the first date in `receiver.input.json`.
-- A non-local `run` is attended ([Public chains](../../README.md#public-chains)).
+- A non-local `run` is attended ([Your own project](https://github.com/Xanewok/sprue#your-own-project), step 7).
