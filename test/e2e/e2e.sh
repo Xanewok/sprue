@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The runner (bin/sprue.mjs) against real Anvil nodes, on the projects in ../examples.
+# The runner (bin/sprue.mjs) against real Anvil nodes, on the projects in examples/.
 # Needs anvil, forge, cast, node, jq; the attended scenario also python3 and setsid.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=$HERE/..
+ROOT=$HERE/../..
 PORT=${PORT:-9350}
 FORGE_STD=${FORGE_STD:-$ROOT/lib/forge-std}
 RPC=http://127.0.0.1:$PORT LIVE=http://127.0.0.1:$((PORT + 1)) GETH=http://127.0.0.1:$((PORT + 2))

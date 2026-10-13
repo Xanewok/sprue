@@ -45,7 +45,7 @@ What sprue relies on and cannot check.
 
 ## Invariants
 
-Each is checked by the named test or end-to-end scenario (`test/`, `e2e/e2e.sh`).
+Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e.sh`).
 
 | Invariant | Evidence |
 |---|---|

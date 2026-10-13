@@ -41,7 +41,7 @@ done
 # may also leave $MARK.
 run_line() {
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
-  node "${RUNNER:-$HERE/../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || true
+  node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || true
   [ -s calls ] || return 1
   [ "$(wc -l <calls)" = 1 ] && [[ $(<calls) == '[script]['* && $(<calls) == *'[--broadcast][--unlocked]' ]] \
     || { echo "FAIL not one forge script argv: $(<calls)" >&2; fail=$((fail + 1)); }
@@ -102,7 +102,7 @@ fi
 # empty and the target reached.
 total=$((total + 1))
 printf '%s\n' $'# unexpected\u2028payload' >plan
-rc=0; node "${RUNNER:-$HERE/../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
+rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
 [ "$rc" = 2 ] || { fail=$((fail + 1)); echo "FAIL a U+2028 plan line exited $rc, not 2" >&2; }
 echo "$total cases, $fail wrong"
 [ "$fail" = 0 ]

@@ -51,4 +51,4 @@ jobs:
         with:
           version: v1.8.5
           cache: false
-      - run: bash e2e/e2e.sh
+      - run: bash test/e2e/e2e.sh
