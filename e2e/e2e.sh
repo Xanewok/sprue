@@ -16,7 +16,7 @@ die() { echo "FAIL $*" >&2; exit 1; }
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
 }
 trap cleanup EXIT
 
@@ -284,10 +284,16 @@ scenario_attended() {
   refused 'no terminal' setsid -w "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
+  # A node that does not name its client could be a development node, so it is refused too.
+  mkdir -p "$W.bin"; printf '#!/bin/sh\n[ "$1 $2" != "rpc web3_clientVersion" ] || exit 1\nexec %s "$@"\n' "$(command -v cast)" >"$W.bin/cast"
+  chmod +x "$W.bin/cast"
+  PATH=$W.bin:$PATH refused 'cannot read the node' tty no G run livenet token.check --account "$account"
   refused 'exactly one of' tty no G run "$net" token.check
   echo dirt >>README.md
   refused 'not clean' tty no "${run[@]}"
+  refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
+  DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'not the signer' tty no "${run[@]}"
   # Nothing above sent.
   n0=$(nonce "$LIVE")
   [ "$n0" = 0 ] || die "attended: a refusal sent"
@@ -298,7 +304,10 @@ scenario_attended() {
   PTY_HOOK="mkdir -p broadcast/Other.s.sol/1 && echo '{}' >broadcast/Other.s.sol/1/run-latest.json" \
     refused 'working tree changed' tty yes "${run[@]}"
   rm -rf broadcast/Other.s.sol
+  PTY_HOOK="git commit -q --allow-empty -m moved" refused 'HEAD moved' tty yes "${run[@]}"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: a changed tree still sent"
+  PTY_HOOK="cast send --unlocked --from $OPS $OPS --rpc-url $LIVE >/dev/null" refused 'nonce moved' tty yes "${run[@]}"
+  n0=$((n0 + 1))
 
   rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
   [ "$rc" = 6 ] || die "attended: an answer of no exited $rc, not 6"
