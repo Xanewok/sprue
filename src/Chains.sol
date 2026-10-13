@@ -120,7 +120,7 @@ function rehearsalPrefixIn(string memory json) pure returns (string memory) {
 
 /// @dev Reads `sprue.json` and reverts unless its shape is exactly the one validated here, so that a
 ///      malformed policy never opens a send path. An `unrecordedDeploys` reason may not start with
-///      `0x`: Foundry would read it as bytes. `graph.sh` validates `paths` itself, because it needs
+///      `0x`: Foundry would read it as bytes. `sprue` validates `paths` itself, because it needs
 ///      them before forge can run; this is the only full check of `chains`.
 function projectJson() view returns (string memory) {
     return validatedProject(PROJECT_FILE);
@@ -188,7 +188,7 @@ function validatedProject(string memory path) view returns (string memory json) 
     }
 }
 
-/// @dev What `graph.sh` accepts of a network name: `[a-z0-9-]`, not starting with `-`.
+/// @dev What the runner accepts of a network name: `[a-z0-9-]`, not starting with `-`.
 function _plainName(string memory name) pure returns (bool) {
     bytes memory b = bytes(name);
     if (b.length == 0 || b[0] == "-") return false;

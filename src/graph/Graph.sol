@@ -175,7 +175,7 @@ abstract contract Graph is Script {
     }
 
     /// @notice Canonical, chain-independent JSON for the declared node table, one node per line.
-    /// @dev Each line is also logged behind `GRAPH `, which is how `graph.sh json` reads it.
+    /// @dev Each line is also logged behind `GRAPH `, which is how `sprue json` reads it.
     function graph() external view returns (string memory out) {
         console.log('GRAPH {"nodes":[');
         out = '{"nodes":[\n';
@@ -374,7 +374,7 @@ abstract contract Graph is Script {
     }
 
     /// @dev The script is `<path>` or `<path>:<Contract>`: a non-empty path that does not start with
-    ///      `:`, and a contract of letters, digits and `_`, as `graph.sh` accepts.
+    ///      `:`, and a contract of letters, digits and `_`, as the runner accepts.
     function _requireScript(string memory script) private pure {
         bytes memory b = bytes(script);
         uint256 colon = b.length;
@@ -396,8 +396,8 @@ abstract contract Graph is Script {
     }
 
     /// @dev Reverts unless `name` is letters, digits, `_` and `extra`, and does not start with `-`. These
-    ///      go into the command lines that `graph.sh` runs through a shell, and only such a name is in
-    ///      its grammar.
+    ///      go into the command lines that the runner runs, and only such a name is in its
+    ///      grammar.
     function _requirePlain(string memory name, string memory extra) private pure {
         bytes memory b = bytes(name);
         bytes memory allowed = bytes(extra);

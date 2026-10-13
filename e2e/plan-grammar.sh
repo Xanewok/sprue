@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# `run` sends every command line that Graph._command prints, and runs nothing else. Usage:
-# plan-grammar.sh <file of real command lines>. Needs jq and git; forge and cast are stubs.
+# `run` sends every command line that Graph._command prints, as one `forge script` argv, and runs
+# nothing else. Usage: plan-grammar.sh <file of real command lines>. Needs node and git; forge and cast
+# are stubs.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CORPUS=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -21,7 +22,7 @@ cat >bin/forge <<'STUB'
 #!/bin/sh
 case " $* " in
   *" plan(string,string) "*) sed 's/^/PLAN /' "$PLAN_FILE" ;;
-  *) echo "$*" >>"$CALLS" ;;
+  *) for a in "$@"; do printf '[%s]' "$a"; done >>"$CALLS"; echo >>"$CALLS" ;;
 esac
 STUB
 cat >bin/cast <<'STUB'
@@ -31,11 +32,19 @@ STUB
 chmod +x bin/forge bin/cast
 export PATH=$W/bin:$PATH PLAN_FILE=$W/plan CALLS=$W/calls R=http://127.0.0.1:1 DEPLOYER=0x1111111111111111111111111111111111111111 MARK=$W/MARK
 
-# run_line <line>: whether `run` sent it to forge. A hostile line may also leave $MARK.
+# The corpus names the RPC variables of its chains; a variable a line names must be set.
+for v in $(grep -Eoh '\$[A-Z][A-Z0-9_]*' "$CORPUS" | tr -d '$' | sort -u); do
+  [ -n "${!v-}" ] || export "$v=http://127.0.0.1:1"
+done
+
+# run_line <line>: whether `run` sent it to forge, as exactly one `forge script` call. A hostile line
+# may also leave $MARK.
 run_line() {
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
-  sh "${GRAPH_SH:-$HERE/../bin/graph.sh}" run net t >out 2>&1 </dev/null || true
-  [ -s calls ]
+  node "${RUNNER:-$HERE/../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || true
+  [ -s calls ] || return 1
+  [ "$(wc -l <calls)" = 1 ] && [[ $(<calls) == '[script]['* && $(<calls) == *'[--broadcast][--unlocked]' ]] \
+    || { echo "FAIL not one forge script argv: $(<calls)" >&2; fail=$((fail + 1)); }
 }
 
 fail=0 total=0
@@ -71,17 +80,23 @@ for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PW
     fail=$((fail + 1)); echo "FAIL ran hostile: $prefix${lines[0]}" >&2
   fi
 done
-# An unquoted variable that holds whitespace would add flags to the command.
+# A variable that holds whitespace or a flag stays one argument of the command.
 for var in R DEPLOYER; do
   total=$((total + 1))
   saved=${!var}
   using=$(grep -m1 "\\\$$var\b" "$CORPUS" || true)
   [ -n "$using" ] || continue
   export "$var=$saved --ffi"
-  if run_line "$using" || [ -e MARK ]; then
-    fail=$((fail + 1)); echo "FAIL ran with $var holding whitespace" >&2
+  if { run_line "$using" && [[ $(<calls) == *'[--ffi]'* ]]; } || [ -e MARK ]; then
+    fail=$((fail + 1)); echo "FAIL $var holding whitespace added an argument: $(<calls)" >&2
   fi
   export "$var=$saved"
 done
+# An unset variable would drop its argument and shift the next flag into its place.
+total=$((total + 1))
+using=$(grep -m1 -e '--rpc-url \$B_RPC' "$CORPUS" || true)
+if [ -n "$using" ] && { (unset B_RPC; run_line "$using"); }; then
+  fail=$((fail + 1)); echo "FAIL ran with B_RPC unset" >&2
+fi
 echo "$total cases, $fail wrong"
 [ "$fail" = 0 ]
