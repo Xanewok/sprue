@@ -33,7 +33,7 @@ What sprue relies on and cannot check.
 - `rpcJson` exists (forge 1.8 or later). An RPC reports a consistent head; fork creation tries a lagging
   node five times, a second apart.
 - The repository is trusted: units are Solidity that `forge script` executes with the `fs_permissions` the
-  project grants, and the runner `eval`s only variable names it has validated.
+  project grants.
 - One operator and one key per journal, until a pending transaction resolves. The nonce fence reads the
   CREATE addresses of the sender, the pin and every journal's deployers, up to 256 nonces each; it does not
   see a CREATE2 deployment, a CREATE of any other key, or a transaction another key still has pending.

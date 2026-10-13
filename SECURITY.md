@@ -9,7 +9,8 @@ The guards are code in `bin/sprue.mjs` and `src/`; [DESIGN.md](DESIGN.md#invaria
 end-to-end scenario for each invariant.
 
 - `run` executes only a command line in the grammar that `plan` prints, as one `forge script` with no
-  shell. A variable it names is one argument, whatever it holds, and an unset one is refused.
+  shell. A variable it names is one argument, whatever it holds; an unset one is refused as an argument and
+  passed empty as an assignment before `forge`.
 - An attended send needs `yes` typed at the terminal. It refuses if, from before the dry run to the
   answer, the sender's nonce on any chain of the network, git HEAD, the lines of
   `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed. The status leaves out the
