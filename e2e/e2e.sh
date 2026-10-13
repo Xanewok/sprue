@@ -307,6 +307,12 @@ scenario_attended() {
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: a changed tree still sent"
   PTY_HOOK="cast send --unlocked --from $OPS $OPS --rpc-url $LIVE >/dev/null" refused 'nonce moved' tty yes "${run[@]}"
   n0=$((n0 + 1))
+  # A transaction of the sender still in the pool: sending now could replace it or collide with its nonce.
+  cast rpc evm_setAutomine false --rpc-url "$LIVE" >/dev/null
+  cast send --async --unlocked --from "$OPS" "$OPS" --rpc-url "$LIVE" >/dev/null
+  refused 'pending transaction' tty no "${run[@]}"
+  cast rpc evm_setAutomine true --rpc-url "$LIVE" >/dev/null; cast rpc evm_mine --rpc-url "$LIVE" >/dev/null
+  n0=$((n0 + 1))
 
   rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
   [ "$rc" = 6 ] || die "attended: an answer of no exited $rc, not 6"
