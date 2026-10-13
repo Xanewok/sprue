@@ -34,7 +34,7 @@ forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
 The remapping is `sprue/=lib/sprue/src/` and the runner `node lib/sprue/bin/sprue.mjs`. With npm
 (`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
 Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge` 1.8 or later
-(CI pins v1.8.5). It starts no shell, so Windows needs no WSL.
+(CI pins v1.8.5). It starts no shell; Windows without WSL is not yet tested.
 
 ## A first local run
 
