@@ -1,0 +1,272 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.27;
+
+import {Script, console} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
+
+import {chainId, defaultChain, deploymentsDir, rehearsalPrefix} from "./Chains.sol";
+import {cheats} from "./DeployChecks.sol";
+
+/// @dev The unit's own parameters, `<root>/<network>/<unit>.input.json`.
+function inputPath(string memory root, string memory network, string memory unit) pure returns (string memory) {
+    return string.concat(root, "/", network, "/", unit, ".input.json");
+}
+
+/// @dev True for the rehearsal prefix itself and for `<prefix>-<suffix>`. A name that merely starts
+///      with the prefix, such as `<prefix>ing`, is a real network.
+function isRehearsalNetwork(string memory network) view returns (bool) {
+    bytes memory name = bytes(network);
+    bytes memory test = bytes(rehearsalPrefix());
+    if (name.length < test.length || (name.length > test.length && name[test.length] != "-")) return false;
+    for (uint256 i; i < test.length; ++i) {
+        if (name[i] != test[i]) return false;
+    }
+    return true;
+}
+
+function unitInputPath(string memory network, string memory unit) view returns (string memory) {
+    return inputPath(deploymentsDir(), network, unit);
+}
+
+/// @dev Replaces the deployments directory's `<to>` with a copy of the files of its `<from>`, inputs
+///      included. Subdirectories are not copied.
+function stageInputs(string memory from, string memory to) {
+    require(isRehearsalNetwork(to), "only a git-ignored rehearsal network is staged");
+    string memory root = deploymentsDir();
+    string memory dir = string.concat(root, "/", to);
+    if (cheats.exists(dir)) cheats.removeDir(dir, true);
+    cheats.createDir(dir, true);
+    VmSafe.DirEntry[] memory files = cheats.readDir(string.concat(root, "/", from));
+    for (uint256 i; i < files.length; ++i) {
+        string[] memory path = cheats.split(files[i].path, "/");
+        if (!files[i].isDir) cheats.copyFile(files[i].path, string.concat(dir, "/", path[path.length - 1]));
+    }
+}
+
+/// @dev A unit's journal `<unit>.json` records what the unit deployed and certified. The unit's
+///      inputs, `<unit>.input.json`, and the network's `network.json` sit beside it.
+abstract contract Journal is Script {
+    string internal _usedNetwork;
+
+    /// @dev The journal's name without `.json`; also the prefix of the unit's input file.
+    function _unit() internal pure virtual returns (string memory);
+
+    function unitName() external pure returns (string memory) {
+        return _unit();
+    }
+
+    /// @dev The directory that holds one subdirectory per network. An override changes where the unit
+    ///      reads and writes (`_dir`, `_unitInput`). It does not change `unitInputPath`,
+    ///      `stageInputs` or the graph's input reads, which always use `paths.deployments`.
+    function _deployments() internal view virtual returns (string memory);
+
+    /// @dev The graph script that the `next:` line printed by `_done` names.
+    function _graphScript() internal view virtual returns (string memory);
+
+    /// @dev The chain whose id stamps the journal (`<chain>ChainId`). Virtual so that a test can
+    ///      choose its own rule.
+    function _defaultChain(string memory network) internal view virtual returns (string memory) {
+        return defaultChain(network);
+    }
+
+    function _networkName() internal view virtual returns (string memory) {
+        return _usedNetwork;
+    }
+
+    /// @dev Sets the network the unit works on. Reverts on an empty name.
+    function _adopt(string memory network) internal {
+        require(bytes(network).length != 0, string.concat("name the network: a directory under ", _deployments(), "/"));
+        _usedNetwork = network;
+    }
+
+    /// @notice The first call of a unit step. `network` names a directory under the deployments path.
+    ///         Reverts unless the selected chain is the network's default chain (`sprue.json`'s
+    ///         `chains.default`, else the network's only chain), before it reads the unit's own
+    ///         journal. Returns that journal.
+    function _use(string memory network) internal returns (string memory journal) {
+        _adopt(network);
+        string memory path = string.concat(_dir(), "/network.json");
+        require(vm.exists(path), string.concat(path, " is missing: name a network under ", _deployments(), "/"));
+        string memory file = vm.readFile(path);
+        require(
+            block.chainid == chainId(file, _defaultChain(file)),
+            string.concat("the RPC's chain is not ", network, "'s default chain")
+        );
+        journal = _journal();
+        string memory stamp = _stampKey(file);
+        if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
+    }
+
+    /// @dev The journal's chain stamp is `<default chain>ChainId`, the key `_selectChain` checks for that chain.
+    function _stampKey(string memory network) internal view returns (string memory) {
+        return string.concat(".", _defaultChain(network), "ChainId");
+    }
+
+    function _putChainStamp() internal {
+        _put(_stampKey(_networkJson()), vm.toString(block.chainid));
+    }
+
+    /// @notice The last call of a unit step. It logs what happened (nothing to send, simulated, or
+    ///         sent), the `git add` command for the files to commit, and the `plan` command to run
+    ///         next, which it returns. The graph owns the order, so a step never names its
+    ///         successor.
+    function _done(bool sends) internal returns (string memory command) {
+        if (!sends) console.log("nothing to send");
+        else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("sent");
+        else console.log("simulated: rerun with --broadcast to send");
+        console.log(string.concat("git add ", _dir(), " broadcast"));
+        command = string.concat(
+            "forge script ", _graphScript(), " --sig 'plan(string,string)' ", _networkName(), " <node> --rpc-url $R"
+        );
+        console.log(string.concat("next: ", command));
+    }
+
+    // ==== Files ====
+
+    function _networkJson() internal view returns (string memory) {
+        return vm.readFile(string.concat(_dir(), "/network.json"));
+    }
+
+    /// @dev The unit's own parameters, `_deployments()/<network>/<unit>.input.json`.
+    function _unitInput() internal view returns (string memory) {
+        return vm.readFile(inputPath(_deployments(), _networkName(), _unit()));
+    }
+
+    /// @dev Reads a string field of `json`. Reverts if it is empty or a placeholder, a value that
+    ///      starts with `<` in an input file waiting to be filled in.
+    function _decided(string memory json, string memory key) internal pure returns (string memory v) {
+        v = vm.parseJsonString(json, string.concat(".", key));
+        require(
+            bytes(v).length != 0 && bytes(v)[0] != "<",
+            string.concat(_unit(), ".input.json's ", key, " is a placeholder: fill it in and commit it")
+        );
+    }
+
+    function _inputUint(string memory json, string memory key, uint256 min, uint256 max)
+        internal
+        pure
+        returns (uint256 v)
+    {
+        v = vm.parseUint(_decided(json, key));
+        require(v >= min && v <= max, string.concat(_unit(), ".input.json's ", key, " is out of range"));
+    }
+
+    /// @dev `key` may be a path such as `creators[0]`. The zero address is never a valid input.
+    function _requiredAddress(string memory json, string memory key) internal pure returns (address a) {
+        a = vm.parseAddress(_decided(json, key));
+        require(
+            a != address(0),
+            string.concat(_unit(), ".input.json's ", key, " is the zero placeholder: supply the required address")
+        );
+    }
+
+    function _dir() internal view returns (string memory) {
+        return string.concat(_deployments(), "/", _networkName());
+    }
+
+    function _path() internal view returns (string memory) {
+        return string.concat(_dir(), "/", _unit(), ".json");
+    }
+
+    /// @dev A missing journal reads as empty; the first `_put` creates it.
+    function _journal() internal view returns (string memory) {
+        string memory p = _path();
+        return vm.exists(p) ? vm.readFile(p) : "{}";
+    }
+
+    function _put(string memory key, string memory value) internal virtual {
+        string memory p = _path();
+        if (!vm.exists(p)) {
+            vm.createDir(_dir(), true);
+            vm.writeFile(p, "{}");
+        }
+        vm.writeJson(value, p, key);
+    }
+
+    function _has(string memory json, string memory key) internal view returns (bool) {
+        return vm.keyExistsJson(json, key);
+    }
+
+    function _addr(string memory json, string memory key) internal pure returns (address) {
+        return vm.parseJsonAddress(json, key);
+    }
+
+    function _uint(string memory json, string memory key) internal pure returns (uint256) {
+        return vm.parseJsonUint(json, key);
+    }
+
+    /// @dev Whether `_networkName()` is a rehearsal network, whose journals simulated runs write too.
+    function _rehearsal() internal view virtual returns (bool);
+
+    /// @dev Whether this run records deployments in the journal: a broadcast, a resumed broadcast,
+    ///      or any run on a rehearsal network. Other writes, such as `_certify`, do not consult it.
+    function _writing() internal view virtual returns (bool) {
+        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume)
+            || _rehearsal();
+    }
+
+    /// @dev The address of `unit`'s `role`, as that unit's `check` step certified it. Reverts unless
+    ///      the journal holds `checked`, it was made on the selected chain, and the code at the
+    ///      address still has the certified hash. A unit should read the contracts it depends on
+    ///      through this and not from another unit's uncertified keys. The certificate's chain is
+    ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
+    function _checked(string memory unit, string memory role) internal view returns (address at) {
+        string memory path = string.concat(_dir(), "/", unit, ".json");
+        string memory record = vm.exists(path) ? vm.readFile(path) : "{}";
+        require(_has(record, ".checked"), string.concat(unit, ".json is unchecked: run its check step"));
+        string memory chainKey = string.concat(".checked.", role, "ChainId");
+        require(
+            _uint(record, _has(record, chainKey) ? chainKey : string.concat(".checked", _stampKey(_networkJson())))
+                == block.chainid,
+            string.concat(unit, ".json was checked on another chain")
+        );
+        at = _addr(record, string.concat(".checked.", role));
+        require(at.code.length != 0, string.concat(role, " has no code"));
+        require(
+            at.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
+            string.concat(role, "'s code differs from ", unit, ".json's check")
+        );
+    }
+
+    /// @dev Writes `checked` unless the journal already holds an equal one. Equality ignores the
+    ///      values of the fixed keys `evmBlock`, `l1Block` and `l2Block`: a block records where the
+    ///      role was first certified, so a rerun leaves the journal byte for byte.
+    function _certify(string memory checked) internal {
+        string memory journal = _journal();
+        if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
+        vm.writeJson(checked, _path(), ".checked");
+    }
+
+    /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
+    ///      id and the role's address. The caller adds its own keys and ends with `_certify`.
+    function _beginChecked(string memory role, address at) internal returns (string memory obj) {
+        obj = string.concat(role, "-checked");
+        vm.serializeUint(obj, "evmBlock", block.number);
+        vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
+        vm.serializeAddress(obj, role, at);
+    }
+
+    /// @dev Ends the certificate `obj` of a unit that certifies one role, on that role's code hash.
+    function _certifyRole(string memory obj, string memory role, address at) internal returns (string memory) {
+        _certify(vm.serializeBytes32(obj, string.concat(role, "CodeHash"), at.codehash));
+        return _done(false);
+    }
+
+    function _isBlockKey(string memory key) private pure returns (bool) {
+        bytes32 h = keccak256(bytes(key));
+        return h == keccak256("evmBlock") || h == keccak256("l1Block") || h == keccak256("l2Block");
+    }
+
+    function _sameIdentity(string memory journal, string memory checked) private view returns (bool) {
+        string[] memory keys = vm.parseJsonKeys(checked, "$");
+        if (vm.parseJsonKeys(journal, ".checked").length != keys.length) return false;
+        for (uint256 i; i < keys.length; ++i) {
+            string memory key = string.concat(".", keys[i]);
+            string memory recorded = string.concat(".checked", key);
+            if (!_has(journal, recorded)) return false;
+            if (_isBlockKey(keys[i])) continue;
+            if (keccak256(vm.parseJson(journal, recorded)) != keccak256(vm.parseJson(checked, key))) return false;
+        }
+        return true;
+    }
+}

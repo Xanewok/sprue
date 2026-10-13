@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.8.5
+          cache: false
+      - run: forge fmt --check
+      - run: forge build
+      - run: forge test
+      - run: sh -n bin/graph.sh
+      - run: |
+          # The library imports forge-std and itself; its tests also import src/.
+          imports() { grep -H -E '^import[[:space:]].*"|^[[:space:]]*\}[[:space:]]*from[[:space:]]*"' "$@" | grep -v -E "$allowed" || true; }
+          std='forge-std/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.sol'
+          bad=$(
+            allowed="^[^\"]*\"($std|\./(Graph|Step)\.sol)\";\$"
+            imports $(find src/graph -name '*.sol')
+            allowed="^[^\"]*\"($std|\./[A-Za-z]+\.sol|\./graph/(Graph|Step)\.sol)\";\$"
+            imports $(find src -name '*.sol' -not -path 'src/graph/*')
+            allowed="^[^\"]*\"($std|\./[A-Za-z]+(\.t)?\.sol|\.\./src/([A-Za-z]+|graph/(Graph|Step))\.sol)\";\$"
+            imports $(find test -name '*.sol')
+          )
+          if [ -n "$bad" ]; then
+            echo "$bad" >&2
+            echo 'sprue may import only forge-std and itself' >&2
+            exit 1
+          fi
+
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.8.5
+          cache: false
+      - run: bash e2e/e2e.sh

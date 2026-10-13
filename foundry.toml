@@ -1,0 +1,23 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10_000
+bytecode_hash = "none"
+auto_detect_remappings = false
+remappings = ["forge-std/=lib/forge-std/src/"]
+fs_permissions = [
+  { access = "read-write", path = "./deployments" },
+  { access = "read-write", path = "./cache/core-test" },
+  { access = "read", path = "./out" },
+  { access = "read", path = "./broadcast" },
+  { access = "read", path = "./bin/graph.sh" },
+  { access = "read", path = "./sprue.json" },
+]
+
+[rpc_endpoints]
+probe = "http://127.0.0.1:1"

@@ -1,0 +1,186 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.27;
+
+import {defaultChainIn} from "../src/Chains.sol";
+import {Deployment} from "../src/Deployment.sol";
+import {Declares} from "../src/graph/Step.sol";
+import {ToyPayload} from "./ToyPayload.sol";
+
+/// @dev The deployment layers without `Unit`, with test-specific overrides of what `Unit` takes from
+///      `sprue.json`: a journals directory of its own, its own fenced chain and rehearsal rule.
+abstract contract ToyJournal is Deployment, Declares {
+    uint256 internal constant FENCED_CHAIN = 777;
+
+    bool public simulating;
+
+    bool public otherDeployerAllowed;
+
+    function allowOtherDeployer() external {
+        otherDeployerAllowed = true;
+    }
+
+    function envAllows() external view returns (bool) {
+        return super._unexpectedDeployerAllowed();
+    }
+
+    function defaultVariables() external pure returns (string memory, string memory) {
+        return (super._optInVariable(), super._dirtyVariable());
+    }
+
+    function _optInVariable() internal pure override returns (string memory) {
+        return "CORE_TEST_UNEXPECTED_DEPLOYER";
+    }
+
+    function _unexpectedDeployerAllowed() internal view override returns (bool) {
+        return otherDeployerAllowed;
+    }
+
+    function simulate() external {
+        simulating = true;
+    }
+
+    function _deployments() internal pure override returns (string memory) {
+        return "cache/core-test/deployments";
+    }
+
+    /// @dev A test-specific rule, whatever project it runs in: no `chains.default`.
+    function _defaultChain(string memory network) internal view override returns (string memory) {
+        string memory chain = defaultChainIn("{}", network);
+        require(bytes(chain).length != 0, "toy network: not exactly one chain");
+        return chain;
+    }
+
+    function _graphScript() internal pure override returns (string memory) {
+        return "toy.s.sol";
+    }
+
+    function _deployScript() internal pure override returns (string memory) {
+        return "test/ToyUnit.sol";
+    }
+
+    function _fenced() internal view override returns (bool) {
+        return block.chainid == FENCED_CHAIN;
+    }
+
+    /// @dev Every network journals under `forge test`, unless the test asks for a simulation.
+    function _rehearsal() internal view override returns (bool) {
+        return !simulating;
+    }
+}
+
+/// @dev One role, `toy`, deployed through `_deployRole` and certified by `check`.
+contract ToyUnit is ToyJournal {
+    uint256 public tag = 1;
+    uint256 public hooks;
+    bool public journaledAtHook;
+    bytes32 public confirmed;
+
+    function setTag(uint256 tag_) external {
+        tag = tag_;
+    }
+
+    function confirm(bytes32 hash) external {
+        confirmed = hash;
+    }
+
+    function deploy(string calldata network) external returns (string memory) {
+        string memory m = _use(network);
+        (, bool sent) = _deployRole(m, "toy", "ToyPayload", abi.encode(tag), _create, _authenticate);
+        return _done(sent);
+    }
+
+    function check(string calldata network) external returns (string memory) {
+        string memory m = _use(network);
+        address at = _requireRecordedCode(m, "toy");
+        _authenticate(at, abi.encode(tag));
+        _recordReceipt(m, "toy", at);
+        return _certifyRole(_beginChecked("toy", at), "toy", at);
+    }
+
+    /// @dev `_recover` with the test sender, which `_recovering` cannot take: it asks forge for
+    ///      its own, and a test has none but the default.
+    function recover(string calldata network) external returns (string memory) {
+        string memory m = _use(network);
+        _startBroadcast();
+        (address sender,) = _broadcaster();
+        vm.stopBroadcast();
+        string[2][] memory roles = new string[2][](1);
+        roles[0] = ["toy", "ToyPayload"];
+        Create[] memory found = new Create[](1);
+        found[0] = _createToRecover(m, "toy", "ToyPayload", sender);
+        _requireCurrent(found[0], "ToyPayload", abi.encode(tag));
+        _journalRecovered(m, roles, found);
+        return _done(false);
+    }
+
+    function recoverAsForge(string calldata network) external returns (string memory) {
+        _recover(network, "toy", "ToyPayload", abi.encode(tag));
+        return _done(false);
+    }
+
+    function landed(string calldata network, address sender) external returns (address) {
+        return _reuseForSend(_use(network), "toy", "ToyPayload", abi.encode(tag), sender, vm.getNonce(sender));
+    }
+
+    function recordedRole(string calldata network) external returns (address) {
+        return _reuseForDue(_use(network), "toy", "ToyPayload", abi.encode(tag));
+    }
+
+    function decided(string calldata json, string calldata key) external pure returns (string memory) {
+        return _decided(json, key);
+    }
+
+    function inputUint(string calldata json, string calldata key, uint256 min, uint256 max)
+        external
+        pure
+        returns (uint256)
+    {
+        return _inputUint(json, key, min, max);
+    }
+
+    function requiredAddress(string calldata json, string calldata key) external pure returns (address) {
+        return _requiredAddress(json, key);
+    }
+
+    function useNetwork(string calldata network) external {
+        _use(network);
+    }
+
+    function requireNoStray(string calldata network, address adopted) external {
+        _requireNoStray(_use(network), "toy", "ToyPayload", adopted);
+    }
+
+    function checkedToy(string calldata network) external returns (address) {
+        _use(network);
+        return _checked("toy", "toy");
+    }
+
+    function _createdIn(bytes32 hash, address, bool) internal view override returns (uint256) {
+        return hash == confirmed ? 5 : 0;
+    }
+
+    function _onDeployment(string memory journal, string memory role, bytes memory args) internal override {
+        ++hooks;
+        super._onDeployment(journal, role, args);
+        journaledAtHook = vm.exists(_path()) && _has(vm.readFile(_path()), ".toyInitcodeHash");
+    }
+
+    function _create(bytes memory args) private returns (address) {
+        return address(new ToyPayload(abi.decode(args, (uint256))));
+    }
+
+    function _authenticate(address at, bytes memory args) private view {
+        require(ToyPayload(at).tag() == abi.decode(args, (uint256)), "the payload's tag differs from the input");
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "toy";
+    }
+}
+
+/// @dev A variable of its own, for the test that sets it.
+contract DirtyToyUnit is ToyUnit {
+    function _dirtyVariable() internal pure override returns (string memory) {
+        return "CORE_TEST_DIRTY_MARK";
+    }
+}
