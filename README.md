@@ -1,10 +1,15 @@
 # sprue
 
-Deploy graphs for Foundry. A deployment is a graph of Solidity steps, each one `forge script`
-command. The graph runs only the steps the chain and the journals show undone, so a rerun finishes
-an interrupted deployment and a rerun of a finished one sends nothing. A step may run on any chain
-of the network, wait for a date, or follow a node that waits for a fact on chain. How it compares with
-plain `forge script` and other tools is in [DESIGN.md](DESIGN.md#prior-art).
+sprue makes multi-step Foundry deployments repeatable, inspectable and recoverable. You declare the
+steps, and what each one needs, in Solidity. `plan` prints the commands still to run and sends
+nothing. `run` sends only the missing steps; on a network with a chain that is not local, it shows
+each step's dry run and waits for you to type `yes`. A rerun finishes an interrupted deployment, and
+a rerun of a finished one sends nothing. Steps may span chains, wait for a date, or wait for a fact
+on chain.
+
+Each step is one `forge script` command. The graph orders the steps, and a journal per unit records
+what landed, so a lost journal can be rebuilt from forge's records. How sprue compares with plain
+`forge script` and other tools is in [DESIGN.md](DESIGN.md#prior-art).
 
 v0.1: the API may change in any 0.x release. [DESIGN.md](DESIGN.md) holds the assumptions, invariants
 and decisions; [SECURITY.md](SECURITY.md) what the guards check and what stays with you.
