@@ -5,11 +5,11 @@ Report a vulnerability privately through GitHub: the repository's Security tab, 
 
 ## What the guards check
 
-The guards are code in `bin/graph.sh` and `src/`; [DESIGN.md](DESIGN.md#invariants) names the test or
+The guards are code in `bin/sprue.mjs` and `src/`; [DESIGN.md](DESIGN.md#invariants) names the test or
 end-to-end scenario for each invariant.
 
-- `run` executes only a command line in the grammar that `plan` prints, and refuses one whose
-  variables hold whitespace.
+- `run` executes only a command line in the grammar that `plan` prints, as one `forge script` with no
+  shell. A variable it names is one argument, whatever it holds, and an unset one is refused.
 - An attended send needs `yes` typed at the terminal. It refuses if, from before the dry run to the
   answer, the sender's nonce on any chain of the network, git HEAD, the lines of
   `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed. The status leaves out the

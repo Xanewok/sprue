@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+The runner is `bin/sprue.mjs`, Node 18 or later with no dependencies, and replaces `bin/graph.sh`:
+run it as `node lib/sprue/bin/sprue.mjs` (forge install) or `npx sprue` (npm). It needs no `sh` or
+`jq` and starts no shell, so Windows needs no WSL. A plan line becomes the argv of one `forge script`,
+so a variable that holds whitespace is one argument instead of a refusal; an unset variable a line
+names is refused.
+
 ## 0.1.0
 
 First release: the deploy graph (`Graph`, `FileGraph`, `Unit`), the `graph.sh` runner and the

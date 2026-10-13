@@ -68,10 +68,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `e2e/e2e.sh`)
 
 ## Decisions
 
-1. **Solidity owns the graph and every step.** There is no recipe format. The shell runner only consumes the
+1. **Solidity owns the graph and every step.** There is no recipe format. The runner only consumes the
    plan Solidity prints. Every printed command is a plain `forge script`, so a person can run the path with
-   Foundry alone and keep every check the Solidity makes (journal, fence, pin, code); the runner (POSIX `sh`,
-   `jq`, `cast`) adds the replanning loop and the attended checks. Rejected: a declarative recipe
+   Foundry alone and keep every check the Solidity makes (journal, fence, pin, code); the runner (Node, `cast`)
+   adds the replanning loop and the attended checks. Rejected: a declarative recipe
    (Cannon, Terraform style), which adds a second language and hides the pause between dry run and send.
 2. **Plan is a dry run, apply is the same command with `--broadcast`.** Plain CREATE by default; CREATE2 is
    an opt-in a unit takes through `_requireCreate2Address` and the keyless factory pinned by code hash.
