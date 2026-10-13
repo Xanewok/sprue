@@ -57,7 +57,7 @@ abstract contract ForgeBroadcasts is Journal {
     struct Create {
         /// @dev A factory call forge recorded as `CREATE2`: no nonce fixes its address.
         bool create2;
-        address at;
+        address addr;
         address from;
         uint256 nonce;
         string path;
@@ -119,7 +119,7 @@ abstract contract ForgeBroadcasts is Journal {
             more[found.length] = Create({
                 create2: keccak256(bytes(vm.parseJsonString(record, string.concat(t, ".transactionType"))))
                     == keccak256("CREATE2"),
-                at: _addr(record, string.concat(t, ".contractAddress")),
+                addr: _addr(record, string.concat(t, ".contractAddress")),
                 from: _addr(record, string.concat(t, ".transaction.from")),
                 nonce: _uint(record, string.concat(t, ".transaction.nonce")),
                 path: path,

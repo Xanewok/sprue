@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The executor (bin/graph.sh) against real Anvil nodes, on the toy project in ./toy.
+# The executor (bin/graph.sh) against real Anvil nodes, on the projects in ../examples.
 # Needs anvil, forge, cast, jq; the attended scenario also python3 and setsid.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -11,7 +11,8 @@ KEYSTORE_PW=pw
 PIDS=
 
 die() { echo "FAIL $*" >&2; exit 1; }
-# The toy project is copied here, so a run never touches the checkout.
+# The example project is copied here and runs there. Only `forge test` in scenario_grammar
+# runs in the checkout, as it does in CI: it writes out/, cache/ and its own deployments/fork-test-*.
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
@@ -26,7 +27,7 @@ node() { # node <port> <chain id>
 }
 
 setup() {
-  cp -R "$HERE/toy/." "$W/"
+  cp -R "$ROOT/examples/token-vault/." "$W/"
   mkdir -p "$W/lib/sprue"
   cp -R "$ROOT/src" "$ROOT/bin" "$W/lib/sprue/"
   ln -s "$FORGE_STD" "$W/lib/forge-std"
@@ -36,11 +37,12 @@ setup() {
   # A command of its own, so that `setsid` and the pseudo-terminal can run it.
   mkdir -p bin; printf '#!/bin/sh\nexec sh %s/lib/sprue/bin/graph.sh "$@"\n' "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
-  forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the toy project does not build"; }
+  forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
   git init -q; git config user.email t@t; git config user.name t
-  sh lib/sprue/bin/graph.sh json >script/deploy/graph.generated.json
-  echo toy >README.md
-  git add -A; git commit -qm toy
+  sh lib/sprue/bin/graph.sh json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
+  # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
+  echo 'broadcast/Deploy*/1/' >>.gitignore
+  git add -A; git commit -qm example
   node "$PORT" 31337; node $((PORT + 1)) 1; node $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
   OPS=$(cast rpc eth_accounts --rpc-url "$RPC" | jq -r '.[0]')
@@ -81,6 +83,11 @@ scenario_refuses() {
   exits 0 G --help
   exits 2 G list extra
   (cd "$d" && refused "no sprue.json" sh "$gs" list)
+  (cd "$d" && exits 0 sh "$gs" --help)
+  if command -v node >/dev/null; then
+    mkdir -p "$d/pkg/bin"; cp "$ROOT/bin/sprue.mjs" "$d/pkg/bin/"; echo '{"version":"9.9.9","type":"module"}' >"$d/pkg/package.json"
+    [ "$(command node "$d/pkg/bin/sprue.mjs" --version)" = 9.9.9 ] || die "sprue --version is not package.json's"
+  fi
   mkdir "$d/p"; echo '{"paths":{},"chains":{},"x":1}' >"$d/p/sprue.json"
   (cd "$d/p" && refused "exactly paths and chains" sh "$gs" list)
   p='"paths":{"graph":"g.s.sol","units":"u","deployments":"d","rehearsal":"d/fork"}'
@@ -102,8 +109,30 @@ scenario_refuses() {
   echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" env R="$RPC" G run refuse vault.check
   echo '{"chains":{"other":{"id":31337}}}' >$n; refused "has no chain l2" env R="$RPC" G run refuse vault.check
   echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"my.node"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"123"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"Node"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
   echo '{"chains":{"l2":{"id":1}}}' >$n; refused "is chain 31337, network.json says 1" env R="$RPC" G run refuse vault.check
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
+}
+
+# A ./stub/cast that makes every Anvil report itself as Geth, so graph.sh cannot set its clock.
+geth_stub() {
+  mkdir -p stub
+  printf '#!/bin/sh\nif [ "$1 $2" = "rpc web3_clientVersion" ]; then echo \\"Geth/stub\\"; exit; fi\nexec %s "$@"\n' "$(command -v cast)" >stub/cast
+  chmod +x stub/cast
+}
+
+# A failed step ends with forge's last Error: line, after the output that buries it.
+scenario_failure() {
+  fresh "$RPC"; network pinned 31337
+  echo '{"chains":{"l2":{"id":31337}},"deployer":"0x000000000000000000000000000000000000dEaD"}' >deployments/pinned/network.json
+  local out rc=0
+  out=$(G run pinned token.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
+  [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
+    || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
+  echo "ok  a failed step ends with forge's Error: line"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -120,14 +149,28 @@ scenario_rerun() {
   echo "ok  rerun a finished target changes no block, nonce or journal"
 }
 
+# The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
+# and after that command a rerun reaches done.
+scenario_recover() {
+  fresh "$RPC"; git clean -fdXq deployments/local
+  local out cmd
+  G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  rm deployments/local/token.json
+  if out=$(G run local vault.check 2>&1); then die "recover: a run went on without its journal"; fi
+  cmd=$(grep -o "forge script [^ ]* --sig 'recover(string)' .*" <<<"$out" | head -1)
+  [ -n "$cmd" ] || die "recover: the refusal names no recover command: $out"
+  eval "$cmd" >/dev/null 2>>log || die "recover: $cmd failed"
+  G run local vault.check >/dev/null 2>>log || die "recover: the rerun failed"
+  all_done recover "$(G plan local vault.check 2>>log)"
+  [ -n "$(jq -r '.token // empty' deployments/local/token.json)" ] || die "recover: the journal lacks the token"
+  echo "ok  a lost journal is refused with its recover command, which rebuilds it, and the rerun is done"
+}
+
 # Exit 4 before a date. With --wait, in any position, the run waits for it. Exit 2 for --wait on Anvil,
 # an unknown target and an unknown network.
 scenario_wait() {
   fresh "$GETH"; network wait 412346 "$(($(now "$GETH") + 3600))"
-  mkdir -p stub
-  # The node is Anvil, but the stub makes it report itself as Geth, so graph.sh cannot set its clock.
-  printf '#!/bin/sh\nif [ "$1 $2" = "rpc web3_clientVersion" ]; then echo \\"Geth/stub\\"; exit; fi\nexec %s "$@"\n' "$(command -v cast)" >stub/cast
-  chmod +x stub/cast
+  geth_stub
   export OLD_PATH=$PATH
   R=$GETH PATH="$PWD/stub:$PATH" exits 4 G run wait vault.check
   [ -n "$(jq -r '.vault // empty' deployments/wait/vault.json)" ] || die "wait: the work before the date was not done"
@@ -192,6 +235,34 @@ scenario_kill() {
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
 }
 
+# examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: graph.sh sets the
+# second node's clock, one window at a time, and leaves the first node's alone.
+scenario_two_chain() {
+  local d=$W/two-chain rcv=http://127.0.0.1:$((PORT + 3)) at zero=0x0000000000000000000000000000000000000000
+  cp -R "$ROOT/examples/two-chain" "$d"; ln -s "$W/lib" "$d/lib"
+  cd "$d"
+  node $((PORT + 3)) 31338
+  forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the two-chain example does not build"; }
+  sh "$W/lib/sprue/bin/graph.sh" json | diff - script/deploy/graph.generated.json || die "two-chain: graph.generated.json is stale"
+  fresh "$RPC"
+  export SOURCE_RPC=$RPC RECEIVER_RPC=$rcv
+  # The receiver is the first contract of account 0 on its fresh chain: the address the input file names.
+  at=$(jq .openAt deployments/local/receiver.input.json)
+  forge create script/deploy/units/receiver/Receiver.sol:Receiver --rpc-url "$rcv" --unlocked --from "$OPS" --broadcast >/dev/null 2>>log
+  opened() { cast call "$(jq -r .receiver deployments/local/receiver.input.json)" 'opened(uint8)(address)' "$1" --rpc-url "$rcv"; }
+  [ "$(cast code "$(jq -r .receiver deployments/local/receiver.input.json)" --rpc-url "$rcv")" != 0x ] || die "two-chain: no receiver at the input's address"
+
+  exits 0 G run local receiver.notify.2
+  for w in 0 1 2; do
+    [ "$(opened $w)" = "$(jq -r .checked.source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
+  done
+  [ "$(now "$rcv")" -ge "$((at + 2 * 86400))" ] || die "two-chain: the receiver's clock did not reach the last window"
+  [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
+  all_done two-chain "$(G plan local receiver.notify.2 2>>log)"
+  cd "$W"; rm -rf "$d"
+  echo "ok  two-chain: graph.sh sets the receiver chain's clock for each window's date, and not the source's"
+}
+
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
 scenario_attended() {
   command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip attended: it needs python3 and setsid"; return; }
@@ -243,11 +314,34 @@ scenario_attended() {
   echo "ok  attended refusals send nothing, a change during the question stops the send, no sends nothing, yes sends once and asks every step, the rehearsal directories need the ignore line"
 }
 
+# `run` sends the command lines that the FileGraph tests and the example's plan print, and nothing hostile.
+scenario_grammar() {
+  { (cd "$ROOT" && forge test --match-path 'test/FileGraph*' -vv 2>&1) | sed -n 's/^ *PLAN //p'
+    G plan local vault.check; } | grep -E '^([A-Z][A-Z0-9_]*=|forge script )' | sort -u >"$W/corpus"
+  [ "$(wc -l <"$W/corpus")" -ge 6 ] || die "grammar: too few command lines in $W/corpus"
+  bash "$HERE/plan-grammar.sh" "$W/corpus" 2>>"$W/log" || die "grammar: see $W/log"
+  echo "ok  run sends every command line the tests and the example print, and no hostile mutation"
+}
+
+# The chart is for mermaid, which this script cannot run: check its shape against the export.
+scenario_mermaid() {
+  local m; m=$(G mermaid)
+  [ "$(head -1 <<<"$m")" = "flowchart TD" ] || die "mermaid: the first line is not 'flowchart TD'"
+  [ "$(grep -c '^subgraph ' <<<"$m")" = "$(jq '[.nodes[].unit] | unique | length' script/deploy/graph.generated.json)" ] \
+    || die "mermaid: not one subgraph per unit"
+  echo "ok  mermaid starts with flowchart TD and has one subgraph per unit"
+}
+
 setup
 cd "$W"
+scenario_mermaid
 scenario_refuses
+scenario_grammar
+scenario_failure
 scenario_rerun
+scenario_recover
 scenario_wait
 scenario_kill
+scenario_two_chain
 scenario_attended
 echo "PASS e2e"

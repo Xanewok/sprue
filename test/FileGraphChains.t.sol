@@ -162,14 +162,21 @@ contract FileGraphProjectTest is Test, Declares {
         vm.removeDir(string.concat("deployments/", net), true);
     }
 
-    function test_plan_namesTheClockOfADateOnlyWhenItIsNotTheDefaultChains() public {
+    function test_plan_refusesAnInputDateOnAChainOtherThanTheDefault() public {
         _network("fork-test-fgp-clock", vm.toString(owner), "");
-        string[3] memory chains = ["a", "b", "l2"];
-        string[3] memory clocks = [" on alpha", " on B_RPC", ""];
-        for (uint256 i; i < chains.length; ++i) {
-            assertEq(
-                _plan(_fund().on(chains[i]).notBefore("network.openAt")),
-                string.concat(HEADER, "# not before 100", clocks[i], " fixture.fund\n# then plan again fixture.fund\n")
+        assertEq(
+            _plan(_fund().on("l2").notBefore("network.openAt")),
+            string.concat(HEADER, "# not before 100 fixture.fund\n# then plan again fixture.fund\n")
+        );
+        string[2] memory others = ["a", "b"];
+        for (uint256 i; i < others.length; ++i) {
+            _refuses(
+                _fund().on(others[i]).notBefore("network.openAt"),
+                string.concat(
+                    "fixture.fund has an input date but sends on ",
+                    others[i],
+                    ": use a gate view, which selects that chain"
+                )
             );
         }
         vm.removeDir(string.concat("deployments/", net), true);
@@ -248,5 +255,11 @@ contract FileGraphProjectTest is Test, Declares {
 
     function _deploy(string memory by) private pure returns (Step memory) {
         return _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).by(by);
+    }
+
+    function test_plan_aSlowStepEndsItsCommandWithTheFlag() public {
+        _network("fork-test-fgp-slow", vm.toString(owner), "");
+        assertTrue(vm.contains(_plan(_fund().slow()), string.concat(" --sender $DEPLOYER --slow\n")));
+        vm.removeDir(string.concat("deployments/", net), true);
     }
 }

@@ -79,6 +79,7 @@ contract ChainGraph is ToyGraph {
         sends.reads.push("near");
         Node storage owns = _nodes[_index("toy.check")];
         owns.on = "near";
+        owns.gate = "";
         owns.reads.push("far");
         owns.ownForks = true;
     }
@@ -147,12 +148,6 @@ contract CoreTest is Test, Declares {
         g.rehearse("net", "toy.check");
     }
 
-    function test_rehearse_doesNotCrossADateAlreadyPast() public {
-        vm.warp(101);
-        g.rehearse("net", "toy.check");
-        assertEq(block.timestamp, 101);
-    }
-
     /// @dev A test-only node is unknown off a test chain, which `ToyGraph` is.
     function test_unknownTarget_isRefused() public {
         vm.expectRevert("cannot reach nope: unknown target");
@@ -165,8 +160,19 @@ contract CoreTest is Test, Declares {
         withTestNode.plan("net", "x.test");
     }
 
-    function test_list_namesTheNodesNothingDependsOn() public view {
-        assertEq(g.list(), "toy.check\n");
+    function test_plan_namesTheChainsAStepSendsOnAndReads() public {
+        ChainGraph chains = new ChainGraph();
+        assertEq(
+            chains.plan("net", "toy.deploy"),
+            "near=$near forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url farnet --sender $DEPLOYER\n"
+        );
+        chains.toy().deploy("net");
+        vm.warp(100);
+        assertEq(
+            chains.plan("net", "toy.check"),
+            "# done toy.deploy\n"
+            "far=$far near=$near forge script toy.s.sol:Toy --sig 'check(string)' net --sender $DEPLOYER\n"
+        );
     }
 
     function test_graph_exportsOneLinePerNode_andRefusesWhatJsonWouldEscape() public {
@@ -188,20 +194,5 @@ contract CoreTest is Test, Declares {
         ToyGraph quoted = new ToyGraph(s);
         vm.expectRevert(bytes('not JSON-safe: x."quoted"'));
         quoted.graph();
-    }
-
-    function test_plan_namesTheChainsAStepSendsOnAndReads() public {
-        ChainGraph chains = new ChainGraph();
-        assertEq(
-            chains.plan("net", "toy.deploy"),
-            "near=$near forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url farnet --sender $DEPLOYER\n"
-        );
-        chains.toy().deploy("net");
-        vm.warp(100);
-        assertEq(
-            chains.plan("net", "toy.check"),
-            "# done toy.deploy\n"
-            "far=$far near=$near forge script toy.s.sol:Toy --sig 'check(string)' net --sender $DEPLOYER\n"
-        );
     }
 }

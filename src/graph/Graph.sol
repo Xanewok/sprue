@@ -41,7 +41,7 @@ abstract contract Graph is Script {
         bool slow;
         bool testOnly;
         string arg;
-        /// @dev The unit has a view `<step>Due`. It returns true while the step still has work and
+        /// @dev The unit has a function `<step>Due`. It returns true while the step still has work and
         ///      false once the step is done. It reverts while the step would refuse to run.
         bool due;
         /// @dev The step creates its own forks, so `plan` prints its command without `--rpc-url`.
@@ -49,6 +49,8 @@ abstract contract Graph is Script {
         /// @dev Done once the unit's journal holds `checked`. `plan` reads that file and does not
         ///      call the step.
         bool certified;
+        /// @dev The `check` nodes whose certificate makes this node done. Empty unless `certified`.
+        string[] certifiedBy;
         /// @dev Makes this a predicate node, which sends nothing. It names a view on the unit that
         ///      returns true once the chain meets a condition, called with the step's arguments.
         ///      Something outside the graph, such as a person's transaction, makes it true.
@@ -70,10 +72,13 @@ abstract contract Graph is Script {
     error ProductionDependency(string id, string dependency);
     error SelectorMismatch(string id, bytes4 expected, bytes4 actual);
     error MissingDoneRule(string id);
+    error UnsafeName(string name);
 
     uint256 private constant NONE = type(uint256).max;
 
     Node[] internal _nodes;
+    /// @dev The fork selected when `plan` or `rehearse` began: the chain input dates are read on.
+    uint256 private _home;
     /// @dev Units in registration order. `_order` sorts nodes by their unit's index here, after
     ///      dependencies.
     address[] internal _units;
@@ -87,6 +92,7 @@ abstract contract Graph is Script {
         // any sender would be simulated from it, and the result would not predict the real run.
         require(msg.sender != DEFAULT_SENDER, "pass --sender <deployer> to the dry run, or --account");
         string memory net = _stage(network);
+        _home = _fork(type(uint256).max);
         if (_execute(net, target)) console.log(string.concat("reached ", target));
     }
 
@@ -112,6 +118,7 @@ abstract contract Graph is Script {
     ///           landed. The plan ends here.
     function plan(string calldata network, string calldata target) external returns (string memory out) {
         string[] memory header = _chainLines(network);
+        _home = _fork(type(uint256).max);
         (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length));
         for (uint256 i; i < header.length; ++i) {
             out = _line(out, header[i]);
@@ -203,22 +210,49 @@ abstract contract Graph is Script {
             Node storage n = _nodes[i];
             Visit memory visit;
             visit.node = i;
-            if (!_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
+            if (passed[i] || (n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
+                visit.status = Status.Done;
+            } else if (!_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
             } else {
                 if (bytes(n.gate).length != 0) {
+                    require(
+                        !vm.contains(n.gate, ".") || _onDefaultChain(network, n),
+                        string.concat(
+                            n.id,
+                            " has an input date but sends on ",
+                            n.on,
+                            ": use a gate view, which selects that chain"
+                        )
+                    );
+                    // An earlier view may have left another chain selected; an input date is the default
+                    // chain's. Restore the selection after, so later views read what they read before.
+                    uint256 back = vm.contains(n.gate, ".") ? _fork(_home) : NONE;
                     visit.notBefore = _time(network, n);
                     if (block.timestamp >= visit.notBefore) visit.notBefore = 0;
+                    _fork(back);
                 }
                 // The date is fixed and not yet reached, so the step's `Due` view would be read on a
                 // chain still before it. Leave the step unjudged for the plan made after the date.
                 if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
                 else (visit.status, visit.reason) = _status(network, n, passed[i]);
             }
+            if (visit.status != Status.Done && n.certified && !_anyNeeded(n.certifiedBy, needed)) {
+                revert(
+                    _cannotReach(target, string.concat(n.id, " is done only by ", n.certifiedBy[0], ": target that"))
+                );
+            }
             statuses[i] = visit.status;
             visits[count++] = visit;
             if (visit.status == Status.NotJudged) break;
         }
+    }
+
+    function _anyNeeded(string[] storage ids, bool[] memory needed) private view returns (bool) {
+        for (uint256 i; i < ids.length; ++i) {
+            if (needed[_index(ids[i])]) return true;
+        }
+        return false;
     }
 
     function _execute(string memory network, string memory target) internal returns (bool reached) {
@@ -264,6 +298,7 @@ abstract contract Graph is Script {
     ///      whether the clock moved.
     function _warpToDate(string memory network, Node storage n) private returns (bool warped) {
         if (bytes(n.gate).length == 0) return false;
+        if (vm.contains(n.gate, ".")) _fork(_home);
         uint256 date = _time(network, n);
         if (block.timestamp >= date) return false;
         vm.warp(date);
@@ -298,9 +333,12 @@ abstract contract Graph is Script {
     function _add(Registration memory unit, Step[] memory steps) internal {
         // Keeps the unit's contract alive when a step later selects another fork.
         vm.makePersistent(unit.target);
+        _requirePlain(unit.script, "-:./");
+        _requireScript(unit.script);
         for (uint256 i; i < steps.length; ++i) {
             Step memory s = steps[i];
             require(s.kind != StepKind.Empty && bytes(s.id).length != 0, EmptyStep(i));
+            _requirePlain(s.fn, "");
             require(_find(s.id) == _nodes.length, DuplicateId(s.id));
             string memory signature = s.hasArg ? "(string,uint8)" : "(string)";
             bytes4 selector = bytes4(keccak256(bytes(string.concat(s.fn, signature))));
@@ -335,6 +373,45 @@ abstract contract Graph is Script {
         }
     }
 
+    /// @dev The script is `<path>` or `<path>:<Contract>`: a non-empty path that does not start with
+    ///      `:`, and a contract of letters, digits and `_`, as `graph.sh` accepts.
+    function _requireScript(string memory script) private pure {
+        bytes memory b = bytes(script);
+        uint256 colon = b.length;
+        for (uint256 i; i < b.length; ++i) {
+            if (b[i] != ":") continue;
+            require(colon == b.length, UnsafeName(script));
+            colon = i;
+        }
+        require(colon != 0, UnsafeName(script));
+        if (colon == b.length) return;
+        require(colon + 1 < b.length, UnsafeName(script));
+        for (uint256 i = colon + 1; i < b.length; ++i) {
+            bytes1 c = b[i];
+            require(
+                (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_",
+                UnsafeName(script)
+            );
+        }
+    }
+
+    /// @dev Reverts unless `name` is letters, digits, `_` and `extra`, and does not start with `-`. These
+    ///      go into the command lines that `graph.sh` runs through a shell, and only such a name is in
+    ///      its grammar.
+    function _requirePlain(string memory name, string memory extra) private pure {
+        bytes memory b = bytes(name);
+        bytes memory allowed = bytes(extra);
+        require(b.length != 0 && b[0] != "-", UnsafeName(name));
+        for (uint256 i; i < b.length; ++i) {
+            bytes1 c = b[i];
+            bool ok = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_";
+            for (uint256 j; !ok && j < allowed.length; ++j) {
+                ok = c == allowed[j];
+            }
+            require(ok, UnsafeName(name));
+        }
+    }
+
     /// @dev Call after the last `_add`. Reverts unless every dependency exists, no production node
     ///      depends on a test-only node, every node's unit is registered and the graph has no cycle,
     ///      and every step has a done rule: a `Due` view, or a `check` step of its unit that reaches
@@ -365,6 +442,7 @@ abstract contract Graph is Script {
                     // and that would mark this `check` done without running it.
                     require(j == i || keccak256(bytes(n.step)) != keccak256("check"), MissingDoneRule(check.id));
                     n.certified = true;
+                    n.certifiedBy.push(check.id);
                 }
             }
         }
@@ -428,18 +506,18 @@ abstract contract Graph is Script {
     ///      dependency to the node that needs it.
     function _cycle(uint256[][] memory deps, bool[] memory placed) private view returns (string memory out) {
         bool[] memory seen = new bool[](placed.length);
-        uint256 at;
-        while (placed[at]) ++at;
-        while (!seen[at]) {
-            seen[at] = true;
-            at = _unplaced(deps[at], placed);
+        uint256 cursor;
+        while (placed[cursor]) ++cursor;
+        while (!seen[cursor]) {
+            seen[cursor] = true;
+            cursor = _unplaced(deps[cursor], placed);
         }
-        uint256 start = at;
+        uint256 start = cursor;
         out = _nodes[start].id;
         do {
-            at = _unplaced(deps[at], placed);
-            out = string.concat(_nodes[at].id, " -> ", out);
-        } while (at != start);
+            cursor = _unplaced(deps[cursor], placed);
+            out = string.concat(_nodes[cursor].id, " -> ", out);
+        } while (cursor != start);
     }
 
     /// @dev Marks `targetIndex` and everything it depends on. Walks the list backwards: after
@@ -472,6 +550,17 @@ abstract contract Graph is Script {
     function _time(string memory net, Node storage n) internal returns (uint256) {
         if (vm.contains(n.gate, ".")) return vm.parseUint(_input(net, n.gate));
         return abi.decode(_call(n.unit, _calldata(n, n.gate, net)), (uint256));
+    }
+
+    /// @dev Returns the selected fork, then selects `select` unless it is `type(uint256).max`. Returns
+    ///      `type(uint256).max` when no fork is selected.
+    function _fork(uint256 select) internal virtual returns (uint256 active) {
+        try vm.activeFork() returns (uint256 id) {
+            active = id;
+            if (select != type(uint256).max) vm.selectFork(select);
+        } catch {
+            active = type(uint256).max;
+        }
     }
 
     function _journalChecked(string memory net, string memory unit) internal view virtual returns (bool);
@@ -563,9 +652,14 @@ abstract contract Graph is Script {
             bytes(flag).length != 0,
             string.concat(n.id, " has no chain: add .on(...) to it or set chains.default in sprue.json")
         );
-        if (bytes(n.on).length == 0) return "";
-        if (keccak256(bytes(flag)) == keccak256(bytes(_rpcFlag(network, "")))) return "";
+        if (_onDefaultChain(network, n)) return "";
         return string.concat(" on ", vm.replace(flag, "$", ""));
+    }
+
+    function _onDefaultChain(string memory network, Node storage n) private view returns (bool) {
+        return
+            bytes(n.on).length == 0
+                || keccak256(bytes(_rpcFlag(network, n.on))) == keccak256(bytes(_rpcFlag(network, "")));
     }
 
     function _dependenciesDone(uint256 nodeIndex, Status[] memory statuses) private view returns (bool) {

@@ -1,0 +1,14 @@
+{
+  "paths": {
+    "graph": "script/deploy/DeployGraph.s.sol",
+    "units": "script/deploy/units",
+    "deployments": "deployments",
+    "rehearsal": "deployments/fork-test"
+  },
+  "chains": {
+    "default": "source",
+    "local": [31337, 31338],
+    "test": [],
+    "unrecordedDeploys": {}
+  }
+}

@@ -17,15 +17,10 @@ enum StepKind {
     Until
 }
 
-/// @dev A step as a unit declares it. `fn` is the name of the function the step calls. A step with
-///      `fn` `check` and no `.due` is the certifier (see `Graph._validateGraph`), so do not use that
-///      name for anything else.
-///
-///      `Graph._add` copies a step into a `Graph.Node` under the builders' names, with two
-///      exceptions: `deps` (builder `needs`), and `step`/`until` (`fn` and `kind` here). A struct
-///      member cannot share a name with a library function attached to the struct (solc: member not
-///      unique), so `onChain`, `readChains`, `isSlow` and `dueSelector` stand for `on`, `reads`,
-///      `slow` and `due`.
+/// @dev A step as a unit declares it. A step with `fn` `check` and no `.due` is the certifier (see
+///      `Graph._validateGraph`), so use that name for nothing else. `onChain`, `readChains`, `isSlow`
+///      and `dueSelector` stand for `on`, `reads`, `slow` and `due`: solc rejects a member that shares
+///      a name with a library function attached to the struct.
 struct Step {
     StepKind kind;
     string id;
@@ -78,21 +73,25 @@ library StepLib {
         return s;
     }
 
-    /// @dev `sel` is the selector of the unit's view `<fn>Due`; `Graph._add` checks it.
+    /// @dev `sel` is the selector of the unit's function `<fn>Due`; `Graph._add` checks it.
     function due(Step memory s, bytes4 sel) internal pure returns (Step memory) {
         s.dueSelector = sel;
         return s;
     }
 
     /// @dev The step is not before the timestamp that the unit's view `fn` returns. `sel` is the
-    ///      view's selector; `Graph._add` checks it.
+    ///      view's selector; `Graph._add` checks it. The date is judged on the clock of the chain
+    ///      selected when the view returns, so on a step with `.on(chain)` the view must leave that
+    ///      chain selected.
     function gateView(Step memory s, string memory fn, bytes4 sel) internal pure returns (Step memory) {
         s.gate = fn;
         s.gateSelector = sel;
         return s;
     }
 
-    /// @dev The step is not before the timestamp at `inputRef`, an "<input file>.<key>".
+    /// @dev The step is not before the timestamp at `inputRef`, an "<input file>.<key>". It is judged
+    ///      on the default chain's clock, so `plan` refuses it on a step that sends on another chain;
+    ///      use `gateView` there.
     function notBefore(Step memory s, string memory inputRef) internal pure returns (Step memory) {
         s.gate = inputRef;
         return s;

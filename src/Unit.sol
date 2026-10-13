@@ -10,11 +10,6 @@ import {Declares} from "./graph/Step.sol";
 
 /// @notice The base of a deploy unit. It reads the network's `network.json`, keeps the unit's journal
 ///         `<unit>.json` beside it, and records the build that the unit's `check` step authenticates.
-/// @dev Helper names follow one scheme, here and in units: `_require*` reverts unless its
-///      condition holds; `_is*` and `_has*` return a bool and send nothing; `_authenticate*` checks
-///      identity (code, configuration, chain) and no step's progress; `_deploy*` deploys unless it
-///      reuses a given or recorded contract; `_select*`, `_record*` and `_put*` have the side
-///      effects their names say.
 abstract contract Unit is Deployment, Declares {
     function _deployments() internal view override returns (string memory) {
         return deploymentsDir();
@@ -62,6 +57,11 @@ abstract contract Unit is Deployment, Declares {
     ///      block the fork is pinned at.
     mapping(bytes32 => uint256) private _forkOf;
     mapping(bytes32 => uint256) private _headOf;
+    string private _selected;
+
+    function _selectedChain() internal view override returns (string memory) {
+        return bytes(_selected).length == 0 ? super._selectedChain() : _selected;
+    }
 
     /// @dev The RPC for `chain`: its `rpc` alias in `network.json`, else `<CHAIN>_RPC`. Environment
     ///      variables are shared by test suites that run in parallel, so a test that needs another
@@ -82,6 +82,7 @@ abstract contract Unit is Deployment, Declares {
             _forkOf[id] = _createForkAt(url, _headOf[id]) + 1;
         }
         vm.selectFork(_forkOf[id] - 1);
+        _selected = chain;
         string memory name = vm.toUppercase(chain);
         require(
             block.chainid == chainId(_networkJson(), chain), string.concat(name, "_RPC is not network.json's ", name)

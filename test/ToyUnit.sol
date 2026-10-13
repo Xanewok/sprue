@@ -54,7 +54,7 @@ abstract contract ToyJournal is Deployment, Declares {
         return "toy.s.sol";
     }
 
-    function _deployScript() internal pure override returns (string memory) {
+    function _deployScript() internal pure virtual override returns (string memory) {
         return "test/ToyUnit.sol";
     }
 
@@ -91,10 +91,10 @@ contract ToyUnit is ToyJournal {
 
     function check(string calldata network) external returns (string memory) {
         string memory m = _use(network);
-        address at = _requireRecordedCode(m, "toy");
-        _authenticate(at, abi.encode(tag));
-        _recordReceipt(m, "toy", at);
-        return _certifyRole(_beginChecked("toy", at), "toy", at);
+        address addr = _requireRecordedCode(m, "toy");
+        _authenticate(addr, abi.encode(tag));
+        _recordReceipt(m, "toy", addr);
+        return _certifyRole(_beginChecked("toy", addr), "toy", addr);
     }
 
     /// @dev `_recover` with the test sender, which `_recovering` cannot take: it asks forge for
@@ -169,8 +169,8 @@ contract ToyUnit is ToyJournal {
         return address(new ToyPayload(abi.decode(args, (uint256))));
     }
 
-    function _authenticate(address at, bytes memory args) private view {
-        require(ToyPayload(at).tag() == abi.decode(args, (uint256)), "the payload's tag differs from the input");
+    function _authenticate(address addr, bytes memory args) private view {
+        require(ToyPayload(addr).tag() == abi.decode(args, (uint256)), "the payload's tag differs from the input");
     }
 
     function _unit() internal pure override returns (string memory) {
@@ -178,7 +178,7 @@ contract ToyUnit is ToyJournal {
     }
 }
 
-/// @dev A variable of its own, for the test that sets it.
+/// @dev Reads a variable of its own, which only the test that sets it uses.
 contract DirtyToyUnit is ToyUnit {
     function _dirtyVariable() internal pure override returns (string memory) {
         return "CORE_TEST_DIRTY_MARK";

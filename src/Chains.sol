@@ -118,14 +118,10 @@ function rehearsalPrefixIn(string memory json) pure returns (string memory) {
     return string(name);
 }
 
-/// @dev Reads `sprue.json` and reverts unless it has exactly the shape below, so that a malformed
-///      policy never opens a send path. The keys are strict. The four paths are non-empty strings,
-///      and the rehearsal path is `<deployments>/<plain name>`. The chain id lists hold bare
-///      numbers. Each `unrecordedDeploys` entry is a decimal id with a non-empty string reason that
-///      does not start with `0x` (Foundry would read that as bytes). `graph.sh` validates `paths`
-///      itself, because it needs them before forge can run, and reads only the few `chains` fields
-///      it uses. This is the only full check of `chains`, and every `FileGraph` `plan` runs it before
-///      any send.
+/// @dev Reads `sprue.json` and reverts unless its shape is exactly the one validated here, so that a
+///      malformed policy never opens a send path. An `unrecordedDeploys` reason may not start with
+///      `0x`: Foundry would read it as bytes. `graph.sh` validates `paths` itself, because it needs
+///      them before forge can run; this is the only full check of `chains`.
 function projectJson() view returns (string memory) {
     return validatedProject(PROJECT_FILE);
 }

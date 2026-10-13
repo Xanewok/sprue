@@ -1,161 +1,143 @@
 # sprue
 
-Deploy graphs for Foundry. A deployment is a graph of idempotent Solidity steps (units). Each step
-sends only what the chain and its journal lack. You get:
+Deploy graphs for Foundry. A deployment is a graph of Solidity steps, each one `forge script`
+command. The graph runs only the steps the chain and the journals show undone, so a rerun finishes
+an interrupted deployment and a rerun of a finished one sends nothing. A step may run on any chain
+of the network, wait for a date, or follow a node that waits for a fact on chain.
 
-- a readable plan: `plan` prints the exact commands that reach a target and sends nothing;
-- sends you approve: an attended `run` shows each dry run and asks before every send;
-- multi-chain graphs: a step runs on a named chain and may read others;
-- gates: a step can wait for a date (`notBefore`, `gateView`), and a node can wait for a chain fact (`_until`);
-- journals: what a unit deployed and the code each contract must keep, committed with the project;
-- recovery: a lost plain-CREATE journal is rebuilt from the sender's broadcast record.
+v0.1: the API may change in any 0.x release. [DESIGN.md](DESIGN.md) holds the assumptions, invariants
+and decisions; [SECURITY.md](SECURITY.md) what the guards check and what stays with you.
 
-## Status
+## The model
 
-v0.1. 0.x, so the API will change.
+- **Unit**: a Forge script, `Deploy<Name>.s.sol`, that inherits `Unit`, deploys and checks a few
+  related contracts, and keeps one journal.
+- **Step**: an external function of a unit, `fn(string network)`, with an id such as `token.deploy`:
+  the unit, a dot, a name. Each step runs as its own `forge script` command.
+- **Role**: a contract a unit deploys, named by a string such as `"token"`: a journal key, not an
+  access-control role.
+- **Journal**: `deployments/<network>/<unit>.json`, committed: each role's address, deployer, nonce,
+  code hash and build metadata.
+- **Certificate**: the `checked` object a unit's `check` step writes into its journal. It marks done
+  the unit's steps without `.due` that `check` follows; other units read its addresses from it.
+- **Graph**: a script that inherits `FileGraph` and registers the units. Steps declare `.needs(...)`;
+  the graph orders them.
+- **plan / run**: `plan` prints the commands a target still needs and sends nothing; `run` sends
+  them, plans again, and stops when the target is done.
 
 ## Install
 
 ```sh
-forge install Xanewok/sprue@v0.1.0
+forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
 ```
 
-Add the remapping `sprue/=lib/sprue/src/` and run the graph with `lib/sprue/bin/graph.sh`. Or:
+The remapping is `sprue/=lib/sprue/src/` and the runner `sh lib/sprue/bin/graph.sh`. With npm
+(`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
+Below, `graph.sh` means either. It needs POSIX `sh`, `git`, `jq`, `cast` and `forge` 1.8 or later
+(CI pins v1.8.5). On Windows use WSL.
+
+## A first local run
+
+[`examples/token-vault`](examples/token-vault) is a complete project that CI runs. From a clone of
+this repository:
 
 ```sh
-npm i -D @xanewok/sprue
-npx sprue plan <network> <target>
+cp -R examples/token-vault ../my-deploy && cd ../my-deploy
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
+anvil &                                   # chain 31337 on :8545
+export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+sh lib/sprue/bin/graph.sh plan local vault.check   # the next commands; sends nothing
+sh lib/sprue/bin/graph.sh run local vault.check    # deploys, checks, funds, checks
 ```
 
-The runner is POSIX `sh` and needs `jq`, `forge` and `cast`. Windows: use WSL (a Node runner is not
-released yet).
+Its [README](examples/token-vault/README.md) explains each step, and then loses a journal and
+rebuilds it.
 
-## Setup
+## Your own project
 
-1. Add the remapping `sprue/=lib/sprue/src/` (and `forge-std/=lib/forge-std/src/`) to `foundry.toml`.
-2. Grant forge the paths the units read and write; with the layout below:
+1. Copy `foundry.toml`, `sprue.json` and `.gitignore` from the example. `graph.sh` runs from any
+   directory below `sprue.json`, and refuses unless git ignores `<rehearsal>/` and `<rehearsal>-x/`.
+2. Add `deployments/<network>/network.json`, naming the network's chains: `{"chains":{"l2":{"id":31337}}}`.
+3. Write a unit per directory under `script/deploy/units/<unit>/`; the example's
+   [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) is a
+   template. The directory, `_unit()` and every step id's prefix must be the same name. A deployed
+   contract `<Name>` sits alone in `<Name>.sol`. Every step needs a done rule: a `<fn>Due` view
+   (`.due(...)`), or a `check` step of the same unit that reaches it through `.needs(...)`.
+4. Register the units in the graph script, whose contract is named like its file:
 
-   ```toml
-   fs_permissions = [
-     { access = "read-write", path = "./deployments" },
-     { access = "read", path = "./out" },
-     { access = "read", path = "./broadcast" },
-     { access = "read", path = "./script/deploy/units" },
-     { access = "read", path = "./sprue.json" },
-   ]
+   ```solidity
+   pragma solidity ^0.8.27;
+
+   import {FileGraph} from "sprue/FileGraph.sol";
+   import {DeployToken} from "./units/token/DeployToken.s.sol";
+
+   contract DeployGraph is FileGraph {
+       constructor() {
+           _add(address(new DeployToken()), "script/deploy/units/token/DeployToken.s.sol:DeployToken");
+           _validateGraph();
+       }
+   }
    ```
 
-3. Write `sprue.json` at the project root. `graph.sh` runs from any directory below the nearest one
-   holding it.
-4. Git-ignore the rehearsal directories (`deployments/fork-test*/` for the file below); `graph.sh`
-   refuses to run otherwise.
-5. Write the graph script and the units (see below), then save the graph with
-   `graph.sh json > script/deploy/graph.generated.json`, the file beside the graph script that
-   `mermaid`, `plan` and `run` read to check a target's name.
+5. Save the graph: `graph.sh json > script/deploy/graph.generated.json`. Repeat this whenever you
+   add, rename or rewire a step: `plan` and `run` look targets up in this file, and refuse one it
+   lacks. `graph.sh list` prints the targets, the nodes nothing depends on.
+6. Plan: `R=<rpc> graph.sh plan <network> <target>`, where `R` is the RPC of the network's default
+   chain. It sends nothing, so anyone may run it.
+7. Run: `R=<rpc> DEPLOYER=<address> graph.sh run <network> <target>`. `DEPLOYER` sends the steps
+   that name no sender. On a network whose chains are all in `chains.local`, it runs unattended.
+   On any other network a person runs it at a terminal, signing with one of `--account`,
+   `--ledger` or `--trezor`, from a clean git checkout, and types `yes` for each step after seeing
+   its dry run; [SECURITY.md](SECURITY.md) lists what it compares meanwhile.
+8. Commit each step's journal and `broadcast/` records (the step prints the `git add`). The records
+   are what `recover` reads, so never git-ignore a public chain's.
 
-## Layout
+`graph.sh --help` lists the flags and the exit codes. Two flags are a person's decision, never a
+way past a refusal: `--allow-dirty` starts on a dirty tree, and is refused on a live chain;
+`--unsafe-unexpected-deployer` lets a deploy step send with a key other than the pinned `deployer`.
 
-```
-sprue.json                        paths and chain policy
-script/deploy/DeployGraph.s.sol   lists the units
-script/deploy/units/<unit>/       one directory per unit, holding exactly one Deploy*.s.sol
-deployments/<network>/            network.json, <unit>.input.json, <unit>.json (journal)
-```
+## Configuration
 
 `sprue.json` has exactly the keys `paths` and `chains`:
 
-```json
-{
-  "paths": {
-    "graph": "script/deploy/DeployGraph.s.sol",
-    "units": "script/deploy/units",
-    "deployments": "deployments",
-    "rehearsal": "deployments/fork-test"
-  },
-  "chains": {
-    "default": "l2",
-    "local": [31337],
-    "test": [11155111],
-    "unrecordedDeploys": { "1": "why this chain has deploys no journal records" }
-  }
-}
-```
+- `paths.graph`, `paths.units`, `paths.deployments`: the graph script, the unit directories (one
+  `Deploy*.s.sol` each), and the network directories.
+- `paths.rehearsal`: `<paths.deployments>/<name>`. A network of that name or `<name>-<suffix>` is a
+  rehearsal network, where an attended run may use a development node such as an Anvil fork.
+- `chains.default` (optional): the chain of a step without `.on(...)`. Without it, a network of
+  one chain uses that chain.
+- `chains.local` and `chains.test`: chain ids of development and test chains. Any other is live.
+- `chains.unrecordedDeploys`: `{"<chain id>": "<reason>"}` turns off the nonce fence on that live
+  chain, for a deploy key that already deployed outside the graph. Leave it `{}` otherwise.
 
-`paths.graph` is the graph script's file; the contract in it is named like the file
-(`DeployGraph.s.sol` holds `contract DeployGraph`). `paths.rehearsal` must lie under
-`paths.deployments`: a network named `fork-test` or `fork-test-<suffix>` is a rehearsal, where a
-development node may be used attended. `chains.default` is optional: the chain a step without `.on(...)`
-uses, which every `network.json` must list; without it a network of one chain uses that chain, and a
-network of several needs `.on(...)` on every step. `chains.local` are the chains `run` sends to
-unattended. `chains.test` are the test chains, where test-only units may run. `chains.unrecordedDeploys`
-maps a chain id to the reason its earlier deploys have no journal.
+In `network.json` a chain may name an `"rpc"` alias from `foundry.toml`; without one, a chain other
+than the default is read from `<CHAIN>_RPC`. A top-level `"deployer": "0x..."` pins the deploy key.
 
-A network's `deployments/<network>/network.json` names its chains, for example
-`{"chains":{"l2":{"id":31337}}}`; a chain may add `"rpc"`, a `foundry.toml` `[rpc_endpoints]` alias, and
-without it a chain's RPC is read from `<CHAIN>_RPC` (`$R` for the default chain).
+## When a run refuses
 
-## Commands
+Each refusal names its remedy. These need a person:
 
-| Command | Does |
-|---|---|
-| `graph.sh list` | the targets: nodes no other node depends on |
-| `graph.sh json` | the graph from the units' code |
-| `graph.sh mermaid [target]` | a flowchart of the graph, or of what `target` needs |
-| `R=$RPC graph.sh plan <network> <target>` | the commands that reach the target; sends nothing |
-| `R=$RPC DEPLOYER=$ADDR graph.sh run <network> <target>` | sends what `plan` prints, plans again, repeats |
+- A lost journal makes its deploy step refuse. If the journal was ever committed, restore it from
+  git. Otherwise run the `recover` command the refusal prints, if any, with the build and inputs that
+  made the deployment; it sends nothing and writes the journal. Then `run` again.
+- Listing an address that is none of the unit's roles in the journal's `"retired": ["0x..."]`, and
+  adding an entry to `chains.unrecordedDeploys`.
+- A refusal that says "a person must resolve it" or "a person must choose" has no safe default: do
+  not delete records or switch keys to get past it.
 
-On a local chain `run` is unattended. On any other chain it is attended: it needs a terminal, a clean
-git checkout and one of `--account`, `--ledger` or `--trezor`. It asks `yes` before every step, and
-refuses to send if the sender's nonces, git state or `.env` changed since the dry run. `graph.sh
---help` prints the usage and the exit codes (3: a node not reachable yet, 4: a date not reached,
-6: no `yes`).
+Two refusals have a cause the message cannot see:
 
-## A unit
+- A node a `check` certified stays done while the journal holds `checked`. After resetting a
+  development chain, delete the network's journals and that chain's records under `broadcast/`.
+- `broadcast/<script>/<chain id>/` is shared by every network on that chain id, so a rehearsal's
+  records read as a lost journal to the real run. Discard them first; `git status` lists them.
 
-A unit is a script that inherits `Unit`, names its journal in `_unit()` and lists its steps in
-`steps()`. Each step is `fn(string network)`.
+## Examples
 
-```solidity
-contract DeployToy is Unit {
-    function steps() external view returns (Step[] memory s) {
-        s = new Step[](2);
-        s[0] = _step("toy.deploy", DeployToy.deploy.selector);
-        s[1] = _step("toy.check", DeployToy.check.selector).needs("toy.deploy");
-    }
+Both run on Anvil, and CI runs them (`e2e/e2e.sh`).
 
-    function deploy(string calldata network) external returns (string memory) {
-        string memory journal = _use(network);
-        (, bool sent) = _deployRole(journal, "toy", "ToyPayload", abi.encode(1), _create, _authenticate);
-        return _done(sent);
-    }
-
-    function check(string calldata network) external returns (string memory) {
-        string memory journal = _use(network);
-        address at = _requireRecordedCode(journal, "toy");
-        _authenticate(at, abi.encode(1));
-        _recordReceipt(journal, "toy", at);
-        return _certifyRole(_beginChecked("toy", at), "toy", at);
-    }
-
-    function _unit() internal pure override returns (string memory) { return "toy"; }
-    // _create deploys the contract; _authenticate reverts unless a reused contract matches the args.
-}
-```
-
-A unit calls `_use(network)` before `_checked(...)`: `_checked` reads the directory `_use` selects.
-Every step needs a done rule, `.due(...)` (a `<fn>Due(string)` view returning whether it still has work) or
-a `check` step of the same unit that reaches it through `.needs(...)`; otherwise the graph refuses with
-`MissingDoneRule`. Register the units in a script that inherits `FileGraph`, with
-`_add(address(new DeployToy()), "script/deploy/units/toy/DeployToy.s.sol:DeployToy")` for each and
-`_validateGraph()` last. A complete project is in `e2e/toy`.
-
-`_deployRole` reuses a journaled deployment, resends a pending intent as the same transaction, or
-sends a new one. `check` certifies the same-unit steps it reaches through `.needs(...)`. The
-deployment layers are exercised by `test/ToyUnit.sol`; the step builders are in `src/graph/Step.sol`.
-
-## Boundary
-
-`src/` imports only forge-std and itself. Your project's contracts never need to be imported by
-the library, and CI checks it.
+- [`examples/token-vault`](examples/token-vault): one chain, a dependent unit, a dated step, `recover`.
+- [`examples/two-chain`](examples/two-chain): two chains, a step on the second that reads the first, a
+  date on the second chain's clock, and a step per index.
 
 MIT.

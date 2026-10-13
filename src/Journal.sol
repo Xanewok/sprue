@@ -102,8 +102,18 @@ abstract contract Journal is Script {
         return string.concat(".", _defaultChain(network), "ChainId");
     }
 
+    /// @dev The chain a step has selected, which a deployment's stamp names. A unit that selects
+    ///      other chains tracks the last one.
+    function _selectedChain() internal view virtual returns (string memory) {
+        return _defaultChain(_networkJson());
+    }
+
+    function _selectedStampKey() internal view returns (string memory) {
+        return string.concat(".", _selectedChain(), "ChainId");
+    }
+
     function _putChainStamp() internal {
-        _put(_stampKey(_networkJson()), vm.toString(block.chainid));
+        _put(_selectedStampKey(), vm.toString(block.chainid));
     }
 
     /// @notice The last call of a unit step. It logs what happened (nothing to send, simulated, or
@@ -112,7 +122,7 @@ abstract contract Journal is Script {
     ///         successor.
     function _done(bool sends) internal returns (string memory command) {
         if (!sends) console.log("nothing to send");
-        else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("sent");
+        else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
         else console.log("simulated: rerun with --broadcast to send");
         console.log(string.concat("git add ", _dir(), " broadcast"));
         command = string.concat(
@@ -199,7 +209,7 @@ abstract contract Journal is Script {
     function _rehearsal() internal view virtual returns (bool);
 
     /// @dev Whether this run records deployments in the journal: a broadcast, a resumed broadcast,
-    ///      or any run on a rehearsal network. Other writes, such as `_certify`, do not consult it.
+    ///      or any run on a rehearsal network. `_certify` consults it.
     function _writing() internal view virtual returns (bool) {
         return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume)
             || _rehearsal();
@@ -210,7 +220,7 @@ abstract contract Journal is Script {
     ///      address still has the certified hash. A unit should read the contracts it depends on
     ///      through this and not from another unit's uncertified keys. The certificate's chain is
     ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
-    function _checked(string memory unit, string memory role) internal view returns (address at) {
+    function _checked(string memory unit, string memory role) internal view returns (address addr) {
         string memory path = string.concat(_dir(), "/", unit, ".json");
         string memory record = vm.exists(path) ? vm.readFile(path) : "{}";
         require(_has(record, ".checked"), string.concat(unit, ".json is unchecked: run its check step"));
@@ -220,18 +230,19 @@ abstract contract Journal is Script {
                 == block.chainid,
             string.concat(unit, ".json was checked on another chain")
         );
-        at = _addr(record, string.concat(".checked.", role));
-        require(at.code.length != 0, string.concat(role, " has no code"));
+        addr = _addr(record, string.concat(".checked.", role));
+        require(addr.code.length != 0, string.concat(role, " has no code"));
         require(
-            at.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
+            addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
             string.concat(role, "'s code differs from ", unit, ".json's check")
         );
     }
 
-    /// @dev Writes `checked` unless the journal already holds an equal one. Equality ignores the
-    ///      values of the fixed keys `evmBlock`, `l1Block` and `l2Block`: a block records where the
-    ///      role was first certified, so a rerun leaves the journal byte for byte.
+    /// @dev Writes `checked` when `_writing()` and the journal does not already hold an equal one.
+    ///      Equality ignores the values of the fixed keys `evmBlock`, `l1Block` and `l2Block`: a block
+    ///      records where the role was first certified, so a rerun leaves the journal byte for byte.
     function _certify(string memory checked) internal {
+        if (!_writing()) return;
         string memory journal = _journal();
         if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
         vm.writeJson(checked, _path(), ".checked");
@@ -239,16 +250,16 @@ abstract contract Journal is Script {
 
     /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
     ///      id and the role's address. The caller adds its own keys and ends with `_certify`.
-    function _beginChecked(string memory role, address at) internal returns (string memory obj) {
+    function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
         obj = string.concat(role, "-checked");
         vm.serializeUint(obj, "evmBlock", block.number);
         vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
-        vm.serializeAddress(obj, role, at);
+        vm.serializeAddress(obj, role, addr);
     }
 
     /// @dev Ends the certificate `obj` of a unit that certifies one role, on that role's code hash.
-    function _certifyRole(string memory obj, string memory role, address at) internal returns (string memory) {
-        _certify(vm.serializeBytes32(obj, string.concat(role, "CodeHash"), at.codehash));
+    function _certifyRole(string memory obj, string memory role, address addr) internal returns (string memory) {
+        _certify(vm.serializeBytes32(obj, string.concat(role, "CodeHash"), addr.codehash));
         return _done(false);
     }
 

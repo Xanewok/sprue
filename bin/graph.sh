@@ -3,40 +3,6 @@
 # The deploy graph from the shell; POSIX sh, for Linux and macOS.
 set -eu
 fail() { printf 'graph.sh: %s\n' "$2" >&2; exit "$1"; }
-# The project root is the nearest directory, from the current one up, that holds sprue.json. It does
-# not depend on where this script lives. This script validates `paths` itself, because it needs them
-# before forge can run, and reads only the few `chains` fields it uses. Chains.sol validates the whole
-# file in every `FileGraph` `plan`, and a plan precedes every send.
-PROJECT=sprue.json
-root=$(pwd -P)
-while [ ! -f "$root/$PROJECT" ]; do
-  [ "$root" != / ] || fail 2 "refusing: no $PROJECT in $PWD or above"
-  root=$(dirname "$root")
-done
-cd "$root"
-jq -s -e 'length == 1 and (.[0] | type == "object" and keys == ["chains", "paths"] and (.chains | type == "object")
-  and (.paths | type == "object" and keys == ["deployments", "graph", "rehearsal", "units"]
-    and all(.[]; type == "string" and length > 0 and (test("\\s") | not))))' "$PROJECT" >/dev/null \
-  || fail 2 "refusing: $PROJECT is not a file of exactly paths and chains, with the non-empty, whitespace-free paths deployments, graph, rehearsal and units"
-DEPLOYMENTS=$(jq -r .paths.deployments "$PROJECT")
-GRAPH_SCRIPT=$(jq -r .paths.graph "$PROJECT")
-REHEARSAL=$(jq -r .paths.rehearsal "$PROJECT")
-# The graph contract is named like its script file, and the saved export lies beside it.
-script_file=${GRAPH_SCRIPT##*/}
-GRAPH=$GRAPH_SCRIPT:${script_file%.s.sol}
-case $GRAPH_SCRIPT in */*) GRAPH_JSON=${GRAPH_SCRIPT%/*}/graph.generated.json ;; *) GRAPH_JSON=graph.generated.json ;; esac
-# A rehearsal network is <prefix> or <prefix>-<suffix>, a plain name under the deployments directory.
-# The script checks that git ignores `<prefix>` and `<prefix>-x`, as a sample of the project's ignore
-# rule for every rehearsal directory. Keeping that rule complete is the project's job. Calling forge
-# directly bypasses this check.
-rehearsal=${REHEARSAL#"$DEPLOYMENTS"/}
-case $REHEARSAL in "$DEPLOYMENTS"/*) ;; *) rehearsal= ;; esac
-case $rehearsal in ''|-*|*[!a-z0-9-]*) fail 2 "refusing: $PROJECT's paths.rehearsal is not $DEPLOYMENTS/<lower-case name>" ;; esac
-git check-ignore -q "$REHEARSAL/" && git check-ignore -q "$REHEARSAL-x/" \
-  || fail 2 "refusing: git does not ignore the directories <paths.rehearsal> and <paths.rehearsal>-*, where a rehearsal writes"
-# Anvil's published dev key, which signs on a local chain when KEY is unset.
-DEV_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-
 usage() {
   cat <<'EOF'
 usage: graph.sh list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
@@ -78,11 +44,49 @@ skips every node already done:
   6   the person did not answer `yes`; the step was not sent
   *   forge's own code, when a step refuses
 EOF
-  printf '\nrun sends unattended only to networks whose chains are all in %s chains.local: %s.\n' \
-    "$PROJECT" "$(jq -c .chains.local "$PROJECT")"
 }
+# Help needs no project.
+case ${1:-} in -h|--help) usage; exit ;; esac
+# The project root is the nearest directory, from the current one up, that holds sprue.json. It does
+# not depend on where this script lives. This script validates `paths` itself, because it needs them
+# before forge can run, and reads only the few `chains` fields it uses. Chains.sol validates the whole
+# file in every `FileGraph` `plan`, and a plan precedes every send.
+PROJECT=sprue.json
+root=$(pwd -P)
+while [ ! -f "$root/$PROJECT" ]; do
+  [ "$root" != / ] || fail 2 "refusing: no $PROJECT in $PWD or above"
+  root=$(dirname "$root")
+done
+cd "$root"
+jq -s -e 'length == 1 and (.[0] | type == "object" and keys == ["chains", "paths"] and (.chains | type == "object")
+  and (.paths | type == "object" and keys == ["deployments", "graph", "rehearsal", "units"]
+    and all(.[]; type == "string" and length > 0 and (test("\\s") | not))))' "$PROJECT" >/dev/null \
+  || fail 2 "refusing: $PROJECT is not a file of exactly paths and chains, with the non-empty, whitespace-free paths deployments, graph, rehearsal and units"
+DEPLOYMENTS=$(jq -r .paths.deployments "$PROJECT")
+GRAPH_SCRIPT=$(jq -r .paths.graph "$PROJECT")
+REHEARSAL=$(jq -r .paths.rehearsal "$PROJECT")
+# The graph contract is named like its script file, and the saved export lies beside it.
+script_file=${GRAPH_SCRIPT##*/}
+GRAPH=$GRAPH_SCRIPT:${script_file%.s.sol}
+case $GRAPH_SCRIPT in */*) GRAPH_JSON=${GRAPH_SCRIPT%/*}/graph.generated.json ;; *) GRAPH_JSON=graph.generated.json ;; esac
+# A rehearsal network is <prefix> or <prefix>-<suffix>, a plain name under the deployments directory.
+# The script checks that git ignores `<prefix>` and `<prefix>-x`, as a sample of the project's ignore
+# rule for every rehearsal directory. Keeping that rule complete is the project's job. Calling forge
+# directly bypasses this check.
+rehearsal=${REHEARSAL#"$DEPLOYMENTS"/}
+case $REHEARSAL in "$DEPLOYMENTS"/*) ;; *) rehearsal= ;; esac
+case $rehearsal in ''|-*|*[!a-z0-9-]*) fail 2 "refusing: $PROJECT's paths.rehearsal is not $DEPLOYMENTS/<lower-case name>" ;; esac
+git check-ignore -q "$REHEARSAL/" && git check-ignore -q "$REHEARSAL-x/" \
+  || fail 2 "refusing: git does not ignore the directories <paths.rehearsal> and <paths.rehearsal>-*, where a rehearsal writes"
+# The one shape of a command line, as Graph._command prints it. Forge's output also carries the
+# console.log of every contract the plan calls, so a line is run only if it matches whole.
+q="'"
+COMMAND="^([A-Z][A-Z0-9_]*_RPC=\\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig ${q}[A-Za-z_][A-Za-z0-9_]*\\((string|string,uint8)\\)${q} [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\\\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?\$"
+# Anvil's published dev key, which signs on a local chain when KEY is unset.
+DEV_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+
 known() {
-  jq -e --arg t "$1" 'any(.nodes[]; .id == $t)' "$GRAPH_JSON" >/dev/null || fail 2 "cannot reach $1: unknown target; see graph.sh list"
+  jq -e --arg t "$1" 'any(.nodes[]; .id == $t)' "$GRAPH_JSON" >/dev/null || fail 2 "cannot reach $1: unknown target; see graph.sh list, or regenerate graph.generated.json if the graph changed"
 }
 
 # graph <tag> <sig> [args]: prints the graph script's output lines that start with `<tag> `, without
@@ -97,7 +101,6 @@ graph() {
 }
 
 case ${1:-} in
-  -h|--help) usage; exit ;;
   list) [ $# -eq 1 ] || { usage >&2; exit 2; }; graph TARGET 'list()'; exit ;;
   json) [ $# -eq 1 ] || { usage >&2; exit 2; }; graph GRAPH 'graph()'; exit ;;
   # Reads graph.generated.json, not forge, so the chart shows exactly the saved export.
@@ -149,6 +152,7 @@ known "$target"
 [ -n "${R:-}" ] || fail 2 "set R to the RPC the plan reads"
 [ "$verb" = run ] || { graph PLAN 'plan(string,string)' "$network" "$target" --rpc-url "$R"; exit; }
 [ -n "${DEPLOYER:-}" ] || fail 2 "set DEPLOYER to the sender of steps without .by"
+printf '%s\n' "$DEPLOYER" | grep -Eq '^0x[0-9a-fA-F]{40}$' || fail 2 "DEPLOYER is not a 0x address"
 
 # git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
 # must not hide an untracked file or a dirty submodule, and a failing git is a refusal, never an empty
@@ -178,12 +182,13 @@ fi
 is_local() { jq -n -e --argjson i "$1" --slurpfile p "$PROJECT" '$p[0].chains.local | index($i) != null' >/dev/null; }
 local_net=$(jq -r --slurpfile p "$PROJECT" '[.chains // {} | .[].id] as $ids
   | if ($ids | length) > 0 and all($ids[]; . as $i | $p[0].chains.local | index($i) != null) then 1 else empty end' "$netfile")
+# Whether the node at $1 is Anvil, which sets its own clock.
+is_anvil() { case $(cast rpc web3_clientVersion --rpc-url "$1" 2>/dev/null | tr -d '"') in anvil/*) return 0 ;; esac; return 1; }
 anvil=
 if [ -n "$local_net" ]; then
-  version=$(cast rpc web3_clientVersion --rpc-url "$R" 2>/dev/null | tr -d '"') || version=
   # Anvil can send as any address a step names, which need not be the dev key's. Any other node signs
   # with a single key.
-  case $version in anvil/*) anvil=1; set -- --unlocked ;; *) set -- --private-key "${KEY:-$DEV_KEY}" ;; esac
+  if is_anvil "$R"; then anvil=1; set -- --unlocked; else set -- --private-key "${KEY:-$DEV_KEY}"; fi
   [ -z "$wait" ] || [ -z "$anvil" ] || fail 2 "--wait has no use on Anvil: it moves the clock itself"
 else
   attended=1
@@ -203,8 +208,9 @@ expect_chain() {
   got=$(cast chain-id --rpc-url "$1") || fail 2 "cannot read the chain id at $1"
   [ "$got" = "$2" ] || fail 2 "refusing $network: $1 is chain $got, network.json says $2"
 }
-# A chain's rpc alias is printed into the commands, like the network name, so it must be a plain name.
-jq -e '[.chains[]?.rpc // empty] | all(type == "string" and length > 0 and . == gsub("[^A-Za-z0-9._-]"; "") and test("^[A-Za-z0-9]"))' \
+# A chain's rpc alias is printed into the commands, like the network name. A date line tells an alias from
+# an RPC variable by its lower case.
+jq -e '[.chains[]?.rpc // empty] | all(type == "string" and test("\\A[a-z][a-z0-9_-]*\\z"))' \
   "$netfile" >/dev/null || fail 2 "refusing $network: a chain's rpc alias is not a plain name"
 endpoints=$R
 for chain in $chains; do
@@ -290,6 +296,15 @@ tree() {
   changes
   for f in .env "${HOME:-/nonexistent}/.foundry/foundry.toml"; do [ ! -f "$f" ] || cksum "$f"; done
 }
+# step <command...>: runs it with its output streaming. If it fails, repeats forge's last `Error:` line
+# after the output, where a long run buries it, and exits with its code.
+step() {
+  log=$(mktemp); rcfile=$(mktemp)
+  { rc=0; "$@" </dev/null 2>&1 || rc=$?; echo "$rc" >"$rcfile"; } | tee "$log"
+  rc=$(cat "$rcfile")
+  [ "$rc" = 0 ] || { grep '^Error:' "$log" | tail -n 1 >&2 || :; rm -f "$log" "$rcfile"; exit "$rc"; }
+  rm -f "$log" "$rcfile"
+}
 # attend: show $line's dry run, and send it only if the person at the terminal answers yes.
 attend() {
   sender=$(printf '%s\n' "$line" | sed -n 's/.* --sender \([^ ]*\).*/\1/p')
@@ -303,7 +318,7 @@ attend() {
   export DEPLOY_TREE_DIRTY=$([ -z "$(unowned)" ] || echo 1)
   rc=0; out=$(sh -c "$line" </dev/null 2>&1) || rc=$?
   printf '%s\n' "$out"
-  [ "$rc" = 0 ] || exit "$rc"
+  [ "$rc" = 0 ] || { printf '%s\n' "$out" | grep '^Error:' | tail -n 1 >&2 || :; exit "$rc"; }
   # Forge saves a dry run that has transactions and names the file. If the output says it has
   # transactions but names no file, they cannot be shown, so refuse.
   records=$(printf '%s\n' "$out" | sed -n 's/^Transactions saved to: //p')
@@ -324,7 +339,7 @@ attend() {
   [ "$(git rev-parse HEAD)" = "$head" ] || fail 2 "refusing: HEAD moved since before the dry run; run again"
   [ "$(tree)" = "$seen" ] || fail 2 "refusing: the working tree changed since before the dry run; run again"
   pre=$(porcelain)
-  sh -c "$line --broadcast \"\$@\"" graph.sh "$@" </dev/null
+  step sh -c "$line --broadcast \"\$@\"" graph.sh "$@"
   # Ownership is by path: the new untracked records under this step's script directory (its chain id is
   # not known here). A concurrent run of the same script is not told apart.
   script=$(printf '%s\n' "$line" | sed -n 's/.*forge script \([^ :]*\).*/\1/p')
@@ -336,7 +351,7 @@ attend() {
 # Without `on`, the clock is $R's.
 before() {
   clock=$R
-  if [ -n "$on" ] && [ -z "$anvil" ]; then
+  if [ -n "$on" ]; then
     case $on in *[!A-Za-z0-9_-]*) fail 2 "unknown plan line: $line" ;; esac
     # An RPC variable's name is upper case; anything else is a foundry.toml alias, which cast resolves.
     case $on in *[!A-Z0-9_]*) clock=$on ;; *) eval "clock=\${$on}" ;; esac
@@ -359,9 +374,9 @@ while :; do
         on=; case $rest in "on "*) on=${rest#on }; on=${on%% *} ;; esac
         case $at in ''|*[!0-9]*) fail 2 "unknown plan line: $line" ;; esac
         if before; then
-          if [ -n "$anvil" ]; then
-            cast rpc evm_setNextBlockTimestamp "$at" --rpc-url "$R" >/dev/null
-            cast rpc evm_mine --rpc-url "$R" >/dev/null
+          if [ -n "$anvil" ] && is_anvil "$clock"; then
+            cast rpc evm_setNextBlockTimestamp "$at" --rpc-url "$clock" >/dev/null
+            cast rpc evm_mine --rpc-url "$clock" >/dev/null
           else
             [ -n "$wait" ] || fail 4 "$line"
             printf '%s: waiting\n' "$line"
@@ -378,9 +393,14 @@ while :; do
       "#"*) fail 2 "unknown plan line: $line" ;;
       "") ;;
       *)
-        printf '%s\n' "$line" | grep -Eq '^([A-Z0-9_]+=\$[A-Z0-9_]+ )*forge script ' || fail 2 "unknown plan line: $line"
+        printf '%s\n' "$line" | grep -Eq "$COMMAND" || fail 2 "unknown plan line: $line"
+        # The shell splits an unquoted variable at whitespace, which would add flags to the command.
+        for name in $(printf '%s\n' "$line" | grep -Eo '\$[A-Z][A-Z0-9_]*' | tr -d '$'); do
+          eval "value=\${$name-}"
+          case $value in *[[:space:]]*) fail 2 "refusing: \$$name holds whitespace" ;; esac
+        done
         sent=$lines
-        if [ -n "$attended" ]; then attend "$@"; else sh -c "$line --broadcast \"\$@\"" graph.sh "$@" </dev/null; fi
+        if [ -n "$attended" ]; then attend "$@"; else step sh -c "$line --broadcast \"\$@\"" graph.sh "$@"; fi
         ;;
     esac
   done <<EOF

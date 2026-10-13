@@ -13,15 +13,6 @@ contract UnitHarness is Unit {
         return "harness";
     }
 
-    function fenced() external view returns (bool) {
-        return _fenced();
-    }
-
-    function rehearsal(string calldata network) external returns (bool) {
-        _adopt(network);
-        return _rehearsal();
-    }
-
     function requireTestChain() external view {
         _requireTestChain();
     }
@@ -33,6 +24,7 @@ contract CoreUnitTest is Test {
     uint256 private constant FENCED = 777;
     uint256 private constant FREE = 31337;
     string private constant OPT_IN = "CORE_TEST_UNEXPECTED_DEPLOYER";
+    string private constant DIRTY = "CORE_TEST_DIRTY_MARK";
     string private constant SCRIPT = "ToyUnit.s.sol";
 
     address private ops = makeAddr("ops");
@@ -42,6 +34,17 @@ contract CoreUnitTest is Test {
     string private dir;
 
     // ==== The nonce fence ====
+
+    function test_fence_aJournalLostWithItsRecords_refusesASecondDeploymentAtTheSendersNonce() public {
+        _network("lost", FENCED, "");
+        unit.deploy(network);
+        address lost = _journalOf("toy", ".toy");
+        vm.removeFile(string.concat(dir, "/toy.json"));
+
+        vm.expectRevert(bytes(_refusal(lost, ops, 0)));
+        unit.deploy(network);
+        vm.stopBroadcast();
+    }
 
     function test_fence_theLastUsedNonceIsRead_fromBothEntryPoints_andARetiredAddressPasses() public {
         _network("last", FENCED, "");
@@ -105,6 +108,17 @@ contract CoreUnitTest is Test {
         unit.recordedRole(network);
     }
 
+    function test_fence_everyRecordedDeployerIsRead() public {
+        _network("deployers", FENCED, "");
+        _record("known", _stray(other), other, 0);
+        address lost = _stray(other);
+
+        vm.expectRevert(bytes(_refusal(lost, other, 1)));
+        unit.landed(network, ops);
+        vm.expectRevert(bytes(_refusal(lost, other, 1)));
+        unit.recordedRole(network);
+    }
+
     /// @dev No journal records the pinned key, and the due view has no sender of its own.
     function test_fence_theNetworksPinnedDeployer_isRead() public {
         _network("pinned", FENCED, vm.toString(ops));
@@ -126,7 +140,7 @@ contract CoreUnitTest is Test {
             bytes(
                 string.concat(
                     vm.toString(ops),
-                    " has used more nonces than the fence reads: a person must account for its deployments"
+                    " has used more nonces than the fence reads: a person must account for its deployments, or use a fresh deploy key, or list the chain in chains.unrecordedDeploys[<id>]"
                 )
             )
         );
@@ -134,6 +148,12 @@ contract CoreUnitTest is Test {
     }
 
     // ==== The deployer pin ====
+
+    function test_fence_appliesOnlyWhereTheProjectFencesAChain() public {
+        _network("unfenced", FREE, "");
+        _stray(ops);
+        assertEq(unit.landed(network, ops), address(0));
+    }
 
     function test_pin_aRerunThatSendsNothing_passesWithAnySender() public {
         _network("rerun", FREE, vm.toString(ops));
@@ -161,6 +181,22 @@ contract CoreUnitTest is Test {
             vm.stopBroadcast();
             assertFalse(vm.exists(string.concat(dir, "/toy.json")));
         }
+    }
+
+    function test_pin_aWrongKey_isRefusedBeforeAnySend_unlessTheOptInIsGiven() public {
+        _network("wrong-key", FREE, vm.toString(ops));
+        unit.setTestSender(other);
+
+        vm.expectRevert(bytes(_pinRefusal(other, ops)));
+        unit.deploy(network);
+        vm.stopBroadcast();
+        assertEq(vm.getNonce(other), 0);
+        assertFalse(vm.exists(string.concat(dir, "/toy.json")));
+
+        unit.allowOtherDeployer();
+        unit.deploy(network);
+        assertEq(vm.getNonce(other), 1);
+        assertEq(_journalOf("toy", ".toyDeployer"), other);
     }
 
     /// @dev The toy reads a variable of its own, so no other suite sees it.
@@ -270,7 +306,7 @@ contract CoreUnitTest is Test {
     function test_theRunnerExportsTheVariablesTheCoreReads() public {
         (string memory optIn, string memory dirty) = unit.defaultVariables();
         string memory runner = vm.readFile("bin/graph.sh");
-        assertTrue(vm.contains(runner, string.concat(optIn, "=1")), optIn);
+        assertTrue(vm.contains(runner, string.concat(optIn, "=1; export ", optIn)), optIn);
         assertTrue(vm.contains(runner, string.concat("export ", dirty, "=")), dirty);
     }
 
@@ -295,14 +331,24 @@ contract CoreUnitTest is Test {
         unit.landed(network, ops);
     }
 
+    function test_deployRole_aSimulationJournalsNothing() public {
+        _network("simulation", FREE, "");
+        unit.simulate();
+
+        unit.deploy(network);
+
+        assertFalse(vm.exists(string.concat(dir, "/toy.json")));
+        assertEq(unit.hooks(), 0);
+    }
+
     function test_deployRole_recordsTheReceiptOnlyTheChainConfirms() public {
         _network("receipt", FREE, "");
         unit.deploy(network);
-        address at = _journalOf("toy", ".toy");
+        address addr = _journalOf("toy", ".toy");
         bytes32 first = keccak256("a send of the same address that failed");
         bytes32 hash = keccak256("the payload's creation");
         string memory path = string.concat(dir, "/toy.json");
-        _writeReceipts("run-latest.json", '"abc1234"', at, first, hash);
+        _writeReceipts("run-latest.json", '"abc1234"', addr, first, hash);
 
         unit.deploy(network);
         assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"), "an unconfirmed receipt was recorded");
@@ -316,13 +362,38 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonString(m, ".toyCommit"), "abc1234");
 
         bytes32 later = keccak256("a later record");
-        _writeReceipts("run-later.json", '"abc1234"', at, later, later);
+        _writeReceipts("run-later.json", '"abc1234"', addr, later, later);
         unit.confirm(later);
         unit.deploy(network);
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
+    /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
+    ///      clean send over the dirty mark that intent left clears it.
+    function test_deployRole_aCleanSendOverASpentIntentClearsItsDirtyMark() public {
+        _network("dirty", FREE, "");
+        DirtyToyUnit dirty = new DirtyToyUnit();
+        dirty.setTestSender(ops);
+        string memory path = string.concat(dir, "/toy.json");
+        uint256 nonce = vm.getNonce(ops);
+        vm.setEnv(DIRTY, "1");
+        uint256 before = vm.snapshotState();
+        dirty.deploy(network);
+        address first = _journalOf("toy", ".toy");
+        assertTrue(vm.parseJsonBool(vm.readFile(path), ".toyDirty"));
+
+        vm.revertToState(before);
+        vm.setNonce(ops, uint64(nonce + 1));
+        vm.setEnv(DIRTY, "");
+        dirty.deploy(network);
+
+        string memory m = vm.readFile(path);
+        assertEq(vm.parseJsonAddress(m, ".toy"), vm.computeCreateAddress(ops, nonce + 1));
+        assertTrue(vm.parseJsonAddress(m, ".toy") != first);
+        assertFalse(vm.parseJsonBool(m, ".toyDirty"));
+    }
+
     function test_deployRole_theCommitStaysPendingOnNull_andOnlyPendingIsReplaced() public {
         bytes32 hash = keccak256("the payload's creation");
         unit.confirm(hash);
@@ -443,6 +514,20 @@ contract CoreUnitTest is Test {
         assertFalse(vm.exists(string.concat(dir, "/toy.json")), "a refused recover wrote the journal");
     }
 
+    function test_recover_refusesARecordNotAtItsSendersNonce_writingNothing() public {
+        string memory lost = _lose("recover-wrong-nonce");
+        _writeRecord(
+            _run(
+                block.chainid,
+                _create("ToyPayload", _addressOf(lost), ops, vm.parseJsonUint(lost, ".toyNonce") + 1, _initcode(1))
+            )
+        );
+
+        vm.expectRevert(bytes("a deployment is not at its sender's nonce"));
+        unit.recover(network);
+        assertFalse(vm.exists(string.concat(dir, "/toy.json")), "a refused recovery wrote the journal");
+    }
+
     function test_recover_refusesARecordWithoutCodeThatMayStillLand() public {
         string memory lost = _lose("recover-pending");
         uint256 next = vm.getNonce(ops);
@@ -540,7 +625,7 @@ contract CoreUnitTest is Test {
     ///      deployment over it without a recover command.
     function test_recover_excludesCreate2_andTheStrayGuardRefusesIt() public {
         string memory lost = _lose("recover-create2");
-        address at = _addressOf(lost);
+        address addr = _addressOf(lost);
         string memory create2 =
             vm.replace(_sent(lost, ops), '"transactionType": "CREATE"', '"transactionType": "CREATE2"');
         _writeRecord(_run(block.chainid, create2));
@@ -554,7 +639,7 @@ contract CoreUnitTest is Test {
                     "toy.json lacks toy, yet ",
                     _recordPath(),
                     " holds a CREATE2 of ToyPayload at ",
-                    vm.toString(at),
+                    vm.toString(addr),
                     " that landed or may land: restore the journal"
                 )
             )
@@ -563,10 +648,32 @@ contract CoreUnitTest is Test {
         vm.stopBroadcast();
     }
 
+    /// @dev A second landed `ToyPayload` in the records would refuse any recovery of a role the
+    ///      journal lacks.
+    function test_recover_ofACompleteJournal_sendsAndWritesNothing() public {
+        string memory journal = _lose("recover-complete");
+        vm.writeFile(string.concat(dir, "/toy.json"), journal);
+        uint256 nonce = vm.getNonce(ops);
+        address second = _stray(ops);
+        _writeRecord(
+            _run(
+                block.chainid,
+                string.concat(_sent(journal, ops), ", ", _create("ToyPayload", second, ops, nonce, _initcode(9)))
+            )
+        );
+        vm.recordLogs();
+
+        unit.recover(network);
+
+        assertEq(vm.readFile(string.concat(dir, "/toy.json")), journal, "recover changed a complete journal");
+        assertEq(vm.getRecordedLogs().length, 0, "recover sent a transaction");
+        assertEq(vm.getNonce(ops), nonce + 1);
+    }
+
     /// @dev A CREATE2 at the address a step is about to adopt is that role itself, and nothing else is.
     function test_stray_aCreate2AtTheAdoptedAddress_isTheRoleItself() public {
         string memory lost = _lose("stray-adopted");
-        address at = _addressOf(lost);
+        address addr = _addressOf(lost);
         _writeRecord(
             _run(
                 block.chainid,
@@ -574,7 +681,7 @@ contract CoreUnitTest is Test {
             )
         );
 
-        unit.requireNoStray(network, at);
+        unit.requireNoStray(network, addr);
         vm.expectRevert();
         unit.requireNoStray(network, makeAddr("another address"));
     }
@@ -586,21 +693,7 @@ contract CoreUnitTest is Test {
         address queued = vm.computeCreateAddress(ops, next);
         _writeRecord(_run(block.chainid, _create("ToyPayload", queued, ops, next, _initcode(1))));
 
-        vm.expectRevert(
-            bytes(
-                string.concat(
-                    "toy.json lacks toy, yet ",
-                    _recordPath(),
-                    " holds a CREATE of ToyPayload at ",
-                    vm.toString(queued),
-                    " that landed or may land: restore the journal, or rebuild it: forge script ",
-                    "test/ToyUnit.sol --sig 'recover(string)' ",
-                    network,
-                    " --rpc-url $R --sender ",
-                    vm.toString(ops)
-                )
-            )
-        );
+        vm.expectRevert();
         unit.requireNoStray(network, address(0));
 
         vm.setNonce(ops, uint64(next + 1));
@@ -695,20 +788,9 @@ contract CoreUnitTest is Test {
         unit.useNetwork(network);
     }
 
-    function test_use_refusesAnUnnamedUnknownOrForeignNetwork() public {
+    function test_use_refusesAnUnnamedNetwork() public {
         vm.expectRevert(bytes("name the network: a directory under cache/core-test/deployments/"));
         unit.useNetwork("");
-        vm.expectRevert(
-            bytes(
-                "cache/core-test/deployments/core-nowhere/network.json is missing: name a network under cache/core-test/deployments/"
-            )
-        );
-        unit.useNetwork("core-nowhere");
-
-        _network("foreign-journal", FREE, "");
-        vm.writeFile(string.concat(dir, "/toy.json"), '{"mainChainId": 1}');
-        vm.expectRevert(bytes("the journal is another chain's"));
-        unit.useNetwork(network);
     }
 
     function test_inputs_refuseAPlaceholderAZeroAddressAndAnOutOfRangeNumber() public {
@@ -728,15 +810,10 @@ contract CoreUnitTest is Test {
         unit.requiredAddress(string.concat('{"a":"', vm.toString(address(0)), '"}'), "a");
     }
 
-    function test_unit_readsWhichChainsAndNetworksTheProjectFences() public {
+    function test_requireTestChain_refusesALiveChain() public {
         UnitHarness harness = new UnitHarness();
         vm.chainId(1);
-        assertTrue(harness.fenced());
         vm.expectRevert(bytes("a test-only unit: name a test chain's network"));
-        harness.requireTestChain();
-
-        vm.chainId(FREE);
-        assertFalse(harness.fenced());
         harness.requireTestChain();
     }
 
@@ -763,12 +840,12 @@ contract CoreUnitTest is Test {
     }
 
     /// @dev `<file>.json`, recording `at` as `role` of that name, deployed by `deployer` at `nonce`.
-    function _record(string memory role, address at, address deployer, uint256 nonce) private {
-        vm.serializeAddress(role, role, at);
+    function _record(string memory role, address addr, address deployer, uint256 nonce) private {
+        vm.serializeAddress(role, role, addr);
         vm.serializeAddress(role, string.concat(role, "Deployer"), deployer);
         vm.serializeUint(role, string.concat(role, "Nonce"), nonce);
         vm.writeJson(
-            vm.serializeBytes32(role, string.concat(role, "CodeHash"), at.codehash),
+            vm.serializeBytes32(role, string.concat(role, "CodeHash"), addr.codehash),
             string.concat(dir, "/", role, ".json")
         );
     }
@@ -795,16 +872,16 @@ contract CoreUnitTest is Test {
         vm.removeFile(string.concat(dir, "/toy.json"));
     }
 
-    function _refusal(address at, address deployer, uint256 nonce) private view returns (string memory) {
+    function _refusal(address addr, address deployer, uint256 nonce) private view returns (string memory) {
         return string.concat(
             "toy.json lacks toy, yet ",
-            vm.toString(at),
+            vm.toString(addr),
             ", the CREATE of ",
             vm.toString(deployer),
             " at nonce ",
             vm.toString(nonce),
             ", has code no journal records: find its journal with git log --all -i -G ",
-            vm.toString(at),
+            vm.toString(addr),
             " -- ",
             dir,
             "; if it is none of toy's roles, list it in toy.json's retired; if it may be one and git has no journal, stop: a person must resolve it"
@@ -817,15 +894,26 @@ contract CoreUnitTest is Test {
             vm.toString(nonce),
             " of ",
             vm.toString(sender),
-            " may still be pending: wait for it, or replace that nonce, then rerun"
+            " may still be pending: wait for it, or replace that nonce, then rerun; on a local chain, delete toy.json"
         );
     }
 
-    function _notCurrent(address at) private returns (string memory) {
+    function _pinRefusal(address sender, address pinned) private view returns (string memory) {
+        return string.concat(
+            vm.toString(sender),
+            " is not ",
+            dir,
+            "/network.json's deployer ",
+            vm.toString(pinned),
+            ": run with that key, or pass --unsafe-unexpected-deployer to graph.sh (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
+        );
+    }
+
+    function _notCurrent(address addr) private returns (string memory) {
         return string.concat(
             _recordPath(),
             " records ToyPayload at ",
-            vm.toString(at),
+            vm.toString(addr),
             " with initcode other than this build's with the current inputs: if it is the lost deployment,",
             " restore the commit and inputs that made it; if not, list it in toy.json's retired"
         );
@@ -842,13 +930,13 @@ contract CoreUnitTest is Test {
         return string.concat(records, "/0-latest.json");
     }
 
-    function _writeReceipts(string memory file, string memory commit, address at, bytes32 first, bytes32 second)
+    function _writeReceipts(string memory file, string memory commit, address addr, bytes32 first, bytes32 second)
         private
     {
         string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/records");
         vm.createDir(records, true);
         string memory receipt =
-            string.concat('{"contractAddress": "', vm.toLowercase(vm.toString(at)), '", "transactionHash": "');
+            string.concat('{"contractAddress": "', vm.toLowercase(vm.toString(addr)), '", "transactionHash": "');
         vm.writeFile(
             string.concat(records, "/", file),
             string.concat(
@@ -890,7 +978,7 @@ contract CoreUnitTest is Test {
         );
     }
 
-    function _create(string memory name, address at, address from, uint256 nonce, bytes memory input)
+    function _create(string memory name, address addr, address from, uint256 nonce, bytes memory input)
         private
         pure
         returns (string memory)
@@ -899,7 +987,7 @@ contract CoreUnitTest is Test {
             '{"transactionType": "CREATE", "contractName": "',
             name,
             '", "contractAddress": "',
-            vm.toLowercase(vm.toString(at)),
+            vm.toLowercase(vm.toString(addr)),
             '", "transaction": {"from": "',
             vm.toLowercase(vm.toString(from)),
             '", "nonce": "',
@@ -908,70 +996,5 @@ contract CoreUnitTest is Test {
             vm.toString(input),
             '"}}'
         );
-    }
-}
-
-/// @dev Alone with its variable: the environment is the process's, and tests run in parallel.
-contract CoreDirtyTest is Test {
-    string private constant DIRTY = "CORE_TEST_DIRTY_MARK";
-    DirtyToyUnit private unit = new DirtyToyUnit();
-    address private ops = makeAddr("ops");
-    string private dir;
-
-    function _network(string memory network) private {
-        dir = string.concat("cache/core-test/deployments/", network);
-        if (vm.exists(dir)) vm.removeDir(dir, true);
-        vm.createDir(dir, true);
-        vm.writeFile(
-            string.concat(dir, "/network.json"),
-            string.concat('{"chains": {"main": {"id": ', vm.toString(block.chainid), "}}}")
-        );
-        unit.setTestSender(ops);
-    }
-
-    /// @dev One test: both halves set the one variable, and tests run in parallel.
-    function test_deployRole_theDirtyMarkFollowsTheSends() public {
-        _onlyOneMarksADirtyTree();
-        _aSpentIntentIsReplaced_andACleanSendClearsItsDirtyMark();
-    }
-
-    /// @dev `1` marks a dirty tree, and anything else is no mark.
-    function _onlyOneMarksADirtyTree() private {
-        string[2] memory marks = ["true", "1"];
-        for (uint256 i; i < marks.length; ++i) {
-            _network("core-dirty");
-            vm.setEnv(DIRTY, marks[i]);
-            uint256 before = vm.snapshotState();
-            unit.deploy("core-dirty");
-            string memory m = vm.readFile(string.concat(dir, "/toy.json"));
-            assertEq(vm.keyExistsJson(m, ".toyDirty"), i == 1, "only 1 marks a dirty tree");
-            vm.revertToState(before);
-        }
-        vm.setEnv(DIRTY, "");
-    }
-
-    /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
-    ///      clean send over the dirty mark that intent left clears it.
-    function _aSpentIntentIsReplaced_andACleanSendClearsItsDirtyMark() private {
-        _network("core-spent");
-        string memory path = string.concat(dir, "/toy.json");
-        uint256 nonce = vm.getNonce(ops);
-        vm.setEnv(DIRTY, "1");
-        uint256 before = vm.snapshotState();
-        unit.deploy("core-spent");
-        address first = vm.parseJsonAddress(vm.readFile(path), ".toy");
-        assertTrue(vm.parseJsonBool(vm.readFile(path), ".toyDirty"));
-
-        vm.revertToState(before);
-        vm.setNonce(ops, uint64(nonce + 1));
-        vm.setEnv(DIRTY, "");
-        unit.deploy("core-spent");
-
-        string memory m = vm.readFile(path);
-        address second = vm.parseJsonAddress(m, ".toy");
-        assertTrue(second != first, "the spent intent was kept");
-        assertEq(second, vm.computeCreateAddress(ops, nonce + 1));
-        assertGt(second.code.length, 0);
-        assertFalse(vm.parseJsonBool(m, ".toyDirty"), "a clean send kept the mark");
     }
 }

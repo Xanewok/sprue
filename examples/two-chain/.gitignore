@@ -1,0 +1,10 @@
+out/
+cache/
+lib/
+broadcast/*/*/dry-run/
+deployments/fork-test*/
+# The local network is rebuilt at will: keep its journals and records out of git.
+broadcast/*/3133[78]/
+deployments/local/*.json
+!deployments/local/network.json
+!deployments/local/*.input.json

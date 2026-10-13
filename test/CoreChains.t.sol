@@ -3,20 +3,12 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {chainKind, chainRpc, defaultChainIn, isFencedChainId, isTestChainId, validatedProject} from "../src/Chains.sol";
+import {chainRpc, defaultChainIn, validatedProject} from "../src/Chains.sol";
 
 /// @dev Free functions revert in the test's own frame, which `expectRevert` cannot see.
 contract ChainsCaller {
     function inOf(string calldata project, string calldata network) external view returns (string memory) {
         return defaultChainIn(project, network);
-    }
-
-    function rpcOf(string calldata network, string calldata chain, bool optional)
-        external
-        view
-        returns (string memory)
-    {
-        return chainRpc(network, chain, optional);
     }
 
     function validated(string calldata path) external view returns (string memory) {
@@ -37,8 +29,6 @@ contract CoreChainsTest is Test {
         vm.setEnv("ENVONLY_RPC", "http://envonly");
         assertEq(chainRpc(CHAINS, "envonly", false), "http://envonly", "no rpc: <CHAIN>_RPC");
         assertEq(chainRpc(CHAINS, "unset-chain", true), "", "optional and unset");
-        vm.expectRevert();
-        caller.rpcOf(CHAINS, "unset-chain", false);
         vm.setEnv("ENVONLY_RPC", saved);
     }
 
@@ -54,12 +44,18 @@ contract CoreChainsTest is Test {
         vm.setEnv("PROBE_RPC", savedProbe);
     }
 
-    function test_chainKinds_followSprueJson() public view {
-        assertEq(chainKind(31337), "local");
-        assertEq(chainKind(11155111), "test");
-        assertEq(chainKind(1), "live");
-        assertTrue(isTestChainId(31337) && isTestChainId(11155111) && !isTestChainId(1));
-        assertTrue(isFencedChainId(1) && !isFencedChainId(31337) && !isFencedChainId(11155111));
+    function test_defaultChain_isTheProjectsKeyElseTheOnlyOne() public {
+        string memory withKey = '{"chains":{"default":"l2"}}';
+        string memory without = '{"chains":{}}';
+        assertEq(caller.inOf(withKey, CHAINS), "l2", "the key");
+        assertEq(caller.inOf(withKey, '{"chains":{"l2":{"id":1},"a":{"id":2}}}'), "l2", "the key beats the count");
+        assertEq(caller.inOf(without, '{"chains":{"main":{"id":1}}}'), "main", "the only chain");
+        assertEq(caller.inOf(without, CHAINS), "", "several chains and no key: none");
+        assertEq(caller.inOf(without, "{}"), "", "no chains: none");
+        vm.expectRevert("network.json lacks sprue.json's default chain l2");
+        caller.inOf(withKey, '{"chains":{"main":{"id":1}}}');
+        vm.expectRevert("network.json lacks sprue.json's default chain l2");
+        caller.inOf(withKey, "{}");
     }
 
     /// @dev Each file breaks one rule, so each check must refuse it alone.

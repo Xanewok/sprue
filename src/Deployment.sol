@@ -4,7 +4,8 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {requireLost} from "./DeployChecks.sol";
+import {chainId} from "./Chains.sol";
+import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
@@ -76,7 +77,10 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat("journal ", role, " has no code and no recorded deployer")
         );
         requireLost(
-            existing, _addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce"))
+            existing,
+            _addr(journal, string.concat(key, "Deployer")),
+            _uint(journal, string.concat(key, "Nonce")),
+            _unit()
         );
         _requireNoUnjournaled(journal, role, address(0));
         console.log("journal", role, "was never deployed and never can be: its nonce is used; deploying afresh");
@@ -88,12 +92,12 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      recorded. It compares with the journal, not with the current build, so that a later
     ///      source change does not orphan a deployment. A record without a hash is refused, with no
     ///      fallback.
-    function _requireRecordedCode(string memory journal, string memory role) internal view returns (address at) {
+    function _requireRecordedCode(string memory journal, string memory role) internal view returns (address addr) {
         string memory hashKey = string.concat(".", role, "CodeHash");
         require(_has(journal, hashKey), string.concat(_unit(), ".json records no ", role, "CodeHash"));
-        at = _addr(journal, string.concat(".", role));
+        addr = _addr(journal, string.concat(".", role));
         require(
-            at.code.length != 0 && at.codehash == vm.parseJsonBytes32(journal, hashKey),
+            addr.code.length != 0 && addr.codehash == vm.parseJsonBytes32(journal, hashKey),
             string.concat(role, "'s code differs from ", _unit(), ".json")
         );
     }
@@ -111,7 +115,7 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         address sender,
         uint256 next
-    ) internal returns (address at) {
+    ) internal returns (address addr) {
         string memory key = string.concat(".", role);
         if (
             _samePendingIntent(journal, role, artifact, args)
@@ -122,8 +126,8 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoStray(journal, role, artifact);
             _requireNoUnjournaled(journal, role, sender);
         }
-        at = _reusableAddress(journal, role);
-        if (at != address(0)) _requireRecordedCode(journal, role);
+        addr = _reusableAddress(journal, role);
+        if (addr != address(0)) _requireRecordedCode(journal, role);
     }
 
     /// @dev `_reuseForSend` for a `Due` view. A view shares the step's decision but knows neither the
@@ -133,19 +137,19 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      that. A unit authenticates a nonzero result.
     function _reuseForDue(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
-        returns (address at)
+        returns (address addr)
     {
         if (!_has(journal, string.concat(".", role))) {
             _requireNoStray(journal, role, artifact);
             _requireNoUnjournaled(journal, role, address(0));
             return address(0);
         }
-        at = _addr(journal, string.concat(".", role));
-        if (at != address(0) && at.code.length == 0 && _samePendingIntent(journal, role, artifact, args)) {
+        addr = _addr(journal, string.concat(".", role));
+        if (addr != address(0) && addr.code.length == 0 && _samePendingIntent(journal, role, artifact, args)) {
             return address(0);
         }
-        at = _reusableAddress(journal, role);
-        if (at != address(0)) _requireRecordedCode(journal, role);
+        addr = _reusableAddress(journal, role);
+        if (addr != address(0)) _requireRecordedCode(journal, role);
     }
 
     /// @dev Whether the journal records `role` at an address with no code, and its recorded
@@ -181,10 +185,10 @@ abstract contract Deployment is ForgeBroadcasts {
         Create[] memory creates = _creates(artifact);
         for (uint256 i; i < creates.length; ++i) {
             Create memory c = creates[i];
-            if (c.at.code.length == 0 && vm.getNonce(c.from) > c.nonce) continue;
-            if (c.create2 && c.at == adopted) continue;
+            if (c.addr.code.length == 0 && vm.getNonce(c.from) > c.nonce) continue;
+            if (c.create2 && c.addr == adopted) continue;
             require(
-                _isRetired(journal, c.at),
+                _isRetired(journal, c.addr),
                 string.concat(
                     _unit(),
                     ".json lacks ",
@@ -194,7 +198,7 @@ abstract contract Deployment is ForgeBroadcasts {
                     c.create2 ? " holds a CREATE2 of " : " holds a CREATE of ",
                     artifact,
                     " at ",
-                    vm.toString(c.at),
+                    vm.toString(c.addr),
                     " that landed or may land: restore the journal",
                     c.create2 || !_hasRecoverStep() ? "" : _recoverCommand(c)
                 )
@@ -202,9 +206,31 @@ abstract contract Deployment is ForgeBroadcasts {
         }
     }
 
-    /// @dev Whether the unit has a `recover` step, so that a refusal may name it.
-    function _hasRecoverStep() internal pure virtual returns (bool) {
-        return true;
+    /// @dev Whether the unit's script compiled a `recover(string)` function, read from the ABIs under
+    ///      `out/<script file>/`. False when that directory is absent, so a refusal never names a
+    ///      command that cannot run.
+    function _hasRecoverStep() internal view returns (bool) {
+        string[] memory path = vm.split(_deployScript(), "/");
+        string memory dir = string.concat("out/", path[path.length - 1]);
+        if (!vm.exists(dir)) return false;
+        VmSafe.DirEntry[] memory files = vm.readDir(dir);
+        for (uint256 i; i < files.length; ++i) {
+            if (!vm.exists(files[i].path) || files[i].isDir) continue;
+            string memory abi_ = vm.readFile(files[i].path);
+            if (!vm.keyExistsJson(abi_, ".abi")) continue;
+            for (uint256 k; vm.keyExistsJson(abi_, string.concat(".abi[", vm.toString(k), "]")); ++k) {
+                string memory entry = string.concat(".abi[", vm.toString(k), "]");
+                if (
+                    vm.keyExistsJson(abi_, string.concat(entry, ".name"))
+                        && keccak256(bytes(vm.parseJsonString(abi_, string.concat(entry, ".name"))))
+                            == keccak256("recover") && vm.keyExistsJson(abi_, string.concat(entry, ".inputs[0].type"))
+                        && !vm.keyExistsJson(abi_, string.concat(entry, ".inputs[1]"))
+                        && keccak256(bytes(vm.parseJsonString(abi_, string.concat(entry, ".inputs[0].type"))))
+                            == keccak256("string")
+                ) return true;
+            }
+        }
+        return false;
     }
 
     function _recoverCommand(Create memory c) private view returns (string memory) {
@@ -258,25 +284,25 @@ abstract contract Deployment is ForgeBroadcasts {
             used <= FENCED_NONCES,
             string.concat(
                 vm.toString(deployer),
-                " has used more nonces than the fence reads: a person must account for its deployments"
+                " has used more nonces than the fence reads: a person must account for its deployments, or use a fresh deploy key, or list the chain in chains.unrecordedDeploys[<id>]"
             )
         );
         for (uint256 n; n < used; ++n) {
-            address at = vm.computeCreateAddress(deployer, n);
-            if (at.code.length == 0 || _isRetired(journal, at) || _journaled(journals, at)) continue;
+            address addr = vm.computeCreateAddress(deployer, n);
+            if (addr.code.length == 0 || _isRetired(journal, addr) || _journaled(journals, addr)) continue;
             revert(
                 string.concat(
                     _unit(),
                     ".json lacks ",
                     role,
                     ", yet ",
-                    vm.toString(at),
+                    vm.toString(addr),
                     ", the CREATE of ",
                     vm.toString(deployer),
                     " at nonce ",
                     vm.toString(n),
                     ", has code no journal records: find its journal with git log --all -i -G ",
-                    vm.toString(at),
+                    vm.toString(addr),
                     " -- ",
                     _dir(),
                     "; if it is none of ",
@@ -308,7 +334,7 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      fixes the deployer and nonce, which `_recordSender` keeps consistent with it. The hash
     ///      also tells a multi-chain unit's record on one chain from a CREATE on another chain by
     ///      the same key at the same nonce.
-    function _journaled(string[] memory journals, address at) private view returns (bool) {
+    function _journaled(string[] memory journals, address addr) private view returns (bool) {
         for (uint256 j; j < journals.length; ++j) {
             string memory journal = journals[j];
             string[] memory keys = vm.parseJsonKeys(journal, "$");
@@ -316,8 +342,9 @@ abstract contract Deployment is ForgeBroadcasts {
                 if (!_endsWith(keys[k], "Deployer")) continue;
                 string memory role = string.concat(".", vm.replace(keys[k], "Deployer", ""));
                 if (
-                    _has(journal, role) && _addr(journal, role) == at && _has(journal, string.concat(role, "CodeHash"))
-                        && vm.parseJsonBytes32(journal, string.concat(role, "CodeHash")) == at.codehash
+                    _has(journal, role) && _addr(journal, role) == addr
+                        && _has(journal, string.concat(role, "CodeHash"))
+                        && vm.parseJsonBytes32(journal, string.concat(role, "CodeHash")) == addr.codehash
                 ) return true;
             }
         }
@@ -369,7 +396,7 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      chain shows. A genuine deployment from other inputs is an earlier one, not the one the
     ///      journal lost.
     function _requireCurrent(Create memory found, string memory artifact, bytes memory args) internal {
-        if (found.at == address(0)) return;
+        if (found.addr == address(0)) return;
         bytes memory input = _txInput(found);
         require(
             keccak256(input) == _initcodeHash(artifact, args),
@@ -378,7 +405,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 " records ",
                 artifact,
                 " at ",
-                vm.toString(found.at),
+                vm.toString(found.addr),
                 " with initcode other than this build's with the current inputs: if it is the lost deployment,",
                 " restore the commit and inputs that made it; if not, list it in ",
                 _unit(),
@@ -386,7 +413,7 @@ abstract contract Deployment is ForgeBroadcasts {
             )
         );
         require(
-            vm.computeCreateAddress(found.from, found.nonce) == found.at, "a deployment is not at its sender's nonce"
+            vm.computeCreateAddress(found.from, found.nonce) == found.addr, "a deployment is not at its sender's nonce"
         );
         Create memory landed = _landedAsRecorded(artifact, found, input);
         (found.path, found.record, found.run, found.key, found.args) =
@@ -398,11 +425,11 @@ abstract contract Deployment is ForgeBroadcasts {
     function _journalRecovered(string memory journal, string[2][] memory roles, Create[] memory found) internal {
         bool recovered;
         for (uint256 i; i < roles.length; ++i) {
-            if (found[i].at == address(0)) continue;
+            if (found[i].addr == address(0)) continue;
             _recoverRole(roles[i][0], roles[i][1], found[i]);
             recovered = true;
         }
-        if (recovered && !_has(journal, _stampKey(_networkJson()))) _putChainStamp();
+        if (recovered && !_has(journal, _selectedStampKey())) _putChainStamp();
     }
 
     /// @dev Reverts if the journal holds any extension key of `role`, so that recovery never writes
@@ -428,15 +455,15 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      `_requireCurrent`.
     function _recoverRole(string memory role, string memory artifact, Create memory found) private {
         bytes memory input = _txInput(found);
-        _recordSender(role, found.at, found.from, found.nonce);
+        _recordSender(role, found.addr, found.from, found.nonce);
         _put(string.concat(".", role, "Args"), vm.toString(found.args));
         _put(string.concat(".", role, "InitcodeHash"), vm.toString(keccak256(input)));
-        _recordBuild(role, found.at, artifact);
+        _recordBuild(role, found.addr, artifact);
         (bool hasCommit, string memory commit) = _commit(found);
         if (hasCommit) _put(string.concat(".", role, "Commit"), string.concat('"', commit, '"'));
-        _put(string.concat(".", role), vm.toString(found.at));
-        _recordReceipt(_journal(), role, found.at);
-        console.log("recovered", role, found.at);
+        _put(string.concat(".", role), vm.toString(found.addr));
+        _recordReceipt(_journal(), role, found.addr);
+        console.log("recovered", role, found.addr);
     }
 
     /// @dev `sender`'s one CREATE of `artifact` on this chain that has code, ignoring addresses the
@@ -453,8 +480,8 @@ abstract contract Deployment is ForgeBroadcasts {
         uint256 count;
         for (uint256 i; i < creates.length; ++i) {
             Create memory c = creates[i];
-            if (c.from != sender || c.create2 || _isRetired(journal, c.at)) continue;
-            if (c.at.code.length == 0) {
+            if (c.from != sender || c.create2 || _isRetired(journal, c.addr)) continue;
+            if (c.addr.code.length == 0) {
                 require(
                     vm.getNonce(sender) > c.nonce,
                     string.concat(
@@ -466,7 +493,7 @@ abstract contract Deployment is ForgeBroadcasts {
                         " holds a CREATE of ",
                         artifact,
                         " at ",
-                        vm.toString(c.at),
+                        vm.toString(c.addr),
                         " that may still land: wait, or spend the nonce"
                     )
                 );
@@ -475,9 +502,9 @@ abstract contract Deployment is ForgeBroadcasts {
             // forge writes each run twice, as `-latest` and timestamped, so an address can repeat.
             // The same address with other initcode is a transaction replaced at that nonce, and only
             // the chain knows which one landed.
-            if (vm.contains(landed, vm.toString(c.at))) {
+            if (vm.contains(landed, vm.toString(c.addr))) {
                 require(
-                    c.at != found.at || keccak256(_txInput(c)) == keccak256(_txInput(found)),
+                    c.addr != found.addr || keccak256(_txInput(c)) == keccak256(_txInput(found)),
                     string.concat(
                         _unit(),
                         ".json lacks ",
@@ -485,13 +512,13 @@ abstract contract Deployment is ForgeBroadcasts {
                         ", and the records create ",
                         artifact,
                         " at ",
-                        vm.toString(c.at),
+                        vm.toString(c.addr),
                         " with different initcode: a person must choose"
                     )
                 );
                 continue;
             }
-            landed = count == 0 ? vm.toString(c.at) : string.concat(landed, ", ", vm.toString(c.at));
+            landed = count == 0 ? vm.toString(c.addr) : string.concat(landed, ", ", vm.toString(c.addr));
             found = c;
             ++count;
         }
@@ -527,7 +554,10 @@ abstract contract Deployment is ForgeBroadcasts {
         Create[] memory creates = _creates(artifact);
         for (uint256 i; i < creates.length; ++i) {
             Create memory c = creates[i];
-            if (!c.create2 && c.at == found.at && keccak256(_txInput(c)) == keccak256(input) && _isLandedIn(c, input)) {
+            if (
+                !c.create2 && c.addr == found.addr && keccak256(_txInput(c)) == keccak256(input)
+                    && _isLandedIn(c, input)
+            ) {
                 return c;
             }
         }
@@ -536,7 +566,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 "no transaction of ",
                 found.path,
                 " that the chain shows created ",
-                vm.toString(found.at),
+                vm.toString(found.addr),
                 " sent the recorded initcode: a person must resolve it"
             )
         );
@@ -546,7 +576,7 @@ abstract contract Deployment is ForgeBroadcasts {
     function _isLandedIn(Create memory c, bytes memory input) private returns (bool) {
         for (uint256 j; _hasTransaction(c, j); ++j) {
             (bool ok, bytes32 hash) = _candidateHash(c, j);
-            if (!ok || _createdIn(hash, c.at, false) == 0) continue;
+            if (!ok || _createdIn(hash, c.addr, false) == 0) continue;
             string memory sent = VmRpcJson(address(vm))
                 .rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
             if (keccak256(vm.parseJsonBytes(sent, ".input")) == keccak256(input)) return true;
@@ -555,11 +585,11 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev Whether the journal's `retired` list names `at`.
-    function _isRetired(string memory journal, address at) private view returns (bool) {
+    function _isRetired(string memory journal, address addr) private view returns (bool) {
         if (!_has(journal, ".retired")) return false;
         address[] memory retired = vm.parseJsonAddressArray(journal, ".retired");
         for (uint256 i; i < retired.length; ++i) {
-            if (retired[i] == at) return true;
+            if (retired[i] == addr) return true;
         }
         return false;
     }
@@ -603,14 +633,17 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      `salt`. The unit's input file names `at`, so a reviewer sees the address before any send.
     ///      A change of the initcode, through the build or the arguments, moves the address, and the
     ///      refusal gives the initcode hash to mine a new salt for.
-    function _requireCreate2Address(bytes32 salt, string memory artifact, bytes memory args, address at) internal view {
+    function _requireCreate2Address(bytes32 salt, string memory artifact, bytes memory args, address addr)
+        internal
+        view
+    {
         require(
             CREATE2_FACTORY.codehash == CREATE2_FACTORY_CODEHASH,
             string.concat("this chain has no CREATE2 factory at ", vm.toString(CREATE2_FACTORY), ": opt out of create2")
         );
         bytes32 initcodeHash = _initcodeHash(artifact, args);
         require(
-            vm.computeCreate2Address(salt, initcodeHash, CREATE2_FACTORY) == at,
+            vm.computeCreate2Address(salt, initcodeHash, CREATE2_FACTORY) == addr,
             string.concat(
                 "this build of ",
                 artifact,
@@ -626,21 +659,21 @@ abstract contract Deployment is ForgeBroadcasts {
         string memory journal,
         string memory role,
         string memory name,
-        address at,
+        address addr,
         address recorded,
         address deployer,
         uint256 nonce
     ) internal returns (uint256) {
         if (recorded != address(0)) {
-            _recordReceipt(journal, role, at);
+            _recordReceipt(journal, role, addr);
             return nonce;
         }
         // The address goes last. `_reusableAddress` takes it as the sign that a record exists, and
         // needs the deployer and nonce to be there already.
-        _recordBuild(role, at, name);
+        _recordBuild(role, addr, name);
         _recordDirty(role);
-        _recordSender(role, at, deployer, nonce);
-        _put(string.concat(".", role), vm.toString(at));
+        _recordSender(role, addr, deployer, nonce);
+        _put(string.concat(".", role), vm.toString(addr));
         return nonce + 1;
     }
 
@@ -677,17 +710,18 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate
-    ) internal returns (address at, bool sent) {
+    ) internal returns (address addr, bool sent) {
         _startBroadcast();
         (address deployer, uint256 nonce) = _broadcaster();
         address recorded = _reuseForSend(journal, role, artifact, args, deployer, nonce);
         sent = recorded == address(0);
         if (sent) {
             _requireDeployable();
-            at = create(args);
+            addr = create(args);
+            _requireBuild(addr, artifact);
         } else {
-            at = recorded;
-            authenticate(at, args);
+            addr = recorded;
+            authenticate(addr, args);
         }
         vm.stopBroadcast();
 
@@ -696,14 +730,22 @@ abstract contract Deployment is ForgeBroadcasts {
                 _onDeployment(journal, role, args);
                 _recordIntent(role, artifact, args);
             }
-            _recordDeployment(journal, role, artifact, at, recorded, deployer, nonce);
+            _recordDeployment(journal, role, artifact, addr, recorded, deployer, nonce);
         }
     }
 
+    /// @dev The new contract's code must be the artifact's, with immutables read back from it. Override
+    ///      only for a contract whose constructor returns its runtime code, which the artifact cannot
+    ///      show, and have the unit's `check` step prove the code another way.
+    function _requireBuild(address addr, string memory artifact) internal view virtual {
+        requireBuild(addr, artifact);
+    }
+
     /// @dev Called only when this run creates a new deployment transaction, simulated or broadcast,
-    ///      before the intent and the address are journaled. The default records the chain's id stamp. An override owns the unit's other
-    ///      writes and their order, and calls `super` where the unit should record the chain. It
-    ///      should also drop whatever the replaced deployment vouched for.
+    ///      before the intent and the address are journaled. The default records the selected chain's
+    ///      id stamp. An override owns the unit's other writes and their order, and calls `super`
+    ///      where the unit should record the chain. It should also drop whatever the replaced
+    ///      deployment vouched for.
     function _onDeployment(string memory, string memory, bytes memory) internal virtual {
         _putChainStamp();
     }

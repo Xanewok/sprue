@@ -8,12 +8,12 @@ VmSafe constant cheats = VmSafe(address(uint160(uint256(keccak256("hevm cheat co
 /// @notice Reverts unless a recorded deployment with no code can be forgotten. It can once
 ///         `deployer`'s nonce is past `nonce`: a CREATE address is fixed by the deployer and the
 ///         nonce, so nothing can land at `at` afterwards. Before that the transaction may still be
-///         pending.
-function requireLost(address at, address deployer, uint256 nonce) view {
-    require(at.code.length == 0, string.concat(cheats.toString(at), " has code"));
+///         pending. `unit` names the journal that the refusal tells a local run to delete.
+function requireLost(address addr, address deployer, uint256 nonce, string memory unit) view {
+    require(addr.code.length == 0, string.concat(cheats.toString(addr), " has code"));
     require(
-        cheats.computeCreateAddress(deployer, nonce) == at,
-        string.concat(cheats.toString(at), " is not the recorded deployer's CREATE at the recorded nonce")
+        cheats.computeCreateAddress(deployer, nonce) == addr,
+        string.concat(cheats.toString(addr), " is not the recorded deployer's CREATE at the recorded nonce")
     );
     require(
         cheats.getNonce(deployer) > nonce,
@@ -22,7 +22,9 @@ function requireLost(address at, address deployer, uint256 nonce) view {
             cheats.toString(nonce),
             " of ",
             cheats.toString(deployer),
-            " may still be pending: wait for it, or replace that nonce, then rerun"
+            " may still be pending: wait for it, or replace that nonce, then rerun; on a local chain, delete ",
+            unit,
+            ".json"
         )
     );
 }
@@ -31,7 +33,7 @@ function requireLost(address at, address deployer, uint256 nonce) view {
 ///      It takes the artifact's runtime code, writes each immutable into the places the compiler
 ///      lists for it, and compares the result whole with the live code. `immutables` must be in
 ///      declaration order, which is the order of the compiler's AST ids within one file.
-function requireCode(address at, string memory name, bytes32[] memory immutables) view {
+function requireCode(address addr, string memory name, bytes32[] memory immutables) view {
     string memory id = string.concat(name, ".sol:", name);
     bytes memory code = cheats.getDeployedCode(id);
     string memory artifact = cheats.readFile(string.concat("out/", name, ".sol/", name, ".json"));
@@ -51,9 +53,26 @@ function requireCode(address at, string memory name, bytes32[] memory immutables
         }
     }
     require(
-        at.code.length == code.length && keccak256(code) == at.codehash,
-        string.concat(cheats.toString(at), " is not ", id)
+        addr.code.length == code.length && keccak256(code) == addr.codehash,
+        string.concat(cheats.toString(addr), " is not ", id)
     );
+}
+
+/// @dev `requireCode` for a deployment whose immutables are not at hand: it reads them from the live
+///      code, so what it proves is that the code is artifact `name` with some immutables, and not
+///      another contract's.
+function requireBuild(address addr, string memory name) view {
+    string memory artifact = cheats.readFile(string.concat("out/", name, ".sol/", name, ".json"));
+    string memory refs = ".deployedBytecode.immutableReferences";
+    uint256[] memory order =
+        sortedIds(cheats.keyExistsJson(artifact, refs) ? cheats.parseJsonKeys(artifact, refs) : new string[](0));
+    bytes memory live = addr.code;
+    bytes32[] memory values = new bytes32[](order.length);
+    for (uint256 k; k < order.length; ++k) {
+        string memory start = string.concat(refs, ".", cheats.toString(order[k]), "[0].start");
+        values[k] = wordAt(live, cheats.parseJsonUint(artifact, start));
+    }
+    requireCode(addr, name, values);
 }
 
 function word(address a) pure returns (bytes32) {

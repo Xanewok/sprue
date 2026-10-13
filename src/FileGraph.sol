@@ -19,6 +19,8 @@ import {Graph} from "./graph/Graph.sol";
 /// @notice Implements `Graph`'s hooks from the files in `<paths.deployments>/<network>/`. A project's
 ///         graph script inherits it.
 abstract contract FileGraph is Graph {
+    /// @dev Done by certificate: the unit's journal holds `checked`. The chain is not read; a dependent
+    ///      re-checks the certified code before it sends.
     function _journalChecked(string memory net, string memory unit) internal view override returns (bool) {
         string memory path = string.concat(deploymentsDir(), "/", net, "/", unit, ".json");
         return vm.exists(path) && vm.keyExistsJson(vm.readFile(path), ".checked");

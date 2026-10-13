@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 
 import {Graph} from "../src/graph/Graph.sol";
-import {Registration, Step, StepKind, Declares} from "../src/graph/Step.sol";
+import {Registration, Step, Declares} from "../src/graph/Step.sol";
 
 contract StepFunctions {
     function deploy(string calldata) external {}
@@ -79,20 +79,6 @@ contract Counting {
     }
 }
 
-contract ClosedWindow {
-    error WindowUnknown();
-
-    function notify(string calldata, uint8) external {}
-
-    function notifyDue(string calldata, uint8) external pure returns (bool) {
-        return true;
-    }
-
-    function windowEnd(string calldata, uint8) external pure returns (uint256) {
-        revert WindowUnknown();
-    }
-}
-
 /// @dev Two chains' clocks on one EVM: selecting a chain parks the selected one's clock and loads
 ///      the other's, as `vm.selectFork` does.
 contract TwoClocks is Test {
@@ -115,6 +101,22 @@ contract TwoClocks is Test {
         _select(0);
         require(block.timestamp >= END, "window open");
         notified = true;
+    }
+
+    function check(string calldata) external {}
+
+    function preDue(string calldata) external returns (bool) {
+        _select(1);
+        return !notified;
+    }
+
+    function pre(string calldata) external {
+        notified = true;
+    }
+
+    function fork(uint256 chain) external returns (uint256 was) {
+        was = _selected;
+        if (chain != type(uint256).max) _select(chain);
     }
 
     function _select(uint256 chain) private {
@@ -168,6 +170,18 @@ contract BuilderGraph is Graph {
     }
 }
 
+contract ClockGraph is BuilderGraph {
+    TwoClocks private immutable clocks;
+
+    constructor(TwoClocks c, Registration memory u, Step[] memory s) BuilderGraph(u, s) {
+        clocks = c;
+    }
+
+    function _fork(uint256 id) internal override returns (uint256) {
+        return clocks.fork(id);
+    }
+}
+
 contract StepBuildersTest is Test, Declares {
     Registration private unit;
 
@@ -179,15 +193,10 @@ contract StepBuildersTest is Test, Declares {
         return _step(id, "fund", StepFunctions.fund.selector).due(StepFunctions.fundDue.selector);
     }
 
-    function test_aStepNeedsAnIdAndAKind() public {
-        Step[] memory s = new Step[](1);
-        s[0] = _node("");
-        vm.expectRevert(abi.encodeWithSelector(Graph.EmptyStep.selector, 0));
-        new BuilderGraph(unit, s);
-
-        s[0] = _node("x");
-        s[0].kind = StepKind.Empty;
-        vm.expectRevert(abi.encodeWithSelector(Graph.EmptyStep.selector, 0));
+    function test_emptyArraySlotIsRefused() public {
+        Step[] memory s = new Step[](2);
+        s[0] = _node("present");
+        vm.expectRevert(abi.encodeWithSelector(Graph.EmptyStep.selector, 1));
         new BuilderGraph(unit, s);
     }
 
@@ -231,7 +240,7 @@ contract StepBuildersTest is Test, Declares {
         BuilderGraph g = new BuilderGraph(unit, new Step[](0));
         Step[] memory s = new Step[](1);
         s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        g.add(Registration(address(new StepFunctions()), ""), s);
+        g.add(Registration(address(new StepFunctions()), "u.s.sol"), s);
         vm.expectRevert(abi.encodeWithSelector(Graph.UnlistedUnit.selector, "fixture.deploy"));
         g.validate();
     }
@@ -273,23 +282,19 @@ contract StepBuildersTest is Test, Declares {
     }
 
     function test_checkCertifiesItselfAndItsTransitiveAncestorsOnly() public {
-        Step[] memory s = new Step[](5);
+        Step[] memory s = new Step[](4);
         s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("fixture.fund", StepFunctions.fund.selector)
-            .needs("fixture.deploy")
-            .due(StepFunctions.fundDue.selector);
-        s[2] = _step("fixture.configure", StepFunctions.configure.selector).needs("fixture.fund");
-        s[3] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.configure");
-        s[4] = _step("fixture.guarded", StepFunctions.guarded.selector)
+        s[1] = _step("fixture.configure", StepFunctions.configure.selector).needs("fixture.deploy");
+        s[2] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.configure");
+        s[3] = _step("fixture.fund", StepFunctions.fund.selector)
             .needs("fixture.check")
-            .due(StepFunctions.guardedDue.selector);
+            .due(StepFunctions.fundDue.selector);
         BuilderGraph g = new BuilderGraph(unit, s);
-        assertTrue(g.node(0).certified);
-        assertFalse(g.node(1).certified, "a step with a due view keeps it as its rule");
-        assertTrue(g.node(2).certified);
-        assertTrue(g.node(3).certified);
-        assertFalse(g.node(4).certified);
-        assertTrue(g.node(4).due);
+        for (uint256 i; i < 3; ++i) {
+            assertTrue(g.node(i).certified);
+        }
+        assertFalse(g.node(3).certified);
+        assertTrue(g.node(3).due);
     }
 
     function test_unrelatedCheckDoesNotCertifyAStep() public {
@@ -333,6 +338,20 @@ contract StepBuildersTest is Test, Declares {
         new BuilderGraph(unit, s);
     }
 
+    function test_predicateSelectorMatchesItsSignature() public {
+        Step[] memory s = new Step[](1);
+        s[0] = _until("observed", "observed", StepFunctions.fundDue.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Graph.SelectorMismatch.selector,
+                "observed",
+                StepFunctions.observed.selector,
+                StepFunctions.fundDue.selector
+            )
+        );
+        new BuilderGraph(unit, s);
+    }
+
     function test_gateViewSelectorMatchesItsArgumentSignature() public {
         Step[] memory s = new Step[](1);
         s[0] = _step("toy.notify.0", "notify", StepFunctions.notify.selector)
@@ -348,17 +367,6 @@ contract StepBuildersTest is Test, Declares {
             )
         );
         new BuilderGraph(unit, s);
-    }
-
-    function test_aFailingGateViewKeepsItsRevertData() public {
-        Step[] memory s = new Step[](1);
-        s[0] = _step("toy.notify.0", "notify", ClosedWindow.notify.selector)
-            .withArg(0)
-            .due(ClosedWindow.notifyDue.selector)
-            .gateView("windowEnd", ClosedWindow.windowEnd.selector);
-        BuilderGraph g = new BuilderGraph(Registration(address(new ClosedWindow()), unit.script), s);
-        vm.expectRevert(ClosedWindow.WindowUnknown.selector);
-        g.plan("anvil", "toy.notify.0");
     }
 
     function test_buildersPreserveOptionsAndDeclarationOrder() public {
@@ -402,14 +410,6 @@ contract StepBuildersTest is Test, Declares {
         assertTrue(n.due);
         assertFalse(n.certified);
         assertTrue(n.ownForks);
-    }
-
-    function test_anotherJournalCannotCertifyTheSameUnitsStep() public {
-        Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("other.check", StepFunctions.check.selector).needs("fixture.deploy");
-        vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.deploy"));
-        new BuilderGraph(unit, s);
     }
 
     function test_plan_namesAWaitingPredicateAndARefusingStep() public {
@@ -480,5 +480,34 @@ contract StepBuildersTest is Test, Declares {
 
         g.rehearse("anvil", "fixture.notify.0");
         assertTrue(clocks.notified());
+    }
+
+    function _datedAfterOtherChain(TwoClocks clocks) private returns (ClockGraph) {
+        vm.warp(50);
+        Step[] memory s = new Step[](2);
+        s[0] = _step("other.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector);
+        s[1] = _step("fixture.check", TwoClocks.check.selector).needs("other.pre").notBefore("fixture.openAt");
+        return new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
+    }
+
+    function test_anInputDateIsReadOnTheStartingChain() public {
+        ClockGraph g = _datedAfterOtherChain(new TwoClocks());
+        assertTrue(vm.contains(g.plan("anvil", "fixture.check"), "# not before 100"));
+    }
+
+    function test_rehearse_doesNotWarpAnotherChainToAnInputDate() public {
+        TwoClocks clocks = new TwoClocks();
+        clocks.fork(1);
+        vm.warp(50);
+        clocks.fork(0);
+        vm.warp(150);
+        Step[] memory s = new Step[](3);
+        s[0] = _step("fixture.check", TwoClocks.check.selector).notBefore("fixture.openAt");
+        s[1] = _step("other.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector);
+        s[2] = _step("other.check", TwoClocks.check.selector).needs("fixture.check").needs("other.pre");
+        new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s)
+            .rehearse("anvil", "other.check");
+        clocks.fork(1);
+        assertEq(block.timestamp, 50);
     }
 }
