@@ -109,9 +109,8 @@ function must(bin, args, refusal, stdio) {
   throw new Exit(r.status);
 }
 const clientVersion = (rpc) => exec("cast", ["rpc", "web3_clientVersion", "--rpc-url", rpc], ["ignore", "pipe", "ignore"]);
-const unquote = (s) => s.replaceAll('"', "");
-const anvilVersion = (v) => v.status === 0 && unquote(v.out).startsWith("anvil/");
-const isAnvil = (rpc) => anvilVersion(clientVersion(rpc));
+const isAnvil = (v) => v.status === 0 && v.out.replaceAll('"', "").startsWith("anvil/");
+const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
 
 // forge's stdout and stderr share one file, so the output keeps the order forge wrote it in.
 function forge(args, env) {
@@ -194,7 +193,7 @@ function parse(line) {
 
 function mermaid(g, target) {
   let ns = g.nodes;
-  if (target !== "") {
+  if (target) {
     const by = new Map(ns.map((n) => [n.id, n]));
     const keep = new Set();
     const close = (id) => {
@@ -283,17 +282,19 @@ async function main(argv) {
   }
   if (verb === "mermaid") {
     if (rest.length > 1) usageError();
-    if ((rest[0] ?? "") !== "") known(rest[0]);
+    const only = rest[0] ?? "";
+    if (only) known(only);
     // Reads graph.generated.json, not forge, so the chart shows exactly the saved export.
     const g = exported();
     if (!g) fail(2, `cannot read ${GRAPH_JSON}`);
-    mermaid(g, rest[0] ?? "");
+    mermaid(g, only);
     return 0;
   }
   if (verb !== "plan" && verb !== "run") usageError();
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, account = "", hw = "", signers = 0, dirtyOk = false;
+  let wait = false, dirtyOk = false;
+  const signers = [];
   // Only `attend` sets it, per step: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
@@ -305,12 +306,9 @@ async function main(argv) {
     else if (a === "--allow-dirty") dirtyOk = true;
     else if (a === "--account") {
       if (++i >= rest.length) usageError();
-      account = rest[i];
-      signers++;
-    } else if (a === "--ledger" || a === "--trezor") {
-      hw = a.slice(2);
-      signers++;
-    } else pos.push(a);
+      signers.push([a, rest[i]]);
+    } else if (a === "--ledger" || a === "--trezor") signers.push([a]);
+    else pos.push(a);
   }
   if (pos.length !== 2 || !pos[0] || !pos[1]) usageError();
   const [network, target] = pos;
@@ -360,18 +358,16 @@ async function main(argv) {
   if (!attended) {
     // Anvil can send as any address a step names, which need not be the dev key's. Any other node
     // signs with a single key.
-    anvil = isAnvil(R);
+    anvil = isAnvil(clientVersion(R));
     signer = anvil ? ["--unlocked"] : ["--private-key", process.env.KEY || DEV_KEY];
     if (wait && anvil) fail(2, "--wait has no use on Anvil: it moves the clock itself");
   }
-  // A chain's RPC: its alias, else the <CHAIN>_RPC variable. $R also serves the default chain.
-  const rpcOf = (c) => chainMap[c]?.rpc || process.env[`${c.toUpperCase()}_RPC`] || "";
   // Each endpoint must serve the chain that network.json names. With FOUNDRY_CHAIN_ID set, forge's own
   // chain check reads the variable and not the node, so the preview would show the network's chain for
   // a send to another node.
   const expectChain = (rpc, id) => {
     if (!rpc) return;
-    const got = must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
+    const got = chainId(rpc);
     if (got !== String(id)) fail(2, `refusing ${network}: ${rpc} is chain ${got}, network.json says ${id}`);
   };
   // A chain's rpc alias is printed into the commands, like the network name. A date line tells an alias
@@ -380,7 +376,8 @@ async function main(argv) {
   if (!aliases.every((a) => typeof a === "string" && /^[a-z][a-z0-9_-]*$/.test(a))) fail(2, `refusing ${network}: a chain's rpc alias is not a plain name`);
   const endpoints = [R];
   for (const c of chains) {
-    const rpc = rpcOf(c);
+    // A chain's RPC: its alias, else the <CHAIN>_RPC variable. $R also serves the default chain.
+    const rpc = chainMap[c]?.rpc || process.env[`${c.toUpperCase()}_RPC`] || "";
     expectChain(rpc, chainMap[c].id);
     if (c === home) expectChain(R, chainMap[c].id);
     if (rpc) endpoints.push(rpc);
@@ -392,7 +389,7 @@ async function main(argv) {
     const tty = openTty();
     if (!tty) fail(2, `refusing ${network}: no terminal to ask on`);
     for (const fd of tty) closeSync(fd);
-    if (signers !== 1) fail(2, "sign with exactly one of --account, --ledger and --trezor");
+    if (signers.length !== 1) fail(2, "sign with exactly one of --account, --ledger and --trezor");
     if (dirtyOk) {
       // A live chain deploys only from a clean commit, so refuse if any chain is live. The kinds come
       // from the `# chain` lines that `plan` prints. Refuse too if no kind is seen.
@@ -413,13 +410,13 @@ async function main(argv) {
       for (const rpc of endpoints) {
         const v = clientVersion(rpc);
         if (v.status !== 0) fail(2, `cannot read the node at ${rpc}`);
-        const id = must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
-        if (anvilVersion(v) || isLocal(Number(id))) {
+        const id = chainId(rpc);
+        if (isAnvil(v) || isLocal(Number(id))) {
           fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
         }
       }
     }
-    signer = account ? ["--account", account] : [`--${hw}`];
+    signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
     out(`signer ${me}\n`);
   }
@@ -444,21 +441,24 @@ async function main(argv) {
       return !(p.startsWith(dir) && (p.endsWith(".metadata.json") || (p.endsWith(".json") && units.has(p.slice(dir.length, -5)))));
     });
   };
-  // changes(), minus the untracked records that this run's own earlier sends created (ownership is by
-  // path, in `ours`). `tree`, the approval comparison, does not filter them: a new record path that
+  // The untracked records that this run's own earlier sends created (ownership is by path) do not make
+  // a later step dirty. `tree`, the approval comparison, does not filter them: a new record path that
   // appears while the question waits makes the send refuse. Rewriting an existing untracked path does
   // not.
   const ours = new Set();
-  const unowned = () => changes().filter((l) => !ours.has(l));
   const digest = (f) => (isFile(f) ? [`${f} ${createHash("sha256").update(readFileSync(f)).digest("hex")}`] : []);
   const tree = () => [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
   const head = () => must("git", ["rev-parse", "HEAD"], "refusing: git rev-parse failed");
 
-  // Runs forge with its output streaming. If it fails, repeats forge's last `Error:` line after the
-  // output, where a long run buries it, and exits with its code.
-  const lastError = (text) => text.split("\n").filter((l) => l.startsWith("Error:")).pop();
-  const step = ({ env, args }) =>
-    new Promise((resolve, reject) => {
+  // Repeats forge's last `Error:` line, where a long run buries it, and exits with forge's code.
+  const stop = (text, code) => {
+    const e = text.split("\n").filter((l) => l.startsWith("Error:")).pop();
+    if (e) err(`${e}\n`);
+    throw new Exit(code);
+  };
+  // Runs forge with its output streaming.
+  const step = async ({ env, args }) => {
+    const { code, log } = await new Promise((resolve) => {
       const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
       let log = "";
       for (const s of [child.stdout, child.stderr]) {
@@ -470,15 +470,12 @@ async function main(argv) {
       }
       child.on("error", (e) => {
         err(`${NAME}: cannot run forge: ${e.message}\n`);
-        reject(new Exit(1));
+        resolve({ code: 1, log: "" });
       });
-      child.on("close", (code) => {
-        if (code === 0) return resolve();
-        const e = lastError(log);
-        if (e) err(`${e}\n`);
-        reject(new Exit(code ?? 1));
-      });
+      child.on("close", (code) => resolve({ code: code ?? 1, log }));
     });
+    if (code !== 0) stop(log, code);
+  };
 
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
   async function attend(line, cmd) {
@@ -488,16 +485,12 @@ async function main(argv) {
     const sha = head();
     const seen = tree();
     // The journal records this for a role the step creates: the tree at the send, not at a later
-    // recovery. A record under the path of this run's own earlier send makes no later step dirty.
-    if (unowned().length) process.env.DEPLOY_TREE_DIRTY = "1";
+    // recovery.
+    if (changes().some((l) => !ours.has(l))) process.env.DEPLOY_TREE_DIRTY = "1";
     else delete process.env.DEPLOY_TREE_DIRTY;
     const dry = forge(cmd.args, cmd.env);
     out(`${dry.text}\n`);
-    if (dry.status !== 0) {
-      const e = lastError(dry.text);
-      if (e) err(`${e}\n`);
-      throw new Exit(dry.status);
-    }
+    if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
     // transactions but names no file, they cannot be shown, so refuse.
     const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23)] : []));
@@ -557,7 +550,7 @@ async function main(argv) {
         if (!/^[0-9]+$/.test(at)) fail(2, `unknown plan line: ${line}`);
         let b = before(line, at, on);
         if (b.late) {
-          if (anvil && isAnvil(b.clock)) {
+          if (anvil && isAnvil(clientVersion(b.clock))) {
             must("cast", ["rpc", "evm_setNextBlockTimestamp", at, "--rpc-url", b.clock], undefined, quiet);
             must("cast", ["rpc", "evm_mine", "--rpc-url", b.clock], undefined, quiet);
           } else {
