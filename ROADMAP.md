@@ -24,9 +24,6 @@ prototype exists) or **researched** (the problem is understood, the design is no
   fence on for every deploy after it.
 - **Done without a certificate** (planned). A step without a `<fn>Due` function is done only once
   its unit's `check` certified it, which ties the step to that one certificate.
-- **A Node runner** (spiked). `bin/sprue.mjs` would run the graph without `sh`, so Windows works
-  without WSL. The prototype matches `graph.sh` byte for byte on `list`, `json`, `mermaid` and
-  `plan`; `run` is not ported, and `graph.sh` stays until it passes the end-to-end harness.
 - **A versioned journal format** (planned). Journals and certificates carry a schema version, and the
   changelog says what each release does to committed journals. A team keeps its journals for
   years, so an upgrade must never orphan them silently.

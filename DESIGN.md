@@ -33,7 +33,7 @@ What sprue relies on and cannot check.
 - `rpcJson` exists (forge 1.8 or later). An RPC reports a consistent head; fork creation tries a lagging
   node five times, a second apart.
 - The repository is trusted: units are Solidity that `forge script` executes with the `fs_permissions` the
-  project grants, and the runner `eval`s only variable names it has validated.
+  project grants.
 - One operator and one key per journal, until a pending transaction resolves. The nonce fence reads the
   CREATE addresses of the sender, the pin and every journal's deployers, up to 256 nonces each; it does not
   see a CREATE2 deployment, a CREATE of any other key, or a transaction another key still has pending.
@@ -68,10 +68,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `e2e/e2e.sh`)
 
 ## Decisions
 
-1. **Solidity owns the graph and every step.** There is no recipe format. The shell runner only consumes the
+1. **Solidity owns the graph and every step.** There is no recipe format. The runner only consumes the
    plan Solidity prints. Every printed command is a plain `forge script`, so a person can run the path with
-   Foundry alone and keep every check the Solidity makes (journal, fence, pin, code); the runner (POSIX `sh`,
-   `jq`, `cast`) adds the replanning loop and the attended checks. Rejected: a declarative recipe
+   Foundry alone and keep every check the Solidity makes (journal, fence, pin, code); the runner (Node, `cast`)
+   adds the replanning loop and the attended checks. Rejected: a declarative recipe
    (Cannon, Terraform style), which adds a second language and hides the pause between dry run and send.
 2. **Plan is a dry run, apply is the same command with `--broadcast`.** Plain CREATE by default; CREATE2 is
    an opt-in a unit takes through `_requireCreate2Address` and the keyless factory pinned by code hash.

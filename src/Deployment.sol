@@ -678,7 +678,7 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev Writes `<role>Dirty` beside the `pending` commit, so that it describes the working tree
-    ///      at the send and not at a later recovery. `graph.sh run` sets the variable only for an
+    ///      at the send and not at a later recovery. `sprue run` sets the variable only for an
     ///      attended step, and only when its tree had a change at the step's dry run. So a role of a
     ///      clean run, or of a plain `forge script` without that variable in the environment, has no
     ///      such key. A clean send over a key that a replaced intent left sets it to `false`.
@@ -798,7 +798,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 _dir(),
                 "/network.json's deployer ",
                 vm.toString(pinned),
-                ": run with that key, or pass --unsafe-unexpected-deployer to graph.sh (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
+                ": run with that key, or pass --unsafe-unexpected-deployer to sprue (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
             )
         );
         console.log(

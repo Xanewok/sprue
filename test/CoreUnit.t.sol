@@ -305,9 +305,9 @@ contract CoreUnitTest is Test {
 
     function test_theRunnerExportsTheVariablesTheCoreReads() public {
         (string memory optIn, string memory dirty) = unit.defaultVariables();
-        string memory runner = vm.readFile("bin/graph.sh");
-        assertTrue(vm.contains(runner, string.concat(optIn, "=1; export ", optIn)), optIn);
-        assertTrue(vm.contains(runner, string.concat("export ", dirty, "=")), dirty);
+        string memory runner = vm.readFile("bin/sprue.mjs");
+        assertTrue(vm.contains(runner, string.concat("process.env.", optIn, ' = "1"')), optIn);
+        assertTrue(vm.contains(runner, string.concat("process.env.", dirty, " = ")), dirty);
     }
 
     function test_deployRole_aRecordedRoleKeepsTheCodeItsJournalNames() public {
@@ -905,7 +905,7 @@ contract CoreUnitTest is Test {
             dir,
             "/network.json's deployer ",
             vm.toString(pinned),
-            ": run with that key, or pass --unsafe-unexpected-deployer to graph.sh (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
+            ": run with that key, or pass --unsafe-unexpected-deployer to sprue (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
         );
     }
 

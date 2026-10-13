@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The executor (bin/graph.sh) against real Anvil nodes, on the projects in ../examples.
-# Needs anvil, forge, cast, jq; the attended scenario also python3 and setsid.
+# The runner (bin/sprue.mjs) against real Anvil nodes, on the projects in ../examples.
+# Needs anvil, forge, cast, node, jq; the attended scenario also python3 and setsid.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$HERE/..
@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-node() { # node <port> <chain id>
+start_anvil() { # start_anvil <port> <chain id>
   anvil --port "$1" --chain-id "$2" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
   for _ in $(seq 1 100); do cast chain-id --rpc-url "http://127.0.0.1:$1" >/dev/null 2>&1 && return; sleep 0.1; done
   die "no anvil at port $1"
@@ -35,17 +35,18 @@ setup() {
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
   # A command of its own, so that `setsid` and the pseudo-terminal can run it.
-  mkdir -p bin; printf '#!/bin/sh\nexec sh %s/lib/sprue/bin/graph.sh "$@"\n' "$W" >bin/G; chmod +x bin/G
+  # The attended scenario changes HOME, which a version manager's node shim cannot survive: name the binary.
+  mkdir -p bin; printf '#!/bin/sh\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
-  sh lib/sprue/bin/graph.sh json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
+  node lib/sprue/bin/sprue.mjs json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
   # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
   echo 'broadcast/Deploy*/1/' >>.gitignore
   git add -A; git commit -qm example
-  node "$PORT" 31337; node $((PORT + 1)) 1; node $((PORT + 2)) 412346
+  start_anvil "$PORT" 31337; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
   OPS=$(cast rpc eth_accounts --rpc-url "$RPC" | jq -r '.[0]')
   export R=$RPC DEPLOYER=$OPS
@@ -80,27 +81,25 @@ fresh() { # fresh <rpc>: the seeded chain and no records
 
 # The refusals that precede any chain: each is exit 2 with its own text, and nothing is sent.
 scenario_refuses() {
-  local gs=$W/lib/sprue/bin/graph.sh d p
+  local gs=$W/lib/sprue/bin/sprue.mjs d p
   d=$(mktemp -d)
   exits 0 G --help
   exits 2 G list extra
-  (cd "$d" && refused "no sprue.json" sh "$gs" list)
-  (cd "$d" && exits 0 sh "$gs" --help)
-  if command -v node >/dev/null; then
-    mkdir -p "$d/pkg/bin"; cp "$ROOT/bin/sprue.mjs" "$d/pkg/bin/"; echo '{"version":"9.9.9","type":"module"}' >"$d/pkg/package.json"
-    [ "$(command node "$d/pkg/bin/sprue.mjs" --version)" = 9.9.9 ] || die "sprue --version is not package.json's"
-  fi
+  (cd "$d" && refused "no sprue.json" node "$gs" list)
+  (cd "$d" && exits 0 node "$gs" --help)
+  mkdir -p "$d/pkg/bin"; cp "$ROOT/bin/sprue.mjs" "$d/pkg/bin/"; echo '{"version":"9.9.9","type":"module"}' >"$d/pkg/package.json"
+  [ "$(node "$d/pkg/bin/sprue.mjs" --version)" = 9.9.9 ] || die "sprue --version is not package.json's"
   mkdir "$d/p"; echo '{"paths":{},"chains":{},"x":1}' >"$d/p/sprue.json"
-  (cd "$d/p" && refused "exactly paths and chains" sh "$gs" list)
+  (cd "$d/p" && refused "exactly paths and chains" node "$gs" list)
   p='"paths":{"graph":"g.s.sol","units":"u","deployments":"d","rehearsal":"d/fork"}'
   echo "{$p,\"chains\":[]}" >"$d/p/sprue.json"
-  (cd "$d/p" && refused "exactly paths and chains" sh "$gs" list)
+  (cd "$d/p" && refused "exactly paths and chains" node "$gs" list)
   echo "{${p/d\/fork/d\/Fork},\"chains\":{}}" >"$d/p/sprue.json"
-  (cd "$d/p" && refused "paths.rehearsal is not" sh "$gs" list)
+  (cd "$d/p" && refused "paths.rehearsal is not" node "$gs" list)
   # Only the prefix itself is ignored, not <prefix>-*.
   git init -q "$d/p"; echo "d/fork/" >"$d/p/.gitignore"
   echo "{$p,\"chains\":{}}" >"$d/p/sprue.json"
-  (cd "$d/p" && refused "git does not ignore" sh "$gs" list)
+  (cd "$d/p" && refused "git does not ignore" node "$gs" list)
   rm -rf "$d"
 
   network refuse 31337
@@ -118,7 +117,7 @@ scenario_refuses() {
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
 
-# A ./stub/cast that makes every Anvil report itself as Geth, so graph.sh cannot set its clock.
+# A ./stub/cast that makes every Anvil report itself as Geth, so the runner cannot set its clock.
 geth_stub() {
   mkdir -p stub
   printf '#!/bin/sh\nif [ "$1 $2" = "rpc web3_clientVersion" ]; then echo \\"Geth/stub\\"; exit; fi\nexec %s "$@"\n' "$(command -v cast)" >stub/cast
@@ -237,15 +236,15 @@ scenario_kill() {
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
 }
 
-# examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: graph.sh sets the
+# examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
 # second node's clock, one window at a time, and leaves the first node's alone.
 scenario_two_chain() {
   local d=$W/two-chain rcv=http://127.0.0.1:$((PORT + 3)) at zero=0x0000000000000000000000000000000000000000
   cp -R "$ROOT/examples/two-chain" "$d"; ln -s "$W/lib" "$d/lib"
   cd "$d"
-  node $((PORT + 3)) 31338
+  start_anvil $((PORT + 3)) 31338
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the two-chain example does not build"; }
-  sh "$W/lib/sprue/bin/graph.sh" json | diff - script/deploy/graph.generated.json || die "two-chain: graph.generated.json is stale"
+  node "$W/lib/sprue/bin/sprue.mjs" json | diff - script/deploy/graph.generated.json || die "two-chain: graph.generated.json is stale"
   fresh "$RPC"
   export SOURCE_RPC=$RPC RECEIVER_RPC=$rcv
   # The receiver is the first contract of account 0 on its fresh chain: the address the input file names.
@@ -262,7 +261,7 @@ scenario_two_chain() {
   [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
   all_done two-chain "$(G plan local receiver.notify.2 2>>log)"
   cd "$W"; rm -rf "$d"
-  echo "ok  two-chain: graph.sh sets the receiver chain's clock for each window's date, and not the source's"
+  echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
 }
 
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
@@ -317,7 +316,7 @@ scenario_attended() {
   out=$(tty yes "${run[@]}" 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
-  # A rehearsal network's journals leave the tree clean only while git ignores them, which graph.sh checks.
+  # A rehearsal network's journals leave the tree clean only while git ignores them, which the runner checks.
   exits 0 tty no "${run[@]}"
   sed -i.bak '/fork-test/d' .gitignore && rm .gitignore.bak
   git commit -qam unignore

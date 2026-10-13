@@ -15,7 +15,7 @@ fs_permissions = [
   { access = "read-write", path = "./cache/core-test" },
   { access = "read", path = "./out" },
   { access = "read", path = "./broadcast" },
-  { access = "read", path = "./bin/graph.sh" },
+  { access = "read", path = "./bin/sprue.mjs" },
   { access = "read", path = "./sprue.json" },
 ]
 

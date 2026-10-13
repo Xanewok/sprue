@@ -31,10 +31,10 @@ and decisions; [SECURITY.md](SECURITY.md) what the guards check and what stays w
 forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
 ```
 
-The remapping is `sprue/=lib/sprue/src/` and the runner `sh lib/sprue/bin/graph.sh`. With npm
+The remapping is `sprue/=lib/sprue/src/` and the runner `node lib/sprue/bin/sprue.mjs`. With npm
 (`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
-Below, `graph.sh` means either. It needs POSIX `sh`, `git`, `jq`, `cast` and `forge` 1.8 or later
-(CI pins v1.8.5). On Windows use WSL.
+Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge` 1.8 or later
+(CI pins v1.8.5). It starts no shell; Windows without WSL is not yet tested.
 
 ## A first local run
 
@@ -46,8 +46,8 @@ cp -R examples/token-vault ../my-deploy && cd ../my-deploy
 git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.0
 anvil &                                   # chain 31337 on :8545
 export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-sh lib/sprue/bin/graph.sh plan local vault.check   # the next commands; sends nothing
-sh lib/sprue/bin/graph.sh run local vault.check    # deploys, checks, funds, checks
+node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
+node lib/sprue/bin/sprue.mjs run local vault.check    # deploys, checks, funds, checks
 ```
 
 Its [README](examples/token-vault/README.md) explains each step, and then loses a journal and
@@ -55,7 +55,7 @@ rebuilds it.
 
 ## Your own project
 
-1. Copy `foundry.toml`, `sprue.json` and `.gitignore` from the example. `graph.sh` runs from any
+1. Copy `foundry.toml`, `sprue.json` and `.gitignore` from the example. `sprue` runs from any
    directory below `sprue.json`, and refuses unless git ignores `<rehearsal>/` and `<rehearsal>-x/`.
 2. Add `deployments/<network>/network.json`, naming the network's chains: `{"chains":{"l2":{"id":31337}}}`.
 3. Write a unit per directory under `script/deploy/units/<unit>/`; the example's
@@ -79,12 +79,12 @@ rebuilds it.
    }
    ```
 
-5. Save the graph: `graph.sh json > script/deploy/graph.generated.json`. Repeat this whenever you
+5. Save the graph: `sprue json > script/deploy/graph.generated.json`. Repeat this whenever you
    add, rename or rewire a step: `plan` and `run` look targets up in this file, and refuse one it
-   lacks. `graph.sh list` prints the targets, the nodes nothing depends on.
-6. Plan: `R=<rpc> graph.sh plan <network> <target>`, where `R` is the RPC of the network's default
+   lacks. `sprue list` prints the targets, the nodes nothing depends on.
+6. Plan: `R=<rpc> sprue plan <network> <target>`, where `R` is the RPC of the network's default
    chain. It sends nothing, so anyone may run it.
-7. Run: `R=<rpc> DEPLOYER=<address> graph.sh run <network> <target>`. `DEPLOYER` sends the steps
+7. Run: `R=<rpc> DEPLOYER=<address> sprue run <network> <target>`. `DEPLOYER` sends the steps
    that name no sender. On a network whose chains are all in `chains.local`, it runs unattended.
    On any other network a person runs it at a terminal, signing with one of `--account`,
    `--ledger` or `--trezor`, from a clean git checkout, and types `yes` for each step after seeing
@@ -92,7 +92,7 @@ rebuilds it.
 8. Commit each step's journal and `broadcast/` records (the step prints the `git add`). The records
    are what `recover` reads, so never git-ignore a public chain's.
 
-`graph.sh --help` lists the flags and the exit codes. Two flags are a person's decision, never a
+`sprue --help` lists the flags and the exit codes. Two flags are a person's decision, never a
 way past a refusal: `--allow-dirty` starts on a dirty tree, and is refused on a live chain;
 `--unsafe-unexpected-deployer` lets a deploy step send with a key other than the pinned `deployer`.
 

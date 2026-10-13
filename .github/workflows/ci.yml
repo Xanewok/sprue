@@ -22,7 +22,7 @@ jobs:
       - run: forge fmt --check
       - run: forge build
       - run: forge test
-      - run: sh -n bin/graph.sh
+      - run: node --check bin/sprue.mjs
       - run: |
           # The library imports forge-std and itself; its tests also import src/.
           imports() { grep -H -E '^import[[:space:]].*"|^[[:space:]]*\}[[:space:]]*from[[:space:]]*"' "$@" | grep -v -E "$allowed" || true; }
