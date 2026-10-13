@@ -38,6 +38,8 @@ setup() {
   mkdir -p bin; printf '#!/bin/sh\nexec sh %s/lib/sprue/bin/graph.sh "$@"\n' "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
+  # Offline after the build that may download solc: online, each forge command looks up the network.
+  export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
   sh lib/sprue/bin/graph.sh json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
   # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
