@@ -63,6 +63,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar. | e2e `scenario_grammar` (`plan-grammar.sh`) |
+| A send writes its records where its units read them; a rehearsal network's are only under its own directory, never in `broadcast/`. | e2e `scenario_attended` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 

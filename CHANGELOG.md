@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+A rehearsal network keeps forge's records in `<paths.deployments>/<network>/broadcast`: its
+commands start with `FOUNDRY_BROADCAST=` that path and its units read records only there. A send
+whose records forge would write elsewhere than its units read is refused, on any network. A
+rehearsal on a fork that keeps a public chain id no longer leaves records that the real run reads
+as a lost journal.
+
 ## 0.1.1
 
 The runner is `bin/sprue.mjs`, Node 18 or later with no dependencies, and replaces `bin/graph.sh`:

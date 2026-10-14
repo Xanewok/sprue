@@ -133,13 +133,6 @@ abstract contract ForgeBroadcasts is Journal {
         return found;
     }
 
-    /// @dev The directory of broadcast records, with `<script>/<chain id>/<step>-latest.json`
-    ///      beneath it. `forge test` writes none, so a test keeps its own under its network
-    ///      directory, where no local run's record for the same chain id can reach it.
-    function _records() internal view returns (string memory) {
-        return vm.isContext(VmSafe.ForgeContext.Test) ? string.concat(_dir(), "/broadcast") : "broadcast";
-    }
-
     function _endsWith(string memory s, string memory suffix) internal pure returns (bool) {
         bytes memory b = bytes(s);
         bytes memory end = bytes(suffix);

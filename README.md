@@ -120,6 +120,11 @@ way past a refusal: `--allow-dirty` starts on a dirty tree, and is refused on a 
   `Deploy*.s.sol` each), and the network directories.
 - `paths.rehearsal`: `<paths.deployments>/<name>`. A network of that name or `<name>-<suffix>` is a
   rehearsal network, where an attended run may use a development node such as an Anvil fork.
+  Its commands keep forge's records in `<network>/broadcast`, so that a fork that keeps a public
+  chain id never touches the real chain's `broadcast/`; a send without that `FOUNDRY_BROADCAST=`
+  prefix is refused. Forge's `--resume` runs no script, so nothing checks it, and its resume data
+  in `cache/<script>/<chain id>/` stays shared: never `--resume` a run after rehearsing its script
+  on the same chain id. Units cannot see `foundry.toml`'s `broadcast` key, so leave it unset.
 - `chains.default` (optional): the chain of a step without `.on(...)`. Without it, a network of
   one chain uses that chain.
 - `chains.local` and `chains.test`: chain ids of development and test chains. Any other is live.
@@ -141,12 +146,9 @@ Each refusal names its remedy. These need a person:
 - A refusal that says "a person must resolve it" or "a person must choose" has no safe default: do
   not delete records or switch keys to get past it.
 
-Two refusals have a cause the message cannot see:
-
-- A node a `check` certified stays done while the journal holds `checked`. After resetting a
-  development chain, delete the network's journals and that chain's records under `broadcast/`.
-- `broadcast/<script>/<chain id>/` is shared by every network on that chain id, so a rehearsal's
-  records read as a lost journal to the real run. Discard them first; `git status` lists them.
+One refusal has a cause the message cannot see: a node a `check` certified stays done while the
+journal holds `checked`. After resetting a development chain, delete the network's journals and
+that chain's records under `broadcast/`, or a rehearsal network's whole directory.
 
 ## Examples
 

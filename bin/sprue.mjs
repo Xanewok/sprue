@@ -15,7 +15,7 @@ const DEV_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2f
 // The one shape of a command line, as Graph._command prints it. Forge's output also carries the
 // console.log of every contract the plan calls, so a line is run only if it matches whole.
 const COMMAND =
-  /^([A-Z][A-Z0-9_]*_RPC=\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
+  /^(FOUNDRY_BROADCAST=[^ $]+ )?([A-Z][A-Z0-9_]*_RPC=\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
 const SPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/; // not JS's \s: it counts U+FEFF and misses U+0085
 const WIN = process.platform === "win32";
 
@@ -179,8 +179,9 @@ function parse(line) {
   const toks = line.split(" ");
   let i = 0;
   for (; toks[i] !== "forge"; i++) {
-    const [key, name] = toks[i].split("=$");
-    env[key] = process.env[name] ?? "";
+    const at = toks[i].indexOf("=");
+    const value = toks[i].slice(at + 1);
+    env[toks[i].slice(0, at)] = value[0] === "$" ? (process.env[value.slice(1)] ?? "") : value;
   }
   for (i++; i < toks.length; i++) {
     const t = toks[i];
@@ -320,6 +321,9 @@ async function main(argv) {
   const R = process.env.R ?? "";
   if (!R) fail(2, "set R to the RPC the plan reads");
   const plan = () => graph(GRAPH, "PLAN", "plan(string,string)", network, target, "--rpc-url", R);
+  // Where a rehearsal network's commands keep forge's records: never in broadcast/, which the real
+  // chain of the same id reads.
+  const records = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
   if (verb === "plan") {
     for (const l of plan()) out(`${l}\n`);
     return 0;
@@ -406,7 +410,7 @@ async function main(argv) {
     }
     // Outside a rehearsal network a development node is refused: a run on a fork or devnet would write
     // the network's committed journals and records.
-    if (network !== rehearsal && !network.startsWith(`${rehearsal}-`)) {
+    if (!records) {
       for (const rpc of endpoints) {
         const v = clientVersion(rpc);
         if (v.status !== 0) fail(2, `cannot read the node at ${rpc}`);
@@ -575,6 +579,7 @@ async function main(argv) {
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
       else if (line) {
         const cmd = parse(line);
+        if (cmd.env.FOUNDRY_BROADCAST !== records) fail(2, `refusing: the line keeps records elsewhere than ${records ?? "broadcast/"}: ${line}`);
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
       }

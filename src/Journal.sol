@@ -92,6 +92,15 @@ abstract contract Journal is Script {
             block.chainid == chainId(file, _defaultChain(file)),
             string.concat("the RPC's chain is not ", network, "'s default chain")
         );
+        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
+            string memory writes = vm.envOr("FOUNDRY_BROADCAST", string("broadcast"));
+            require(
+                keccak256(bytes(writes)) == keccak256(bytes(_records())),
+                string.concat(
+                    "forge would write this send's records to ", writes, ", not ", _records(), ": send as plan prints"
+                )
+            );
+        }
         journal = _journal();
         string memory stamp = _stampKey(file);
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
@@ -172,6 +181,16 @@ abstract contract Journal is Script {
 
     function _dir() internal view returns (string memory) {
         return string.concat(_deployments(), "/", _networkName());
+    }
+
+    /// @dev The directory of broadcast records, with `<script>/<chain id>/<step>-latest.json`
+    ///      beneath it. A rehearsal network keeps its own, so that a fork keeping a public chain id
+    ///      never reads or writes that chain's. `forge test` writes none, so a test keeps its own
+    ///      too, where no local run's record can reach it. `_use` refuses a send whose records forge
+    ///      would write elsewhere.
+    function _records() internal view returns (string memory) {
+        return
+            vm.isContext(VmSafe.ForgeContext.Test) || _rehearsal() ? string.concat(_dir(), "/broadcast") : "broadcast";
     }
 
     function _path() internal view returns (string memory) {
