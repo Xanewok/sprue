@@ -133,10 +133,13 @@ scenario_failure() {
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
-  # A send whose records forge would write where no unit reads them is refused, before it sends.
+  # A send whose records forge would write where no unit reads them is refused, before it sends, by
+  # what forge resolves: the inherited environment or foundry.toml.
   network elsewhere 31337; local n0; n0=$(nonce)
-  out=$(FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check 2>&1) && die "failure: a send with records elsewhere ran"
-  grep -q 'forge would write this send.s records to elsewhere, not broadcast' <<<"$out" || die "failure: records elsewhere: ${out: -400}"
+  refused 'forge config puts this line.s records in elsewhere' env FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check
+  mv foundry.toml foundry.toml.ok; { echo '[profile.default]'; echo 'broadcast = "elsewhere"'; tail -n +2 foundry.toml.ok; } >foundry.toml
+  refused 'forge config puts this line.s records in elsewhere' G run elsewhere token.check
+  mv foundry.toml.ok foundry.toml
   [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
   echo "ok  a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
 }
@@ -244,7 +247,7 @@ scenario_kill() {
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
 # second node's clock, one window at a time, and leaves the first node's alone.
 scenario_two_chain() {
-  local d=$W/two-chain rcv=http://127.0.0.1:$((PORT + 3)) at zero=0x0000000000000000000000000000000000000000
+  local d=$W/two-chain rcv=http://127.0.0.1:$((PORT + 3)) at out zero=0x0000000000000000000000000000000000000000
   cp -R "$ROOT/examples/two-chain" "$d"; ln -s "$W/lib" "$d/lib"
   cd "$d"
   start_anvil $((PORT + 3)) 31338
@@ -265,6 +268,11 @@ scenario_two_chain() {
   [ "$(now "$rcv")" -ge "$((at + 2 * 86400))" ] || die "two-chain: the receiver's clock did not reach the last window"
   [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
   all_done two-chain "$(G plan local receiver.notify.2 2>>log)"
+  # A step that selects its own forks never reads its journal through _use, and is refused all the same.
+  cp -R deployments/local deployments/fork-test-two
+  out=$(forge script script/deploy/units/receiver/DeployReceiver.s.sol:DeployReceiver --sig 'notify(string,uint8)' \
+    fork-test-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
+  grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "two-chain: a dry run without the prefix: ${out: -400}"
   cd "$W"; rm -rf "$d"
   echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
 }
@@ -328,12 +336,32 @@ scenario_attended() {
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
   # The fork keeps chain id 1, so records in broadcast/ would read as that chain's.
-  [ -z "$(ls broadcast/*/1 2>/dev/null)" ] || die "attended: a rehearsal wrote records under broadcast/"
+  # Nor in cache/, whose snapshot a live --resume would publish as the real chain's records.
+  [ -z "$(ls broadcast/*/1 cache/*/1 2>/dev/null)" ] || die "attended: a rehearsal wrote records or resume data under broadcast/ or cache/"
   ls "deployments/$net/broadcast/DeployToken.s.sol/1/"*-latest.json >/dev/null || die "attended: no record under the rehearsal network"
+  ls "deployments/$net/cache/DeployToken.s.sol/1/"*-latest.json >/dev/null || die "attended: no resume data under the rehearsal network"
   grep -q '"tokenTx"' "deployments/$net/token.json" || die "attended: the journal has no receipt from the rehearsal's record"
-  out=$(forge script script/deploy/units/token/DeployToken.s.sol --sig 'check(string)' "$net" --rpc-url "$LIVE" \
-    --sender "$OPS" --unlocked --broadcast 2>&1) && die "attended: a rehearsal sent without its records prefix"
-  grep -q 'forge would write this send.s records to broadcast, not' <<<"$out" || die "attended: a send without the prefix: ${out: -400}"
+  # Forge run directly: a send or a dry run, which --resume can send too, without the prefix or half of it.
+  local check=(forge script script/deploy/units/token/DeployToken.s.sol --sig 'check(string)' "$net" --rpc-url "$LIVE" --sender "$OPS")
+  out=$("${check[@]}" --unlocked --broadcast 2>&1) && die "attended: a rehearsal sent without its prefix"
+  grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a send without the prefix: ${out: -400}"
+  out=$("${check[@]}" 2>&1) && die "attended: a rehearsal dry run ran without its prefix"
+  grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a dry run without the prefix: ${out: -400}"
+  out=$(FOUNDRY_BROADCAST=deployments/$net/broadcast "${check[@]}" 2>&1) && die "attended: a rehearsal ran with resume data in cache/"
+  grep -q 'forge would keep this run.s resume data in cache, not' <<<"$out" || die "attended: resume data in cache/: ${out: -400}"
+  # The plan, run without the prefix, still probes a step's done view, which reads the journal the same way.
+  out=$(G plan "$net" vault.check 2>&1) || die "attended: the plan of the next unit failed: ${out: -400}"
+  ! grep -q '^# cannot reach' <<<"$out" || die "attended: the plan could not probe a step: $out"
+  grep -q "forge script script/deploy/units/vault" <<<"$out" || die "attended: the plan has no vault step: $out"
+  # The graph's rehearse sends every step from inside one dry run, which --resume can send too.
+  local staged=deployments/fork-test-rehearse-$net
+  local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS")
+  out=$("${rehearse[@]}" 2>&1) && die "attended: the graph rehearsed without its prefix"
+  grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a rehearse without the prefix: ${out: -400}"
+  out=$(FOUNDRY_BROADCAST=$staged/broadcast FOUNDRY_CACHE_PATH=$staged/cache "${rehearse[@]}" 2>&1) || die "attended: a rehearse with its prefix failed: ${out: -400}"
+  grep -q 'reached vault.check' <<<"$out" || die "attended: the rehearse did not reach its target: ${out: -400}"
+  ls "$staged/broadcast/DeployGraph.s.sol/1/dry-run/"*-latest.json >/dev/null || die "attended: the rehearse saved no dry run under its network"
+  [ -z "$(ls -d broadcast/DeployGraph.s.sol cache/DeployGraph.s.sol 2>/dev/null)" ] || die "attended: a rehearse kept records or resume data outside its network"
   # A rehearsal network's journals leave the tree clean only while git ignores them, which the runner checks.
   exits 0 tty no "${run[@]}"
   sed -i.bak '/fork-test/d' .gitignore && rm .gitignore.bak

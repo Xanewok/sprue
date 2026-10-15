@@ -15,8 +15,7 @@ const DEV_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2f
 // The one shape of a command line, as Graph._command prints it. Forge's output also carries the
 // console.log of every contract the plan calls, so a line is run only if it matches whole.
 const COMMAND =
-  /^(FOUNDRY_BROADCAST=[^ $]+ )?([A-Z][A-Z0-9_]*_RPC=\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
-const SPACE = /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/; // not JS's \s: it counts U+FEFF and misses U+0085
+  /^(FOUNDRY_BROADCAST=[A-Za-z0-9_./-]+ FOUNDRY_CACHE_PATH=[A-Za-z0-9_./-]+ )?([A-Z][A-Z0-9_]*_RPC=\$[A-Z][A-Z0-9_]*_RPC )*forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url (\$[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
 const WIN = process.platform === "win32";
 
 const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
@@ -130,8 +129,8 @@ function forge(args, env) {
 }
 
 // The graph script's lines that start with `<tag> `, without the tag.
-function graph(GRAPH, tag, sig, ...rest) {
-  const r = forge(["script", GRAPH, "--sig", sig, ...rest]);
+function graph(GRAPH, tag, sig, rest = [], env = {}) {
+  const r = forge(["script", GRAPH, "--sig", sig, ...rest], env);
   if (r.status !== 0) {
     err(`${r.text}\n`);
     throw new Exit(1);
@@ -246,10 +245,11 @@ async function main(argv) {
       isObject(project.chains) &&
       isObject(project.paths) &&
       keys(project.paths) === "deployments,graph,rehearsal,units" &&
-      Object.values(project.paths).every((v) => typeof v === "string" && v.length > 0 && !SPACE.test(v))
+      // Plan lines carry the paths unquoted.
+      Object.values(project.paths).every((v) => typeof v === "string" && /^[A-Za-z0-9_./-]+$/.test(v))
     )
   ) {
-    fail(2, `refusing: ${PROJECT} is not a file of exactly paths and chains, with the non-empty, whitespace-free paths deployments, graph, rehearsal and units`);
+    fail(2, `refusing: ${PROJECT} is not a file of exactly paths and chains, with the paths deployments, graph, rehearsal and units, each of A-Z a-z 0-9 _ . / -`);
   }
   const { deployments: DEPLOYMENTS, graph: GRAPH_SCRIPT, rehearsal: REHEARSAL } = project.paths;
   // The graph contract is named like its script file, and the saved export lies beside it.
@@ -320,10 +320,12 @@ async function main(argv) {
   known(target);
   const R = process.env.R ?? "";
   if (!R) fail(2, "set R to the RPC the plan reads");
-  const plan = () => graph(GRAPH, "PLAN", "plan(string,string)", network, target, "--rpc-url", R);
-  // Where a rehearsal network's commands keep forge's records: never in broadcast/, which the real
-  // chain of the same id reads.
+  // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
+  // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
   const records = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
+  const cache = records && `${DEPLOYMENTS}/${network}/cache`;
+  const plan = () =>
+    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", R], records ? { FOUNDRY_BROADCAST: records, FOUNDRY_CACHE_PATH: cache } : {});
   if (verb === "plan") {
     for (const l of plan()) out(`${l}\n`);
     return 0;
@@ -579,7 +581,17 @@ async function main(argv) {
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
       else if (line) {
         const cmd = parse(line);
-        if (cmd.env.FOUNDRY_BROADCAST !== records) fail(2, `refusing: the line keeps records elsewhere than ${records ?? "broadcast/"}: ${line}`);
+        // Forge's resolved directories, which foundry.toml and the inherited environment move too, not
+        // the line's assignments alone.
+        const c = spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...cmd.env } });
+        let at;
+        try {
+          at = JSON.parse(c.stdout);
+        } catch {}
+        if (c.status !== 0 || !isObject(at)) fail(2, "refusing: forge config --json failed");
+        if (at.broadcast !== (records ?? "broadcast") || (cache && at.cache_path !== cache)) {
+          fail(2, `refusing: forge config puts this line's records in ${at.broadcast} and resume data in ${at.cache_path}, not ${cache ? `${records} and ${cache}` : "broadcast"}; leave foundry.toml's broadcast key and FOUNDRY_ variables unset: ${line}`);
+        }
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
       }

@@ -62,8 +62,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | A pinned deployer sends every CREATE, unless opted out; a malformed pin is refused before any send. | `CoreUnit.t.sol` `test_pin_*` |
 | An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
-| `run` executes only lines in the plan grammar. | e2e `scenario_grammar` (`plan-grammar.sh`) |
-| A send writes its records where its units read them; a rehearsal network's are only under its own directory, never in `broadcast/`. | e2e `scenario_attended` |
+| `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
+| A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 
@@ -128,8 +128,9 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     `# not before`, `# cannot reach` or a command, and ends with `# then plan again <node>` where a node
     cannot be judged until a dependency lands (an input date not yet reached, or a view or predicate whose
     dependency is not done). `rehearse` simulates the closure in that order on a staged copy of the
-    network, warping to each date (`forge script <graph> --sig 'rehearse(string,string)' <network> <target>
-    --rpc-url $R --sender <deployer>`); it refuses `--broadcast`, and stops at the first node whose sender is
+    network, warping to each date (`FOUNDRY_BROADCAST=<d>/broadcast FOUNDRY_CACHE_PATH=<d>/cache forge script
+    <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url $R --sender <deployer>`, where `<d>` is
+    `<paths.rehearsal>-rehearse-<network>`); it refuses `--broadcast`, and stops at the first node whose sender is
     another account, since a forge run has one sender and a fork forgets the simulation. A predicate is
     judged after its dependencies and date, and stops the run when unmet.
 

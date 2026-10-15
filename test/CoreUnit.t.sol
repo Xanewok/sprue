@@ -612,6 +612,50 @@ contract CoreUnitTest is Test {
         vm.stopBroadcast();
     }
 
+    function test_done_onARehearsalNetworkPrintsThePlanWithItsOutputsPrefix() public {
+        _network("fork-test-core-next", FREE, "");
+        assertEq(
+            unit.deploy(network),
+            string.concat(
+                "FOUNDRY_BROADCAST=",
+                dir,
+                "/broadcast FOUNDRY_CACHE_PATH=",
+                dir,
+                "/cache forge script toy.s.sol --sig 'plan(string,string)' ",
+                network,
+                " <node> --rpc-url $R"
+            )
+        );
+    }
+
+    /// @dev A rehearsal network's step refuses to run without its outputs prefix, so its command has it.
+    function test_recover_commandOnARehearsalNetworkKeepsForgesOutputsThere() public {
+        string memory lost = _lose("fork-test-core-recover");
+        address someone = makeAddr("someone else");
+        _writeRecord(_run(block.chainid, _sent(lost, someone)));
+
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "toy.json lacks toy, yet ",
+                    _recordPath(),
+                    " holds a CREATE of ToyPayload at ",
+                    vm.toString(_addressOf(lost)),
+                    " that landed or may land: restore the journal, or rebuild it: FOUNDRY_BROADCAST=",
+                    dir,
+                    "/broadcast FOUNDRY_CACHE_PATH=",
+                    dir,
+                    "/cache forge script test/ToyUnit.sol --sig 'recover(string)' ",
+                    network,
+                    " --rpc-url $R --sender ",
+                    vm.toString(someone)
+                )
+            )
+        );
+        unit.deploy(network);
+        vm.stopBroadcast();
+    }
+
     function test_recover_ignoresAnotherChainsRecords() public {
         string memory lost = _lose("recover-other-chain");
         _writeRecord(_run(1, _sent(lost, ops)));
@@ -821,7 +865,7 @@ contract CoreUnitTest is Test {
 
     function _network(string memory name, uint256 chainId, string memory pin) private {
         vm.chainId(chainId);
-        network = string.concat("core-", name);
+        network = vm.indexOf(name, "fork-test-") == 0 ? name : string.concat("core-", name);
         dir = string.concat("cache/core-test/deployments/", network);
         if (vm.exists(dir)) vm.removeDir(dir, true);
         vm.createDir(dir, true);

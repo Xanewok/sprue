@@ -8,6 +8,13 @@ whose records forge would write elsewhere than its units read is refused, on any
 rehearsal on a fork that keeps a public chain id no longer leaves records that the real run reads
 as a lost journal.
 
+A rehearsal network's commands also start with `FOUNDRY_CACHE_PATH=<paths.deployments>/<network>/cache`,
+where forge keeps a run's resume data, and a dry run without the prefix is refused too: the real
+run's `--resume` can no longer send the transactions of a rehearsal on the same chain id. Before each
+send the runner reads `forge config --json`, so a `broadcast` key in `foundry.toml` or an inherited
+`FOUNDRY_BROADCAST` is refused, not only an assignment in the line. Every `sprue.json` path holds only
+`A-Z a-z 0-9 _ . / -`, since plan lines carry them unquoted.
+
 ## 0.1.1
 
 The runner is `bin/sprue.mjs`, Node 18 or later with no dependencies, and replaces `bin/graph.sh`:

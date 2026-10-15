@@ -143,7 +143,9 @@ contract FileGraphProjectTest is Test, Declares {
                 HEADER,
                 "FOUNDRY_BROADCAST=deployments/",
                 net,
-                "/broadcast ",
+                "/broadcast FOUNDRY_CACHE_PATH=deployments/",
+                net,
+                "/cache ",
                 "B_RPC=$B_RPC GHOST_RPC=$GHOST_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --rpc-url alpha --sender $DEPLOYER\n"
@@ -156,7 +158,9 @@ contract FileGraphProjectTest is Test, Declares {
                 HEADER,
                 "FOUNDRY_BROADCAST=deployments/",
                 net,
-                "/broadcast ",
+                "/broadcast FOUNDRY_CACHE_PATH=deployments/",
+                net,
+                "/cache ",
                 "L2_RPC=$L2_RPC B_RPC=$B_RPC C_RPC=$C_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --sender $DEPLOYER\n"

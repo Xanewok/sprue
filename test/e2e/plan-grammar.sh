@@ -22,6 +22,7 @@ cat >bin/forge <<'STUB'
 #!/bin/sh
 case " $* " in
   *" plan(string,string) "*) sed 's/^/PLAN /' "$PLAN_FILE" ;;
+  " config --json ") printf '{"broadcast":"%s","cache_path":"%s"}\n' "${FOUNDRY_BROADCAST:-broadcast}" "${FOUNDRY_CACHE_PATH:-cache}" ;;
   *) for a in "$@"; do printf '[%s]' "$a"; done >>"$CALLS"; echo >>"$CALLS" ;;
 esac
 STUB
@@ -42,7 +43,7 @@ done
 run_line() {
   local net=net
   # A rehearsal network's line runs on that network, the only one whose records it may move.
-  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(fork-test-[a-z0-9-]+)/broadcast\  ]]; then
+  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(fork-test-[a-z0-9-]+)/broadcast\ FOUNDRY_CACHE_PATH= ]]; then
     net=${BASH_REMATCH[1]}; mkdir -p "deployments/$net"; cp deployments/net/network.json "deployments/$net/"
   fi
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
@@ -79,13 +80,28 @@ for p in "${payloads[@]}"; do
   i=$((i + 1))
 done
 # An environment assignment other than a chain's RPC variable could redirect `forge` itself, and only
-# a rehearsal network's lines move its records.
-for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PWD ' 'FOUNDRY_BROADCAST=deployments/net/broadcast '; do
+# a rehearsal network's lines move its records and resume data, both of them.
+for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PWD ' \
+  'FOUNDRY_BROADCAST=deployments/net/broadcast FOUNDRY_CACHE_PATH=deployments/net/cache '; do
   total=$((total + 1))
   if run_line "$prefix${lines[0]}" || [ -e MARK ]; then
     fail=$((fail + 1)); echo "FAIL ran hostile: $prefix${lines[0]}" >&2
   fi
 done
+rehearsed=$(grep -m1 '^FOUNDRY_BROADCAST=' "$CORPUS" || true)
+cache=$(grep -o 'FOUNDRY_CACHE_PATH=[^ ]* ' <<<"$rehearsed" || true)
+for hostile in "${rehearsed/"$cache"/}" "${rehearsed/\/cache /\/elsewhere }"; do
+  total=$((total + 1))
+  if [ -z "$cache" ] || [ "${#hostile}" -lt $((${#rehearsed} - ${#cache})) ] || run_line "$hostile" || [ -e MARK ]; then
+    fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
+  fi
+done
+# What forge resolves counts, not the line: an inherited variable moves a live line's records.
+live=$(grep -m1 -v '^FOUNDRY_BROADCAST=' "$CORPUS")
+total=$((total + 1))
+if FOUNDRY_BROADCAST=elsewhere run_line "$live"; then
+  fail=$((fail + 1)); echo "FAIL ran with forge's records elsewhere: $live" >&2
+fi
 # A variable that holds whitespace or a flag stays one argument of the command.
 for var in R DEPLOYER; do
   total=$((total + 1))
@@ -104,6 +120,15 @@ using=$(grep -m1 -e '--rpc-url \$B_RPC' "$CORPUS" || true)
 if [ -n "$using" ] && { (unset B_RPC; run_line "$using"); }; then
   fail=$((fail + 1)); echo "FAIL ran with B_RPC unset" >&2
 fi
+# Plan lines carry the paths unquoted, so a path that a shell would act on is refused.
+for bad in 'deployments(archive)' 'deployments$archive'; do
+  total=$((total + 1))
+  cp sprue.json sprue.json.ok
+  sed -i.bak "s|\"graph\":\"script/G.s.sol\"|\"graph\":\"script/$bad.s.sol\"|" sprue.json && rm sprue.json.bak
+  rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
+  { [ "$rc" = 2 ] && grep -q 'each of A-Z' out; } || { fail=$((fail + 1)); echo "FAIL a path of $bad exited $rc: $(<out)" >&2; }
+  mv sprue.json.ok sprue.json
+done
 # A line JavaScript ends at U+2028 is still one plan line, and refused: dropped, the plan would look
 # empty and the target reached.
 total=$((total + 1))
