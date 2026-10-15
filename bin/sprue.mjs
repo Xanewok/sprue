@@ -408,8 +408,15 @@ async function main(argv) {
     atExit = () => rmSync(lock, { force: true });
     for (const sig of ["SIGINT", "SIGTERM"]) {
       process.on(sig, () => {
-        atExit();
-        process.exit(130);
+        const done = () => {
+          atExit();
+          process.exit(130);
+        };
+        // A step writes its journal until it exits, so the lock is held until then.
+        if (forgeStep?.exitCode === null && forgeStep.signalCode === null) {
+          forgeStep.once("exit", done);
+          forgeStep.kill();
+        } else done();
       });
     }
     const marker = readJson(markerFile) ?? { source, forks: [] };
@@ -470,10 +477,11 @@ async function main(argv) {
     save(record());
     atExit = () => {
       // ChildProcess.kill signals nothing once the child has exited, so a reused pid is safe.
-      for (const f of forks) if (!keep) f.child.kill();
-      save({ ...record(), forks: keep ? record().forks : [] });
+      // A fork that has not answered yet is not kept: no record could stop it.
+      for (const f of forks) if (!keep || !f.instanceId) f.child.kill();
+      save({ ...record(), forks: keep ? record().forks.filter((f) => f.instanceId) : [] });
       rmSync(lock, { force: true });
-      if (keep && forks.every((f) => f.url)) {
+      if (keep && forks.every((f) => f.instanceId)) {
         if (!home) out(`R=${forks[0].url}\n`);
         for (const f of forks) for (const c of f.chains) out(`${c === home ? "R" : env(c)}=${f.url}\n`);
         err(`${NAME}: the forks keep running; stop them with ${NAME} rehearse --stop ${source}\n`);
@@ -655,6 +663,7 @@ async function main(argv) {
   const step = async ({ env, args }) => {
     const { code, log } = await new Promise((resolve) => {
       const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      forgeStep = child;
       let log = "";
       for (const s of [child.stdout, child.stderr]) {
         s.setEncoding("utf8");
@@ -669,6 +678,7 @@ async function main(argv) {
       });
       child.on("close", (code) => resolve({ code: code ?? 1, log }));
     });
+    forgeStep = undefined;
     if (code !== 0) stop(log, code);
   };
 
@@ -792,8 +802,9 @@ async function main(argv) {
   }
 }
 
-// What a rehearse leaves when it ends, however it ends.
+// What a rehearse leaves when it ends, however it ends, and the step a signal waits for.
 let atExit = () => {};
+let forgeStep;
 
 const argv = process.argv.slice(2);
 if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {

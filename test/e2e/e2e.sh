@@ -314,6 +314,32 @@ scenario_rehearse() {
   mv foundry.toml.ok foundry.toml
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: a command sent to the alias's real chain"
 
+  # A signal to the runner alone stops the running step before the lock is released: the step writes
+  # its journal until it exits, and a kept fork would let it finish.
+  "${go[@]}" --keep main vault.check >"$W.int" 2>&1 & local pid=$! rc=0 step=
+  for _ in $(seq 1 1500); do
+    step=$(ps -eo pid=,args= | awk '/forge script .* rehearsal-main .*--broadcast/ && !/awk/ {print $1; exit}')
+    [ -n "$step" ] && break; sleep 0.02
+  done
+  [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
+  kill -TERM "$pid"; wait "$pid" || rc=$?
+  ! kill -0 "$step" 2>/dev/null || die "rehearse: the runner exited before its step"
+  [ "$rc" = 130 ] || die "rehearse: a signal exited $rc, not 130"
+  exits 0 G rehearse --stop main
+  # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no
+  # record could stop it later.
+  local mute=$((PORT + 4)) fork=
+  python3 -c "import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', $mute)); s.listen(); c=s.accept(); time.sleep(120)" &
+  local silent=$!
+  env R="http://127.0.0.1:$mute" DEPLOYER="$dead" G rehearse --keep main token.check >/dev/null 2>&1 & pid=$!
+  for _ in $(seq 1 300); do
+    fork=$(ps -eo pid=,args= | awk -v u="--fork-url http://127.0.0.1:$mute " 'index($0, u) && !/awk/ {print $1; exit}')
+    [ -n "$fork" ] && break; sleep 0.05
+  done
+  [ -n "$fork" ] || die "rehearse: no fork of the silent upstream started"
+  sleep 0.5; kill -TERM "$pid"; wait "$pid" || true
+  sleep 0.3; ! kill -0 "$fork" 2>/dev/null || die "rehearse: a fork still starting was kept"
+  kill "$silent" 2>/dev/null || true
   # Ctrl-C stops the forks too.
   "${go[@]}" main vault.check >"$W.int" 2>&1 & local pid=$! rc=0
   for _ in $(seq 1 300); do grep -q '^senders are impersonated' "$W.int" && break; sleep 0.1; done
