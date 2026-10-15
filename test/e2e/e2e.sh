@@ -12,10 +12,12 @@ PIDS=
 
 die() { echo "FAIL $*" >&2; exit 1; }
 # The example project is copied here and runs there. Only `forge test` in scenario_grammar
-# runs in the checkout, as it does in CI: it writes out/, cache/ and its own deployments/fork-test-*.
+# runs in the checkout, as it does in CI: it writes out/, cache/ and its own deployments/rehearsal-*.
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
+  # A failed check can leave a --keep fork running.
+  (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop main) >/dev/null 2>&1 || true
   [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
 }
 trap cleanup EXIT
@@ -263,6 +265,11 @@ scenario_two_chain() {
   opened() { cast call "$(jq -r .receiver deployments/local/receiver.input.json)" 'opened(uint8)(address)' "$1" --rpc-url "$rcv"; }
   [ "$(cast code "$(jq -r .receiver deployments/local/receiver.input.json)" --rpc-url "$rcv")" != 0x ] || die "two-chain: no receiver at the input's address"
 
+  # rehearse forks both chains and sets the receiver fork's clock; the real nodes mine nothing.
+  local b0; b0="$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")"
+  out=$(G rehearse local receiver.notify.2 2>&1) || die "two-chain: rehearse failed: $(tail -c 600 <<<"$out")"
+  [ "$(grep -c '^fork ' <<<"$out")" = 2 ] || die "two-chain: rehearse did not fork both chains: $(tail -c 600 <<<"$out")"
+  [ "$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")" = "$b0" ] || die "two-chain: rehearse mined on a real node"
   exits 0 G run local receiver.notify.2
   for w in 0 1 2; do
     [ "$(opened $w)" = "$(jq -r .checked.source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
@@ -271,18 +278,119 @@ scenario_two_chain() {
   [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
   all_done two-chain "$(G plan local receiver.notify.2 2>>log)"
   # A step that selects its own forks never reads its journal through _use, and is refused all the same.
-  cp -R deployments/local deployments/fork-test-two
+  cp -R deployments/local deployments/rehearsal-two
   out=$(forge script script/deploy/units/receiver/DeployReceiver.s.sol:DeployReceiver --sig 'notify(string,uint8)' \
-    fork-test-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
+    rehearsal-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "two-chain: a dry run without the prefix: ${out: -400}"
   cd "$W"; rm -rf "$d"
   echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
 }
 
+# rehearse runs a target on forks of the network's chains that it starts and stops, as senders that hold no
+# key. The real chain mines nothing, and the network's own directory gets no journal.
+scenario_rehearse() {
+  local d=deployments/rehearsal-main dead=0x000000000000000000000000000000000000dEaD b0 out url
+  network main 1 "$(($(now "$LIVE") + 1000))"
+  cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
+  b0=$(cast block-number --rpc-url "$LIVE")
+  local go=(env R="$LIVE" DEPLOYER="$dead" G rehearse)
+  # Inherited, a keystore name that forge would fail to find, and an eth_rpc_url that forge would send to
+  # over --rpc-url, are dropped.
+  out=$(ETH_KEYSTORE_ACCOUNT=nosuch FOUNDRY_ETH_RPC_URL=$LIVE "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
+  [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
+  [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
+  jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
+  url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' <<<"$out" | awk '{print $NF}')
+  [ -n "$url" ] || die "rehearse: no fork line: $(tail -c 600 <<<"$out")"
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: the fork still runs"
+  [ -z "$(ls -d broadcast/*/1 cache/*/1 2>/dev/null)" ] || die "rehearse: records or resume data outside $d"
+  jq -e '.tokenDirty == true' "$d/token.json" >/dev/null || die "rehearse: a run from a dirty tree journaled the token clean"
+
+  # A chain's rpc alias names the fork's upstream, and the commands, which read the copy without it, use the fork.
+  mv foundry.toml foundry.toml.ok; { cat foundry.toml.ok; echo '[rpc_endpoints]'; echo "live = \"$LIVE\""; } >foundry.toml
+  network aliased 1; echo '{"chains":{"l2":{"id":1,"rpc":"live"}}}' >deployments/aliased/network.json
+  out=$(env -u R DEPLOYER="$dead" G rehearse aliased token.check 2>&1) || die "rehearse: the aliased network failed: $(tail -c 600 <<<"$out")"
+  grep -q '(from alias live)' <<<"$out" || die "rehearse: the alias did not name the upstream: $(tail -c 600 <<<"$out")"
+  mv foundry.toml.ok foundry.toml
+  [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: a command sent to the alias's real chain"
+
+  # A signal to the runner alone stops the running step before the lock is released: the step writes
+  # its journal until it exits, and a kept fork would let it finish.
+  "${go[@]}" --keep main vault.check >"$W.int" 2>&1 & local pid=$! rc=0 step=
+  for _ in $(seq 1 1500); do
+    step=$(ps -eo pid=,args= | awk '/forge script .* rehearsal-main .*--broadcast/ && !/awk/ {print $1; exit}')
+    [ -n "$step" ] && break; sleep 0.02
+  done
+  [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
+  kill -TERM "$pid"; wait "$pid" || rc=$?
+  ! kill -0 "$step" 2>/dev/null || die "rehearse: the runner exited before its step"
+  [ "$rc" = 130 ] || die "rehearse: a signal exited $rc, not 130"
+  exits 0 G rehearse --stop main
+  # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no
+  # record could stop it later.
+  local mute=$((PORT + 4)) fork=
+  python3 -c "import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', $mute)); s.listen(); c=s.accept(); time.sleep(120)" &
+  local silent=$!
+  env R="http://127.0.0.1:$mute" DEPLOYER="$dead" G rehearse --keep main token.check >/dev/null 2>&1 & pid=$!
+  for _ in $(seq 1 300); do
+    fork=$(ps -eo pid=,args= | awk -v u="--fork-url http://127.0.0.1:$mute " 'index($0, u) && !/awk/ {print $1; exit}')
+    [ -n "$fork" ] && break; sleep 0.05
+  done
+  [ -n "$fork" ] || die "rehearse: no fork of the silent upstream started"
+  sleep 0.5; kill -TERM "$pid"; wait "$pid" || true
+  sleep 0.3; ! kill -0 "$fork" 2>/dev/null || die "rehearse: a fork still starting was kept"
+  kill "$silent" 2>/dev/null || true
+  # Ctrl-C stops the forks too.
+  "${go[@]}" main vault.check >"$W.int" 2>&1 & local pid=$! rc=0
+  for _ in $(seq 1 300); do grep -q '^senders are impersonated' "$W.int" && break; sleep 0.1; done
+  url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' "$W.int" | awk '{print $NF}')
+  kill -INT "$pid"; wait "$pid" || rc=$?
+  [ "$rc" = 130 ] || die "rehearse: an interrupt exited $rc, not 130"
+  ! cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 && [ -n "$url" ] || die "rehearse: an interrupt left the fork '$url' running"
+  rm -f "$W.int"
+
+  # --keep leaves the fork running and prints its variables. The next rehearse stops it and starts over;
+  # --stop stops a kept one.
+  local kept
+  kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  out=$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "${kept:-none}") && [ "$out" != 0x ] || die "rehearse: no kept fork with the token at '$kept'"
+  url=$("${go[@]}" main token.check --keep 2>/dev/null | sed -n 's/^R=//p')
+  ! cast chain-id --rpc-url "$kept" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
+  cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 || die "rehearse: no kept fork at '$url'"
+  # --stop reads only the copy, so it stops forks whose source network is gone.
+  mv deployments/main "$W.main"
+  exits 0 G rehearse --stop main
+  mv "$W.main" deployments/main
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: --stop left the fork running"
+
+  refused 'no key signs' "${go[@]}" main token.check --account e2e
+  refused 'it is a rehearsal network' "${go[@]}" rehearsal-main token.check
+  # forge reads .env only for names unset, so a keystore named there is refused.
+  echo 'ETH_KEYSTORE_ACCOUNT=nosuch' >.env
+  refused 'sets ETH_KEYSTORE_ACCOUNT' "${go[@]}" main token.check
+  echo "FOUNDRY_ETH_RPC_URL=$LIVE" >.env
+  refused 'resolves an eth_rpc_url' "${go[@]}" main token.check
+  rm .env
+  refused 'set R' env -u R G rehearse main token.check
+  refused 'usage:' "${go[@]}" --wait main token.check
+  network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
+  refused 'no rehearse staged it' "${go[@]}" hand token.check
+  [ -f deployments/rehearsal-hand/notes ] || die "rehearse: deleted a directory it did not stage"
+  mkdir -p "$W.noanvil"; ln -sf "$(command -v forge)" "$(command -v cast)" "$(command -v git)" "$W.noanvil/"
+  refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" R="$LIVE" DEPLOYER="$dead" G rehearse main token.check
+  rm -rf "$W.noanvil" deployments/rehearsal-hand
+  echo $$ >"$d/.sprue/lock"
+  refused 'is running, as pid' "${go[@]}" main token.check
+  sh -c 'echo $$' >"$d/.sprue/lock"
+  refused 'which has exited; remove it' "${go[@]}" main token.check
+  rm "$d/.sprue/lock"
+  echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
+}
+
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
 scenario_attended() {
   command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip attended: it needs python3 and setsid"; return; }
-  local net=fork-test-live out rc n0 account=e2e
+  local net=rehearsal-live out rc n0 account=e2e
   # The keystore lives in a home of its own; the compilers are shared.
   mkdir -p "$W/home/.foundry" "$W/home/.local/share"
   [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
@@ -358,7 +466,7 @@ scenario_attended() {
   ! grep -q '^# cannot reach' <<<"$out" || die "attended: the plan could not probe a step: $out"
   grep -q "forge script script/deploy/units/vault" <<<"$out" || die "attended: the plan has no vault step: $out"
   # --resume can send the graph's saved simulation, so rehearse keeps both paths under the staged network.
-  local staged=deployments/fork-test-rehearse-$net
+  local staged=deployments/rehearsal-rehearse-$net
   local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS")
   out=$("${rehearse[@]}" 2>&1) && die "attended: the graph rehearsed without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a rehearse without the prefix: ${out: -400}"
@@ -368,7 +476,7 @@ scenario_attended() {
   [ -z "$(ls -d broadcast/DeployGraph.s.sol cache/DeployGraph.s.sol 2>/dev/null)" ] || die "attended: a rehearse kept records or resume data outside its network"
   # A rehearsal network's journals leave the tree clean only while git ignores them, which the runner checks.
   exits 0 tty no "${run[@]}"
-  sed -i.bak '/fork-test/d' .gitignore && rm .gitignore.bak
+  sed -i.bak '/rehearsal/d' .gitignore && rm .gitignore.bak
   git commit -qam unignore
   refused 'git does not ignore' tty no "${run[@]}"
   echo "ok  attended refusals send nothing, a change during the question stops the send, no sends nothing, yes sends once and asks every step, the rehearsal directories need the ignore line"
@@ -403,5 +511,6 @@ scenario_recover
 scenario_wait
 scenario_kill
 scenario_two_chain
+scenario_rehearse
 scenario_attended
 echo "PASS e2e"

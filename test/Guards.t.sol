@@ -179,7 +179,7 @@ contract GuardsTest is Test, Declares {
 
     function test_certificate_isDoneBeforeItsNodesDateIsJudged() public {
         DatedCertGraph g = new DatedCertGraph();
-        string memory net = "fork-test-guards-dated";
+        string memory net = "rehearsal-guards-dated";
         address token = address(new ToyPayload(1));
         _certificate(net, token, token, token.codehash);
         vm.writeFile(string.concat("deployments/", net, "/fixture.input.json"), '{"openAt":"4102444800"}');
@@ -206,7 +206,7 @@ contract GuardsTest is Test, Declares {
 
     function test_plan_refusesATargetThatExcludesTheCertifierOfANodeItNeeds_unlessTheNodeIsDone() public {
         CertGraph g = new CertGraph();
-        string memory net = "fork-test-guards-target";
+        string memory net = "rehearsal-guards-target";
         vm.createDir(string.concat("deployments/", net), true);
         vm.writeFile(string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337}}}');
         vm.expectRevert(bytes("cannot reach fixture.deploy: fixture.deploy is done only by fixture.check: target that"));
@@ -220,7 +220,7 @@ contract GuardsTest is Test, Declares {
 
     function test_plan_acceptsEitherOfSeveralCertifiers() public {
         SiblingGraph g = new SiblingGraph();
-        string memory net = "fork-test-guards-siblings";
+        string memory net = "rehearsal-guards-siblings";
         vm.createDir(string.concat("deployments/", net), true);
         vm.writeFile(string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337}}}');
         assertTrue(vm.contains(g.plan(net, "fixture.check.0"), "forge script"));

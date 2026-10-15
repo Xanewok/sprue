@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+`sprue rehearse <network> <target>` runs a target on Anvil forks it starts, in a fresh copy
+`<paths.rehearsal>-<network>` of the network's files, as impersonated senders: no key signs, and a
+signer flag, a keystore in `.env` or a resolved `eth_rpc_url` is refused. Each chain forks from `R`, its `rpc` alias or
+`<CHAIN>_RPC`; `--block` pins a fork's block. It runs unattended, moves the forks' clocks to each date,
+and stops the forks at the end; `--keep` leaves them running and prints their variables, until the next
+`rehearse` or `rehearse --stop`. The examples name the rehearsal prefix `rehearsal`.
+
 A rehearsal network keeps forge's records and resume data in `<paths.deployments>/<network>/broadcast`
-and `<network>/cache`: its commands, its units' printed commands and the runner's plan start with
+and `<paths.deployments>/<network>/cache`: its commands, its units' printed commands and the runner's plan start with
 `FOUNDRY_BROADCAST=` and `FOUNDRY_CACHE_PATH=` those paths, and its units refuse a send or a dry run
 without them. A rehearsal on a fork that keeps a public chain id no longer leaves records that the real
 run reads as a lost journal, or a snapshot or dry run that the real run's `--resume` sends. Before each

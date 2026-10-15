@@ -21,6 +21,9 @@ What sprue assumes, what it guarantees, and the decisions behind it. The README 
   so an interrupted run is finished by running it again; a step's own idempotence is the unit author's.
 - **Why does `run` stop at a future date instead of waiting?** A person at a terminal should not hold a
   process open for days. Exit 4 means "come back"; `--wait` opts in. Only on Anvil does `run` move the clock.
+- **Why does every `sprue rehearse` start over?** State kept between rehearsals would need rules for when it
+  stops being true: a restarted fork, an edited input, a step that failed halfway. A fresh copy on fresh forks
+  needs none. The cost is replaying the steps the network still lacks.
 - **Why string ids and a derived order?** A numbered script list states a total order that is false and
   changes when a unit is inserted. Units declare edges; the graph orders them.
 
@@ -64,6 +67,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
+| `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; two rehearses of one network do not run at once; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 
@@ -114,8 +118,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 14. **Public chains run attended.** A run on a network with a chain not listed `local` needs a terminal, no
     `CI`, one signer flag, a clean tree (`--allow-dirty` waives it when no chain is live), and `yes` per step
     after showing the dry run's transactions and cost. A development node is refused outside a rehearsal
-    network: a run on a fork would write the network's committed journals. `rehearse` simulates a whole
-    target on a staged `<rehearsal>-rehearse-<network>` copy.
+    network: a run on a fork would write the network's committed journals. `sprue rehearse` runs a target on
+    forks (decision 20); the graph's `rehearse` simulates one on a staged `<rehearsal>-rehearse-<network>` copy.
 15. **The executor never waits for a date by default.** It exits 4, or with `--wait` polls; on Anvil it sets
     the clock of the chain the date names.
 16. **Test-only parts stay apart.** A test-only node is a target only on a test or local chain, and no
@@ -133,6 +137,14 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     `<paths.rehearsal>-rehearse-<network>`); it refuses `--broadcast`, and stops at the first node whose sender is
     another account, since a forge run has one sender and a fork forgets the simulation. A predicate is
     judged after its dependencies and date, and stops the run when unmet.
+20. **`sprue rehearse` starts over on forks it owns.** Each invocation stops the forks a `--keep` left, copies
+    `deployments/<network>/`'s files into `<paths.rehearsal>-<network>` without the `rpc` aliases, starts one
+    Anvil per upstream (`R` for the default chain, else the alias, else `<CHAIN>_RPC`; an empty chain for a
+    `chains.local` one without), and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
+    sender impersonated. No key signs, so a fork that keeps a public chain id never holds a transaction the
+    real chain would accept. Copied journals keep `checked`, so a landed unit stays done without reading the
+    fork, as on the real chain; with `--block` before its deployment, wrongly. It shows only what Anvil reproduces: no bridge delivery between forks, and no
+    L2's own rules.
 
 ### Prior art
 
