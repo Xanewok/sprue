@@ -143,7 +143,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     `chains.local` one without), and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
     sender impersonated. No key signs, so a fork that keeps a public chain id never holds a transaction the
     real chain would accept. Copied journals keep `checked`, so a landed unit stays done without reading the
-    fork, as on the real chain; with `--block` before its deployment, wrongly. It shows only what Anvil reproduces: no bridge delivery between forks, and no
+    fork, as on the real chain. So a fork that lacks a certified role's code, as at a `--block` before its
+    deployment, is refused. It shows only what Anvil reproduces: no bridge delivery between forks, and no
     L2's own rules.
 
 ### Prior art

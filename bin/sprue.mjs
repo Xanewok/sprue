@@ -512,6 +512,21 @@ async function main(argv) {
       out(`fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`} ${fork.url} (from ${group.from})\n`);
       for (const c of group.chains) process.env[c === home ? "R" : rpcVariable(c)] = process.env[rpcVariable(c)] = fork.url;
     }
+    // A copied check keeps its unit done without reading the fork, so the fork must hold the code it
+    // certified: a --block before the deployment would show a contract that is not there as done.
+    for (const f of readdirSync(dir)) {
+      const checked = f.endsWith(".json") ? readJson(`${dir}/${f}`)?.checked : undefined;
+      if (!isObject(checked)) continue;
+      for (const [key, hash] of Object.entries(checked)) {
+        const role = key.endsWith("CodeHash") ? key.slice(0, -"CodeHash".length) : "";
+        if (typeof checked[role] !== "string") continue;
+        const id = checked[`${role}ChainId`] ?? checked[`${home}ChainId`];
+        const fork = forks.find((k) => k.chains.some((c) => chainMap[c].id === id));
+        if (fork && must("cast", ["codehash", checked[role], "--rpc-url", fork.url]) !== hash) {
+          fail(2, `refusing: the fork of ${fork.chains.join(",")} lacks the code ${f} certifies for ${role} at ${checked[role]}; fork a block after its deployment`);
+        }
+      }
+    }
     if (!home) process.env.R = forks[0].url;
     if (!process.env.DEPLOYER && typeof net.deployer === "string") process.env.DEPLOYER = net.deployer;
     const dirty = exec("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);

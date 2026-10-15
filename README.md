@@ -142,8 +142,8 @@ Ctrl-C. `--keep` leaves them running and prints their `R=` and `<CHAIN>_RPC=` li
 as stopped. Every `rehearse` starts over, one at a time per network, and refuses an existing copy
 without its `.sprue/`.
 
-A rehearsal shows what Anvil reproduces. With `--block` before a landed unit's deployment, its copied
-journal still says done; a bridge message between forks is never delivered.
+A fork that lacks the code a copied check certifies, as at a `--block` before the deployment, is
+refused. A rehearsal shows what Anvil reproduces: a bridge message between forks is never delivered.
 
 ## Configuration
 
