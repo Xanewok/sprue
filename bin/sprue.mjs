@@ -738,8 +738,7 @@ async function main(argv) {
     if (!/^[0-9]+$/.test(now)) fail(1, `cannot read the clock at ${clock}`);
     return { late: BigInt(now) < BigInt(at), clock };
   };
-  // A unit certified on a live chain gets a tag for people at the commit its journal records: the
-  // journal and its check stay the record. Offered at every attended end, so a rerun offers what is left.
+  // The journal and its check stay the record; a tag helps people find it.
   const offerTags = () => {
     const git = (...args) => exec("git", args, ["ignore", "pipe", "ignore"]);
     const branch = git("branch", "--show-current").out;
@@ -754,7 +753,7 @@ async function main(argv) {
       if (!isObject(j?.checked)) continue;
       const tag = `deploy/${network}/${unit}`;
       const ref = `refs/tags/${tag}`;
-      // A source-only refspec follows remote.<name>.push, which may force, and push.followTags.
+      // One tag by name: push.followTags would add others.
       const push = `git push --no-follow-tags ${remote || "<remote>"} ${ref}:${ref}`;
       const note = (why) => out(`${tag}: ${why}\n`);
       const dirty = Object.keys(j).filter((k) => k.endsWith("Dirty") && j[k] === true);
@@ -781,11 +780,10 @@ async function main(argv) {
         note(`a tag of another tree exists; tags never move`);
         continue;
       }
-      if (!remote) { note(`tagged; push it with ${push}`); continue; }
       const theirs = pushed.get(ref);
       if (theirs === git("rev-parse", ref).out) continue;
       if (theirs) { note(`${remote} has another tag of that name; it is never overwritten`); continue; }
-      if (!yes(`Push ${tag} to ${remote}?`)) { note(`tagged; push later with ${push}`); continue; }
+      if (!remote || !yes(`Push ${tag} to ${remote}?`)) { note(`tagged; push later with ${push}`); continue; }
       // A failed push is no failed deploy: the check already passed. A push without + never replaces a
       // remote tag, so an unreadable remote is offered the push too.
       if (exec("git", ["push", "--no-follow-tags", remote, `${ref}:${ref}`], ["ignore", "ignore", "inherit"]).status !== 0) note(`push failed; retry with ${push}`);

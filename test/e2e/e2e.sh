@@ -521,8 +521,14 @@ scenario_tag() {
   git tag -d "$tag" >/dev/null
   out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "tag: tagged without a yes"
-  # A ref named as the journal's abbreviated commit does not pick the commit.
+  # A squash merge gives the journal's commit's tree another commit: a tag there is pushed as it is.
   commit=$(jq -r .tokenCommit deployments/prod/token.json)
+  squash=$(git commit-tree "$commit^{tree}" -m squash)
+  git tag -a -m squash "$tag" "$squash"
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  [ "$(git ls-remote origin "refs/tags/$tag^{}" | cut -f1)" = "$squash" ] || die "tag: a squash commit's tag was not pushed: $(tail -c 600 <<<"$out")"
+  git tag -d "$tag" >/dev/null; git push -q origin ":refs/tags/$tag"
+  # A ref named as the journal's abbreviated commit does not pick the commit.
   git branch "$commit" "$first"
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not one commit of this repository' <<<"$out" || die "tag: a ref named as the commit was tagged: $(tail -c 600 <<<"$out")"
@@ -534,7 +540,7 @@ scenario_tag() {
   grep -q 'not one commit of this repository' <<<"$out" || die "tag: a tree was tagged: $(tail -c 600 <<<"$out")"
   # A journal that records a dirty tree is neither tagged nor, tagged by hand, pushed.
   git tag -a -m by-hand "$tag" "$commit^{commit}"
-  jq '.tokenDirty = true' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
+  jq --arg c "$commit" '.tokenCommit = $c | .tokenDirty = true' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
   git add deployments/prod/token.json; git commit -qm dirty
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered: $(tail -c 600 <<<"$out")"
