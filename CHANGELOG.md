@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+When an attended run on a live chain ends done or waiting, it offers an annotated tag
+`deploy/<network>/<unit>` for each certified unit, at the commit its journal records, and its push. A
+rerun offers what is missing. An existing tag of another tree, a remote tag at another commit, a dirty
+journal and several commits are reported, never tagged or overwritten. A failed push keeps the run's status.
+
 `sprue rehearse <network> <target>` runs a target on Anvil forks it starts, in a fresh copy
 `<paths.rehearsal>-<network>` of the network's files, as impersonated senders: no key signs, and a
 signer flag, a keystore in `.env` or a resolved `eth_rpc_url` is refused. Each chain forks from `R`, its `rpc` alias or

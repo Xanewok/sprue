@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop main) >/dev/null 2>&1 || true
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote" "$W.pty.py"
 }
 trap cleanup EXIT
 
@@ -482,6 +482,73 @@ scenario_attended() {
   echo "ok  attended refusals send nothing, a change during the question stops the send, no sends nothing, yes sends once and asks every step, the rehearsal directories need the ignore line"
 }
 
+# On a live chain an attended run offers a tag at the journal's commit for each certified unit, and its
+# push. A rerun offers only what is missing; a failed push keeps the run's status; a tag never moves.
+scenario_tag() {
+  command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip tag: it needs python3 and setsid"; return; }
+  local tag=deploy/prod/token out first commit prod=http://127.0.0.1:$((PORT + 5))
+  # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
+  start_anvil $((PORT + 5)) 10
+  echo 'deployments/rehearsal*/' >>.gitignore
+  network prod 10; git add -A; git commit -qm prod
+  git init -q --bare "$W.remote"; git remote add origin "$W.remote"
+  # The push names one tag, whatever the configuration follows.
+  git config push.followTags true; git tag -a -m other unrelated
+  geth_stub "$W.bin"
+  local run=(env PATH="$W.bin:$PATH" R="$prod" G run prod token.check --account e2e)
+  out=$(tty yes,yes,yes,yes "${run[@]}" 2>&1) || die "tag: the run failed: $(tail -c 600 <<<"$out")"
+  [ "$(git cat-file -t "$tag")" = tag ] || die "tag: no annotated tag $tag: $(tail -c 600 <<<"$out")"
+  [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse "$(jq -r .tokenCommit deployments/prod/token.json)^{commit}")" ] || die "tag: not at the journal's commit"
+  git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: not pushed"
+  ! git ls-remote --tags origin refs/tags/unrelated | grep -q . || die "tag: the push took another tag"
+  git add -A; git commit -qm journals
+  out=$(tty no "${run[@]}" 2>&1) || die "tag: the rerun failed: $(tail -c 600 <<<"$out")"
+  ! grep -q "Type yes\|$tag" <<<"$out" || die "tag: a finished rerun asked or reported: $(tail -c 600 <<<"$out")"
+  git push -q origin ":refs/tags/$tag"
+  out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  ! git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: pushed without a yes"
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: a rerun did not offer the lost push again"
+  git push -q origin ":refs/tags/$tag"; git remote set-url origin "$W.nowhere"
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a failed push failed the run"
+  grep -qF "push failed; retry with git push --no-follow-tags origin refs/tags/$tag:refs/tags/$tag" <<<"$out" || die "tag: no retry command: $(tail -c 600 <<<"$out")"
+  git remote set-url origin "$W.remote"
+  first=$(git rev-list --max-parents=0 HEAD)
+  git tag -d "$tag" >/dev/null; git tag -a -m other "$tag" "$first"
+  out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  grep -q 'a tag of another tree exists' <<<"$out" || die "tag: another tree's tag was not reported: $(tail -c 600 <<<"$out")"
+  [ "$(git rev-parse "$tag^{commit}")" = "$first" ] || die "tag: a tag moved"
+  git tag -d "$tag" >/dev/null
+  out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "tag: tagged without a yes"
+  # A squash merge gives the journal's commit's tree another commit: a tag there is pushed as it is.
+  commit=$(jq -r .tokenCommit deployments/prod/token.json)
+  squash=$(git commit-tree "$commit^{tree}" -m squash)
+  git tag -a -m squash "$tag" "$squash"
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  [ "$(git ls-remote origin "refs/tags/$tag^{}" | cut -f1)" = "$squash" ] || die "tag: a squash commit's tag was not pushed: $(tail -c 600 <<<"$out")"
+  git tag -d "$tag" >/dev/null; git push -q origin ":refs/tags/$tag"
+  # A ref named as the journal's abbreviated commit does not pick the commit.
+  git branch "$commit" "$first"
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  grep -q 'not one commit of this repository' <<<"$out" || die "tag: a ref named as the commit was tagged: $(tail -c 600 <<<"$out")"
+  git branch -D "$commit" >/dev/null
+  # A recorded object that is no commit is never tagged.
+  jq --arg t "$(git rev-parse HEAD^{tree})" '.tokenCommit = $t' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
+  git add deployments/prod/token.json; git commit -qm tree
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  grep -q 'not one commit of this repository' <<<"$out" || die "tag: a tree was tagged: $(tail -c 600 <<<"$out")"
+  # A journal that records a dirty tree is neither tagged nor, tagged by hand, pushed.
+  git tag -a -m by-hand "$tag" "$commit^{commit}"
+  jq --arg c "$commit" '.tokenCommit = $c | .tokenDirty = true' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
+  git add deployments/prod/token.json; git commit -qm dirty
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered: $(tail -c 600 <<<"$out")"
+  ! git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: a dirty journal's tag was pushed"
+  rm -rf "$W.remote"
+  echo "ok  a live run offers a tag at the journal's commit and its push; a rerun offers only what is missing, a failed push keeps the status, a tag never moves, a dirty journal gets none"
+}
+
 # `run` sends the command lines that the FileGraph tests and the example's plan print, and nothing hostile.
 scenario_grammar() {
   { (cd "$ROOT" && forge test --match-path 'test/FileGraph*' -vv 2>&1) | sed -n 's/^ *PLAN //p'
@@ -513,4 +580,5 @@ scenario_kill
 scenario_two_chain
 scenario_rehearse
 scenario_attended
+scenario_tag
 echo "PASS e2e"

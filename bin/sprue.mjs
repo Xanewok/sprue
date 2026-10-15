@@ -582,6 +582,7 @@ async function main(argv) {
     if (rpc) endpoints.push(rpc);
   }
   let me = "";
+  let live = false;
   if (attended) {
     // Not stdin: the question is read from the terminal, so it is the terminal that must open.
     if ("CI" in process.env) fail(2, `refusing ${network}: CI is set; a person at a terminal sends to a public chain`);
@@ -737,6 +738,65 @@ async function main(argv) {
     if (!/^[0-9]+$/.test(now)) fail(1, `cannot read the clock at ${clock}`);
     return { late: BigInt(now) < BigInt(at), clock };
   };
+  // The journal and its check stay the record; a tag helps people find it.
+  const offerTags = () => {
+    const git = (...args) => exec("git", args, ["ignore", "pipe", "ignore"]);
+    const branch = git("branch", "--show-current").out;
+    const remotes = git("remote").out.split("\n").filter(Boolean);
+    const tracked = branch ? git("config", "--get", `branch.${branch}.remote`).out : "";
+    const remote = remotes.includes(tracked) ? tracked : remotes.length === 1 ? remotes[0] : "";
+    const listed = remote ? git("ls-remote", "--tags", remote, `refs/tags/deploy/${network}/*`).out : "";
+    const pushed = new Map(listed.split("\n").map((l) => l.split("\t").reverse()));
+    const yes = (q) => ask(`${q} Type yes: `) === "yes";
+    for (const unit of [...units].sort()) {
+      const j = readJson(`${DEPLOYMENTS}/${network}/${unit}.json`);
+      if (!isObject(j?.checked)) continue;
+      const tag = `deploy/${network}/${unit}`;
+      const ref = `refs/tags/${tag}`;
+      // One tag by name: push.followTags would add others.
+      const push = `git push --no-follow-tags ${remote || "<remote>"} ${ref}:${ref}`;
+      const note = (why) => out(`${tag}: ${why}\n`);
+      const dirty = Object.keys(j).filter((k) => k.endsWith("Dirty") && j[k] === true);
+      // forge records an abbreviated commit, and a ref of that name would win over it.
+      const resolve = (c) => {
+        const r = typeof c === "string" && /^[0-9a-f]{7,40}$/.test(c) ? git("rev-parse", "-q", "--verify", `${c}^{commit}`) : undefined;
+        return r?.status === 0 && r.out.startsWith(c) ? r.out : "";
+      };
+      const recorded = [...new Set(Object.keys(j).filter((k) => k.endsWith("Commit")).map((k) => j[k]))];
+      const commits = [...new Set(recorded.map(resolve))];
+      if (dirty.length) { note(`not tagged: ${dirty.join(", ")} records a dirty tree`); continue; }
+      if (commits.length !== 1 || !commits[0]) { note(`not tagged: its roles record ${recorded.join(", ") || "no commit"}, not one commit of this repository`); continue; }
+      const tree = (rev) => git("rev-parse", "-q", "--verify", `${rev}^{tree}`).out;
+      const local = tree(ref);
+      if (!local) {
+        if (!yes(`Tag ${tag} at ${commits[0]}, which ${unit}'s journal records?`)) continue;
+        const r = spawnSync("git", ["tag", "-a", "-F", "-", tag, commits[0]], {
+          input: `${unit} on ${network}, certified by its check. This tag never moves.\n\n${JSON.stringify(j, null, 2)}\n`,
+          stdio: ["pipe", "ignore", "inherit"],
+        });
+        if (r.status !== 0) { note("git tag failed"); continue; }
+      } else if (local !== tree(commits[0])) {
+        // Squash merges give one tree two commits, so the tree is what must match.
+        note(`a tag of another tree exists; tags never move`);
+        continue;
+      }
+      const theirs = pushed.get(ref);
+      if (theirs === git("rev-parse", ref).out) continue;
+      if (theirs) { note(`${remote} has another tag of that name; it is never overwritten`); continue; }
+      if (!remote || !yes(`Push ${tag} to ${remote}?`)) { note(`tagged; push later with ${push}`); continue; }
+      // A failed push is no failed deploy: the check already passed. A push without + never replaces a
+      // remote tag, so an unreadable remote is offered the push too.
+      if (exec("git", ["push", "--no-follow-tags", remote, `${ref}:${ref}`], ["ignore", "ignore", "inherit"]).status !== 0) note(`push failed; retry with ${push}`);
+    }
+  };
+  if (attended && !broadcastDir) {
+    atExit = (code) => {
+      if (!live || ![0, 3, 4].includes(code)) return;
+      // The run's status stands whatever the offer meets.
+      try { offerTags(); } catch (e) { err(`${NAME}: tags not offered: ${e.message}\n`); }
+    };
+  }
+
   const quiet = ["ignore", "ignore", "inherit"];
   let sent = "";
   outer: for (;;) {
@@ -772,7 +832,10 @@ async function main(argv) {
         // The step's command follows and would refuse, so it is not sent.
         out(`${line}\n`);
         throw new Exit(3);
-      } else if (line.startsWith("# chain ") || line.startsWith("# done ")) out(`${line}\n`);
+      } else if (line.startsWith("# chain ") || line.startsWith("# done ")) {
+        if (/^# chain [^ ]+ [0-9]+ live$/.test(line)) live = true;
+        out(`${line}\n`);
+      }
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
       else if (line) {
         const cmd = parse(line);
@@ -812,6 +875,6 @@ if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
     if (!(e instanceof Exit)) throw e;
     process.exitCode = e.code;
   } finally {
-    atExit();
+    atExit(process.exitCode);
   }
 }
