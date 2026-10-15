@@ -67,7 +67,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
-| `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; two rehearses of one network do not run at once; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it deletes only a directory a `rehearse` staged. | e2e `scenario_rehearse`, `scenario_two_chain` |
+| `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; two rehearses of one network do not run at once; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 
@@ -142,8 +142,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     Anvil per upstream (`R` for the default chain, else the alias, else `<CHAIN>_RPC`; an empty chain for a
     `chains.local` one without), and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
     sender impersonated. No key signs, so a fork that keeps a public chain id never holds a transaction the
-    real chain would accept. Copied journals keep `checked`: a landed unit stays done, as it is on the real
-    chain, at the latest block. It shows only what Anvil reproduces: no bridge delivery between forks, and no
+    real chain would accept. Copied journals keep `checked`, so a landed unit stays done without reading the
+    fork, as on the real chain; with `--block` before its deployment, wrongly. It shows only what Anvil reproduces: no bridge delivery between forks, and no
     L2's own rules.
 
 ### Prior art

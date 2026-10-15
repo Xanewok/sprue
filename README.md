@@ -117,8 +117,8 @@ inherited variable that moves either path is refused.
 
 ## Rehearse
 
-`sprue rehearse <network> <target>` runs what `run` would send on Anvil forks it starts, in a fresh copy
-`<paths.rehearsal>-<network>` of `deployments/<network>/`:
+`sprue rehearse <network> <target>` runs what `run` would send on Anvil forks it starts, in
+`<paths.rehearsal>-<network>`, a fresh copy of the files directly in `deployments/<network>/`:
 
 ```sh
 R=<rpc> sprue rehearse mainnet vault.check     # forks, runs, stops the forks; the copy stays as the report
@@ -126,15 +126,16 @@ R=<rpc> sprue rehearse mainnet vault.check     # forks, runs, stops the forks; t
 
 Each chain forks from `R` (the default chain only), else its `rpc` alias, else `<CHAIN>_RPC`, at the
 latest block or `--block [<chain>=]<n>`; a chain in `chains.local` with none of these starts empty. The
-copy keeps the journals, so what landed stays done, and drops the aliases, so every command reads a fork.
+copy keeps the journals, whose `checked` keeps what landed done without reading the fork, and drops the
+aliases, so every command reads a fork.
 Senders are impersonated: `DEPLOYER` (else the pinned `deployer`) and each `.by(...)`. No key signs, so a
 signer flag is refused, and so is a `.env` that names a keystore; so is an `eth_rpc_url` that forge
 resolves, which it would send to instead of the forks. It runs unattended, on a dirty tree too
 (the journals record it), and moves each fork's clock to the next date. The forks stop at the end and on
 Ctrl-C. `--keep` leaves them running and prints their `R=` and `<CHAIN>_RPC=` lines, until the next
 `rehearse` of the network or `sprue rehearse --stop <network>`; a kept fork that does not answer is taken
-as stopped. Every `rehearse` starts over, one at a time per network, and deletes the copy only if a
-`rehearse` staged it.
+as stopped. Every `rehearse` starts over, one at a time per network, and refuses an existing copy
+without its `.sprue/`.
 
 A rehearsal shows what Anvil reproduces. With `--block` before a landed unit's deployment, its copied
 journal still says done; a bridge message between forks is never delivered.

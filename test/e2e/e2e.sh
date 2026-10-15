@@ -351,11 +351,11 @@ scenario_rehearse() {
 
   # --keep leaves the fork running and prints its variables. The next rehearse stops it and starts over;
   # --stop stops a kept one.
-  url=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
-  out=$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "${url:-none}") && [ "$out" != 0x ] || die "rehearse: no kept fork with the token at '$url'"
-  exits 0 "${go[@]}" main token.check
-  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
+  local kept
+  kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  out=$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "${kept:-none}") && [ "$out" != 0x ] || die "rehearse: no kept fork with the token at '$kept'"
   url=$("${go[@]}" main token.check --keep 2>/dev/null | sed -n 's/^R=//p')
+  ! cast chain-id --rpc-url "$kept" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
   cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 || die "rehearse: no kept fork at '$url'"
   # --stop reads only the copy, so it stops forks whose source network is gone.
   mv deployments/main "$W.main"

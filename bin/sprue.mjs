@@ -37,7 +37,7 @@ Flags may appear anywhere after the command.
                             <paths.rehearsal>-<network> of network's files; impersonates each step's sender
   rehearse --stop <network> stops the forks that rehearse --keep left running
 
-On a network whose chains sprue.json lists all as local it sends unattended, sending from Anvil's unlocked
+run, on a network whose chains sprue.json lists all as local, sends unattended, sending from Anvil's unlocked
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
 terminal and no CI variable. A rehearsal network (the name that paths.rehearsal ends in, or it and -<suffix>) requires
 Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
@@ -58,8 +58,8 @@ stops the forks a --keep left and copies network's files again, journals include
 It runs unattended and on a dirty tree, takes no signer flag, sets the forks' clocks to each date, and stops
 the forks at the end. With --keep they keep running, and it prints their R= and <CHAIN>_RPC= lines.
 
-run and rehearse stop with one of these; after a stop at 3 or 4, meet the condition and run it again, which
-skips every node already done:
+run and rehearse stop with one of these. After a stop at 3 or 4, meet the condition and run it again: run
+skips every node already done, rehearse starts over from network's files:
 
   0   the target is done
   1   a step or a clock read failed
@@ -361,17 +361,16 @@ async function main(argv) {
     return { net, chainMap, chains, home };
   }
 
-  // Copies `source` into a fresh <paths.rehearsal>-<source> and points R and every <CHAIN>_RPC at Anvil
-  // forks it starts, so forge never sees a real endpoint and holds no key: a step's sender is
-  // impersonated. It deletes the directory only if a rehearse staged it.
+  // Points R and every <CHAIN>_RPC at Anvil forks it starts, so forge never sees a real endpoint and holds
+  // no key. Reusing an earlier rehearsal would need proof that its forks and inputs still match: it starts over.
   async function rehearse(source) {
     const name = `${rehearsal}-${source}`;
     const dir = `${DEPLOYMENTS}/${name}`;
     if (source === rehearsal || source.startsWith(`${rehearsal}-`)) fail(2, `refusing ${source}: it is a rehearsal network; rehearse the network it copies`);
     if (!ignored(`${dir}/`)) fail(2, `refusing: git does not ignore ${dir}/, where rehearse writes`);
-    const markerFile = `${dir}/.sprue/rehearsal.json`;
+    const recordFile = `${dir}/.sprue/rehearsal.json`;
     const lock = `${dir}/.sprue/lock`;
-    const save = (m) => writeFileSync(markerFile, `${JSON.stringify(m, null, 2)}\n`);
+    const save = (m) => writeFileSync(recordFile, `${JSON.stringify(m, null, 2)}\n`);
     const alive = (pid) => {
       try {
         process.kill(pid, 0);
@@ -380,21 +379,13 @@ async function main(argv) {
         return e.code === "EPERM";
       }
     };
-    const instance = (url) => {
+    const anvilMetadata = (url) => {
       const r = exec("cast", ["rpc", "anvil_metadata", "--rpc-url", url], ["ignore", "pipe", "ignore"]);
       try { return r.status === 0 ? JSON.parse(r.out) : undefined; } catch {}
     };
-    // A kept fork is stopped only while its URL answers as the instance it started as: its pid may
-    // since name another process.
-    const stopKept = (forks) => {
-      for (const f of forks) {
-        if (instance(f.url)?.instanceId !== f.instanceId) continue;
-        try { process.kill(f.pid); } catch {}
-      }
-    };
     if (!existsSync(dir) && stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
-    if (existsSync(dir) && !existsSync(dirname(markerFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
-    mkdirSync(dirname(markerFile), { recursive: true });
+    if (existsSync(dir) && !existsSync(dirname(recordFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
+    mkdirSync(dirname(recordFile), { recursive: true });
     // Exclusive, and read under it: two rehearses of one network would share its journals over different
     // forks. A stale lock is not taken over, since two runs could both take it.
     try {
@@ -419,44 +410,48 @@ async function main(argv) {
         } else done();
       });
     }
-    const marker = readJson(markerFile) ?? { source, forks: [] };
-    if (!isObject(marker) || !Array.isArray(marker.forks)) fail(2, `refusing: ${markerFile} is not a rehearse's record; move ${dir} away`);
-    stopKept(marker.forks);
+    const previous = readJson(recordFile) ?? { source, forks: [] };
+    if (!isObject(previous) || !Array.isArray(previous.forks)) fail(2, `refusing: ${recordFile} is not a rehearse's record; move ${dir} away`);
+    // A kept fork's pid may since name another process: signal it only while its URL answers as its instance.
+    for (const f of previous.forks) {
+      if (anvilMetadata(f.url)?.instanceId !== f.instanceId) continue;
+      try { process.kill(f.pid); } catch {}
+    }
     if (stopOnly) {
-      save({ ...marker, forks: [] });
+      save({ ...previous, forks: [] });
       out(`stopped the forks of ${name}; its files stay in ${dir}\n`);
-      return name;
+      return;
     }
 
     const { net, chainMap, chains, home } = chainsOf(source);
     if (!chains.length) fail(2, `refusing ${source}: network.json names no chain to fork`);
-    const at = new Map();
+    const blocksByChain = new Map();
     for (const b of blocks) {
       const m = /^(?:([a-z][a-z0-9]*)=)?([0-9]+)$/.exec(b);
       const chain = m && (m[1] ?? home);
       if (!m || !chainMap[chain]) fail(2, `refusing --block ${b}: name a chain of ${source} as <chain>=<n>`);
-      at.set(chain, m[2]);
+      blocksByChain.set(chain, m[2]);
     }
     // One fork per upstream, so chains that name the same endpoint read one state.
-    const env = (c) => `${c.toUpperCase()}_RPC`;
+    const rpcVariable = (c) => `${c.toUpperCase()}_RPC`;
     const groups = new Map();
     for (const c of chains) {
       const id = chainMap[c].id;
       const [upstream, from] =
         c === home && process.env.R ? [process.env.R, "R"]
         : chainMap[c].rpc ? [chainMap[c].rpc, `alias ${chainMap[c].rpc}`]
-        : process.env[env(c)] ? [process.env[env(c)], env(c)]
+        : process.env[rpcVariable(c)] ? [process.env[rpcVariable(c)], rpcVariable(c)]
         : isLocal(id) ? ["", "an empty chain"]
-        : fail(2, `refusing ${source}: set ${c === home ? "R" : env(c)}, or give chain ${c} an rpc alias, for rehearse to fork`);
+        : fail(2, `refusing ${source}: set ${c === home ? "R" : rpcVariable(c)}, or give chain ${c} an rpc alias, for rehearse to fork`);
       const key = upstream || `chain ${id}`;
-      const g = groups.get(key) ?? { upstream, from, id, chains: [] };
-      g.chains.push(c);
-      if (at.has(c)) {
+      const group = groups.get(key) ?? { upstream, from, id, chains: [] };
+      group.chains.push(c);
+      if (blocksByChain.has(c)) {
         if (!upstream) fail(2, `refusing --block for ${c}: rehearse starts it as an empty chain`);
-        if (g.block && g.block !== at.get(c)) fail(2, `refusing --block: ${g.chains.join(" and ")} share one fork`);
-        g.block = at.get(c);
+        if (group.block && group.block !== blocksByChain.get(c)) fail(2, `refusing --block: ${group.chains.join(" and ")} share one fork`);
+        group.block = blocksByChain.get(c);
       }
-      groups.set(key, g);
+      groups.set(key, group);
     }
     if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).error) fail(2, "rehearse starts anvil, which is not on PATH: install Foundry");
     // forge signs with a keystore these name even under --unlocked. It loads .env only for names unset,
@@ -471,50 +466,51 @@ async function main(argv) {
       fail(2, "refusing: forge resolves an eth_rpc_url (.env or foundry.toml), which it would send to instead of the forks");
     }
 
+    // .sprue/ holds the lock.
     for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, { recursive: true, force: true });
     const forks = [];
-    const record = () => ({ source, forks: forks.map(({ child, ...f }) => f) });
+    const record = (kept = forks) => ({ source, forks: kept.map(({ child, ...f }) => f) });
     save(record());
     atExit = () => {
       // ChildProcess.kill signals nothing once the child has exited, so a reused pid is safe.
       // A fork that has not answered yet is not kept: no record could stop it.
       for (const f of forks) if (!keep || !f.instanceId) f.child.kill();
-      save({ ...record(), forks: keep ? record().forks.filter((f) => f.instanceId) : [] });
+      save(record(keep ? forks.filter((f) => f.instanceId) : []));
       rmSync(lock, { force: true });
       if (keep && forks.every((f) => f.instanceId)) {
         if (!home) out(`R=${forks[0].url}\n`);
-        for (const f of forks) for (const c of f.chains) out(`${c === home ? "R" : env(c)}=${f.url}\n`);
+        for (const f of forks) for (const c of f.chains) out(`${c === home ? "R" : rpcVariable(c)}=${f.url}\n`);
         err(`${NAME}: the forks keep running; stop them with ${NAME} rehearse --stop ${source}\n`);
       }
     };
     for (const f of readdirSync(`${DEPLOYMENTS}/${source}`)) {
       if (isFile(`${DEPLOYMENTS}/${source}/${f}`)) copyFileSync(`${DEPLOYMENTS}/${source}/${f}`, `${dir}/${f}`);
     }
-    for (const c of Object.values(chainMap)) if (isObject(c)) delete c.rpc;
+    for (const c of Object.values(chainMap)) delete c.rpc;
     writeFileSync(`${dir}/network.json`, `${JSON.stringify(net, null, 2)}\n`);
     out(`rehearsal ${name}: staged from ${DEPLOYMENTS}/${source}\n`);
 
-    for (const g of groups.values()) {
+    for (const group of groups.values()) {
       const log = `${dir}/.sprue/anvil-${forks.length}.log`;
       const fd = openSync(log, "w");
-      const args = g.upstream ? ["--fork-url", g.upstream, ...(g.block ? ["--fork-block-number", g.block] : [])] : ["--chain-id", String(g.id)];
+      const args = group.upstream ? ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])] : ["--chain-id", String(group.id)];
       const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd] });
       closeSync(fd);
       child.unref();
-      const fork = { chains: g.chains, pid: child.pid, url: "", instanceId: "", child };
+      const fork = { chains: group.chains, pid: child.pid, url: "", instanceId: "", child };
       forks.push(fork);
       for (let t = 0; !fork.url; t++) {
         const m = /Listening on ([0-9.]+:[0-9]+)/.exec(readFileSync(log, "utf8"));
         if (m) fork.url = `http://${m[1]}`;
-        else if (child.exitCode !== null || t > 1200) fail(1, `anvil did not start for ${g.chains.join(",")} from ${g.from}; see ${log}`);
+        else if (child.exitCode !== null || t > 1200) fail(1, `anvil did not start for ${group.chains.join(",")} from ${group.from}; see ${log}`);
         else await sleep(100);
       }
-      const meta = instance(fork.url);
+      const meta = anvilMetadata(fork.url);
       fork.instanceId = meta?.instanceId ?? "";
       save(record());
       const block = meta?.forkedNetwork?.forkBlockNumber;
-      out(`fork ${g.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`} ${fork.url} (from ${g.from})\n`);
-      for (const c of g.chains) process.env[c === home ? "R" : env(c)] = process.env[env(c)] = fork.url;
+      out(`fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`} ${fork.url} (from ${group.from})\n`);
+      for (const c of group.chains) process.env[c === home ? "R" : rpcVariable(c)] = process.env[rpcVariable(c)] = fork.url;
     }
     if (!home) process.env.R = forks[0].url;
     if (!process.env.DEPLOYER && typeof net.deployer === "string") process.env.DEPLOYER = net.deployer;
