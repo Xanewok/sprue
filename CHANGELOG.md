@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-A rehearsal network keeps forge's records in `<paths.deployments>/<network>/broadcast`: its
-commands start with `FOUNDRY_BROADCAST=` that path and its units read records only there. A send
-whose records forge would write elsewhere than its units read is refused, on any network. A
-rehearsal on a fork that keeps a public chain id no longer leaves records that the real run reads
-as a lost journal.
+A rehearsal network keeps forge's records and resume data in `<paths.deployments>/<network>/broadcast`
+and `<network>/cache`: its commands, its units' printed commands and the runner's plan start with
+`FOUNDRY_BROADCAST=` and `FOUNDRY_CACHE_PATH=` those paths, and its units refuse a send or a dry run
+without them. A rehearsal on a fork that keeps a public chain id no longer leaves records that the real
+run reads as a lost journal, or a snapshot or dry run that the real run's `--resume` sends. Before each
+send the runner checks the paths that `forge config --json` resolves, so a `foundry.toml` setting or an
+inherited variable cannot move them. An attended rehearsal requires Anvil or a `chains.local` id on
+every chain. Every `sprue.json` path accepts only `A-Z a-z 0-9 _ . / -`.
 
 ## 0.1.1
 

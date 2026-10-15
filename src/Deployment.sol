@@ -7,6 +7,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {chainId} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
+import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
 ///      from deploying it twice.
@@ -235,7 +236,9 @@ abstract contract Deployment is ForgeBroadcasts {
 
     function _recoverCommand(Create memory c) private view returns (string memory) {
         return string.concat(
-            ", or rebuild it: forge script ",
+            ", or rebuild it: ",
+            isRehearsalNetwork(_networkName()) ? outputsEnv(_dir()) : "",
+            "forge script ",
             _deployScript(),
             " --sig 'recover(string)' ",
             _networkName(),

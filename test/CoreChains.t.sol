@@ -64,7 +64,7 @@ contract CoreChainsTest is Test {
         string memory chains = '"local":[31337],"test":[],"unrecordedDeploys":{}';
         string memory shape = "sprue.json is not exactly paths and chains";
         string memory keys = "sprue.json: unknown or missing key under paths or chains";
-        string memory path = "sprue.json: a path is missing, empty or not a string";
+        string memory path = "sprue.json: paths must be nonempty strings using only A-Z a-z 0-9 _ . / -";
         string memory rehearsal = "sprue.json: paths.rehearsal is not <paths.deployments>/<lower-case name>";
         string memory list = "sprue.json: a chain list holds a non-number or 0";
         string memory exemption = "sprue.json: an exemption is not a decimal id";
@@ -80,6 +80,8 @@ contract CoreChainsTest is Test {
         _project(vm.replace(paths, '"graph":"g.s.sol",', '"graph":"g.s.sol","extra":"x",'), chains, keys);
         _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":""'), chains, path);
         _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":5'), chains, path);
+        _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":"g(x).s.sol"'), chains, path);
+        _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":"g$x.s.sol"'), chains, path);
         _project(vm.replace(paths, "d/fork-test", "other/fork-test"), chains, rehearsal);
         _project(vm.replace(paths, "d/fork-test", "d/Fork"), chains, rehearsal);
         _project(vm.replace(paths, "d/fork-test", "d/-fork"), chains, rehearsal);

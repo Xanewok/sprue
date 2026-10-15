@@ -111,20 +111,25 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
 `sprue --help` lists the flags and the exit codes. Two flags are a person's decision, never a
 way past a refusal: `--allow-dirty` starts on a dirty tree, and is refused on a live chain;
 `--unsafe-unexpected-deployer` lets a deploy step send with a key other than the pinned `deployer`.
+Before each send the runner checks `forge config --json`: forge must keep the records where the units
+read them, and a rehearsal's resume data in its own directory. A `foundry.toml` setting or an
+inherited variable that moves either path is refused.
 
 ## Configuration
 
 `sprue.json` has exactly the keys `paths` and `chains`:
 
 - `paths.graph`, `paths.units`, `paths.deployments`: the graph script, the unit directories (one
-  `Deploy*.s.sol` each), and the network directories.
+  `Deploy*.s.sol` each), and the network directories. Plan lines carry the paths unquoted, so
+  each path must be a nonempty string using only `A-Z a-z 0-9 _ . / -`.
 - `paths.rehearsal`: `<paths.deployments>/<name>`. A network of that name or `<name>-<suffix>` is a
-  rehearsal network, where an attended run may use a development node such as an Anvil fork.
-  Its commands keep forge's records in `<network>/broadcast`, so that a fork that keeps a public
-  chain id never touches the real chain's `broadcast/`; a send without that `FOUNDRY_BROADCAST=`
-  prefix is refused. Forge's `--resume` runs no script, so nothing checks it, and its resume data
-  in `cache/<script>/<chain id>/` stays shared: never `--resume` a run after rehearsing its script
-  on the same chain id. Units cannot see `foundry.toml`'s `broadcast` key, so leave it unset.
+  rehearsal network. An attended run on it requires Anvil or a `chains.local` id on every chain,
+  because its journals and records are git-ignored. Its commands keep forge's records and resume
+  data in `<network>/broadcast` and `<network>/cache`, so that a fork that keeps a public chain id
+  never touches the real chain's `broadcast/` or `cache/`, and the real run's `--resume` never sends
+  the rehearsal's transactions. A send or a dry run without that `FOUNDRY_BROADCAST=…
+  FOUNDRY_CACHE_PATH=…` prefix is refused, the graph's own `plan` and `rehearse` included.
+  `sprue plan` adds it; `rehearse` takes the prefix of its staged copy `<paths.rehearsal>-rehearse-<network>`.
 - `chains.default` (optional): the chain of a step without `.on(...)`. Without it, a network of
   one chain uses that chain.
 - `chains.local` and `chains.test`: chain ids of development and test chains. Any other is live.
