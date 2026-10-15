@@ -335,8 +335,8 @@ async function main(argv) {
   let [network, target] = pos;
   // The network name is printed into every command, so a space or a newline in it would add flags.
   if (!/^[a-z0-9][a-z0-9-]*$/.test(network)) fail(2, `refusing network '${network}': not a plain name`);
-  let netfile = `${DEPLOYMENTS}/${network}/network.json`;
-  if (!isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
+  const netfile = `${DEPLOYMENTS}/${network}/network.json`;
+  if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
   if (!stopOnly) known(target);
   const isLocal = (id) => Array.isArray(project.chains.local) && project.chains.local.includes(id);
   function chainsOf(name) {
@@ -370,10 +370,8 @@ async function main(argv) {
     if (source === rehearsal || source.startsWith(`${rehearsal}-`)) fail(2, `refusing ${source}: it is a rehearsal network; rehearse the network it copies`);
     if (!ignored(`${dir}/`)) fail(2, `refusing: git does not ignore ${dir}/, where rehearse writes`);
     const markerFile = `${dir}/.sprue/rehearsal.json`;
-    const save = (m) => {
-      mkdirSync(dirname(markerFile), { recursive: true });
-      writeFileSync(markerFile, `${JSON.stringify(m, null, 2)}\n`);
-    };
+    const lock = `${dir}/.sprue/lock`;
+    const save = (m) => writeFileSync(markerFile, `${JSON.stringify(m, null, 2)}\n`);
     const alive = (pid) => {
       try {
         process.kill(pid, 0);
@@ -394,25 +392,39 @@ async function main(argv) {
         try { process.kill(f.pid); } catch {}
       }
     };
-    if (existsSync(dir)) {
-      const marker = readJson(markerFile);
-      if (!isObject(marker) || !Array.isArray(marker.forks)) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
-      if (marker.runner && alive(marker.runner)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${marker.runner}`);
-      stopKept(marker.forks);
-      if (stopOnly) {
-        save({ ...marker, forks: [] });
-        out(`stopped the forks of ${name}; its files stay in ${dir}\n`);
-        return name;
+    if (!existsSync(dir)) {
+      if (stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
+      mkdirSync(dirname(markerFile), { recursive: true });
+      save({ source, forks: [] });
+    }
+    const marker = readJson(markerFile);
+    if (!isObject(marker) || !Array.isArray(marker.forks)) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
+    // Exclusive: two rehearses of one network would share its journals over different forks.
+    for (;;) {
+      try {
+        writeFileSync(lock, String(process.pid), { flag: "wx" });
+        break;
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+        const pid = Number(readFileSync(lock, "utf8"));
+        if (alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
+        rmSync(lock, { force: true });
       }
     }
-    if (stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
+    atExit = () => rmSync(lock, { force: true });
+    stopKept(marker.forks);
+    if (stopOnly) {
+      save({ ...marker, forks: [] });
+      out(`stopped the forks of ${name}; its files stay in ${dir}\n`);
+      return name;
+    }
 
     const { net, chainMap, chains, home } = chainsOf(source);
     if (!chains.length) fail(2, `refusing ${source}: network.json names no chain to fork`);
     const at = new Map();
     for (const b of blocks) {
       const m = /^(?:([a-z][a-z0-9]*)=)?([0-9]+)$/.exec(b);
-      const chain = m && (m[1] ?? (home || (chains.length === 1 ? chains[0] : "")));
+      const chain = m && (m[1] ?? home);
       if (!m || !chainMap[chain]) fail(2, `refusing --block ${b}: name a chain of ${source} as <chain>=<n>`);
       at.set(chain, m[2]);
     }
@@ -444,14 +456,21 @@ async function main(argv) {
     for (const v of wallet) delete process.env[v];
     const named = isFile(".env") && new RegExp(`^\\s*(export\\s+)?(${wallet.join("|")})\\s*=`, "m").exec(readFileSync(".env", "utf8"));
     if (named) fail(2, `refusing: .env sets ${named[2]}, and forge would sign with that keystore; rehearse holds no key`);
+    // forge sends to eth_rpc_url over --rpc-url.
+    delete process.env.FOUNDRY_ETH_RPC_URL;
+    if (JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).eth_rpc_url != null) {
+      fail(2, "refusing: forge resolves an eth_rpc_url (.env or foundry.toml), which it would send to instead of the forks");
+    }
 
-    rmSync(dir, { recursive: true, force: true });
+    for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, { recursive: true, force: true });
     const forks = [];
-    const marker = () => ({ source, runner: process.pid, forks: forks.map(({ child, ...f }) => f) });
-    save(marker());
+    const record = () => ({ source, forks: forks.map(({ child, ...f }) => f) });
+    save(record());
     atExit = () => {
-      for (const f of forks) if (!keep) try { process.kill(f.child.pid); } catch {}
-      save({ ...marker(), runner: 0, forks: keep ? marker().forks : [] });
+      // ChildProcess.kill signals nothing once the child has exited, so a reused pid is safe.
+      for (const f of forks) if (!keep) f.child.kill();
+      save({ ...record(), forks: keep ? record().forks : [] });
+      rmSync(lock, { force: true });
       if (keep && forks.every((f) => f.url)) {
         if (!home) out(`R=${forks[0].url}\n`);
         for (const f of forks) for (const c of f.chains) out(`${c === home ? "R" : env(c)}=${f.url}\n`);
@@ -488,7 +507,7 @@ async function main(argv) {
       }
       const meta = instance(fork.url);
       fork.instanceId = meta?.instanceId ?? "";
-      save(marker());
+      save(record());
       const block = meta?.forkedNetwork?.forkBlockNumber;
       out(`fork ${g.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`} ${fork.url} (from ${g.from})\n`);
       for (const c of g.chains) process.env[c === home ? "R" : env(c)] = process.env[env(c)] = fork.url;
@@ -505,7 +524,6 @@ async function main(argv) {
     const name = await rehearse(network);
     if (stopOnly) return 0;
     network = name;
-    netfile = `${DEPLOYMENTS}/${network}/network.json`;
   }
   const R = process.env.R ?? "";
   if (!R) fail(2, "set R to the RPC the plan reads");

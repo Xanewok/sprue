@@ -128,11 +128,13 @@ Each chain forks from `R` (the default chain only), else its `rpc` alias, else `
 latest block or `--block [<chain>=]<n>`; a chain in `chains.local` with none of these starts empty. The
 copy keeps the journals, so what landed stays done, and drops the aliases, so every command reads a fork.
 Senders are impersonated: `DEPLOYER` (else the pinned `deployer`) and each `.by(...)`. No key signs, so a
-signer flag is refused, and so is a `.env` that names a keystore. It runs unattended, on a dirty tree too
+signer flag is refused, and so is a `.env` that names a keystore; so is an `eth_rpc_url` that forge
+resolves, which it would send to instead of the forks. It runs unattended, on a dirty tree too
 (the journals record it), and moves each fork's clock to the next date. The forks stop at the end and on
 Ctrl-C. `--keep` leaves them running and prints their `R=` and `<CHAIN>_RPC=` lines, until the next
-`rehearse` of the network or `sprue rehearse --stop <network>`. Every `rehearse` starts over, and deletes
-the copy only if a `rehearse` staged it.
+`rehearse` of the network or `sprue rehearse --stop <network>`; a kept fork that does not answer is taken
+as stopped. Every `rehearse` starts over, one at a time per network, and deletes the copy only if a
+`rehearse` staged it.
 
 A rehearsal shows what Anvil reproduces. With `--block` before a landed unit's deployment, its copied
 journal still says done; a bridge message between forks is never delivered.

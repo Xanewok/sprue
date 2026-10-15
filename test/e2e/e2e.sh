@@ -294,8 +294,9 @@ scenario_rehearse() {
   cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
   b0=$(cast block-number --rpc-url "$LIVE")
   local go=(env R="$LIVE" DEPLOYER="$dead" G rehearse)
-  # An inherited keystore name, which forge would fail to find, is cleared.
-  out=$(ETH_KEYSTORE_ACCOUNT=nosuch "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
+  # Inherited, a keystore name that forge would fail to find, and an eth_rpc_url that forge would send to
+  # over --rpc-url, are dropped.
+  out=$(ETH_KEYSTORE_ACCOUNT=nosuch FOUNDRY_ETH_RPC_URL=$LIVE "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
   [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
   jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
@@ -319,17 +320,21 @@ scenario_rehearse() {
   url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' "$W.int" | awk '{print $NF}')
   kill -INT "$pid"; wait "$pid" || rc=$?
   [ "$rc" = 130 ] || die "rehearse: an interrupt exited $rc, not 130"
-  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: an interrupt left the fork running"
+  ! cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 && [ -n "$url" ] || die "rehearse: an interrupt left the fork '$url' running"
   rm -f "$W.int"
 
   # --keep leaves the fork running and prints its variables. The next rehearse stops it and starts over;
   # --stop stops a kept one.
   url=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
-  [ "$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "$url")" != 0x ] || die "rehearse: the kept fork has no token"
+  out=$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "${url:-none}") && [ "$out" != 0x ] || die "rehearse: no kept fork with the token at '$url'"
   exits 0 "${go[@]}" main token.check
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
   url=$("${go[@]}" main token.check --keep 2>/dev/null | sed -n 's/^R=//p')
+  cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 || die "rehearse: no kept fork at '$url'"
+  # --stop reads only the copy, so it stops forks whose source network is gone.
+  mv deployments/main "$W.main"
   exits 0 G rehearse --stop main
+  mv "$W.main" deployments/main
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: --stop left the fork running"
 
   refused 'no key signs' "${go[@]}" main token.check --account e2e
@@ -337,6 +342,8 @@ scenario_rehearse() {
   # forge reads .env only for names unset, so a keystore named there is refused.
   echo 'ETH_KEYSTORE_ACCOUNT=nosuch' >.env
   refused 'sets ETH_KEYSTORE_ACCOUNT' "${go[@]}" main token.check
+  echo "FOUNDRY_ETH_RPC_URL=$LIVE" >.env
+  refused 'resolves an eth_rpc_url' "${go[@]}" main token.check
   rm .env
   refused 'set R' env -u R G rehearse main token.check
   refused 'usage:' "${go[@]}" --wait main token.check
@@ -346,10 +353,9 @@ scenario_rehearse() {
   mkdir -p "$W.noanvil"; ln -sf "$(command -v forge)" "$(command -v cast)" "$(command -v git)" "$W.noanvil/"
   refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" R="$LIVE" DEPLOYER="$dead" G rehearse main token.check
   rm -rf "$W.noanvil" deployments/rehearsal-hand
-  local m=$d/.sprue/rehearsal.json
-  jq --argjson p $$ '.runner = $p' "$m" >"$W.marker" && mv "$W.marker" "$m"
+  echo $$ >"$d/.sprue/lock"
   refused 'is running, as pid' "${go[@]}" main token.check
-  jq '.runner = 0' "$m" >"$W.marker" && mv "$W.marker" "$m"
+  rm "$d/.sprue/lock"
   echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
 }
 
