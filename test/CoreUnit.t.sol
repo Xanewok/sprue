@@ -613,7 +613,7 @@ contract CoreUnitTest is Test {
     }
 
     function test_done_onARehearsalNetworkPrintsThePlanWithItsOutputsPrefix() public {
-        _network("fork-test-core-next", FREE, "");
+        _network("rehearsal-core-next", FREE, "");
         assertEq(
             unit.deploy(network),
             string.concat(
@@ -630,7 +630,7 @@ contract CoreUnitTest is Test {
 
     /// @dev A rehearsal network's step refuses to run without its outputs prefix, so its command has it.
     function test_recover_commandOnARehearsalNetworkKeepsForgesOutputsThere() public {
-        string memory lost = _lose("fork-test-core-recover");
+        string memory lost = _lose("rehearsal-core-recover");
         address someone = makeAddr("someone else");
         _writeRecord(_run(block.chainid, _sent(lost, someone)));
 
@@ -865,7 +865,7 @@ contract CoreUnitTest is Test {
 
     function _network(string memory name, uint256 chainId, string memory pin) private {
         vm.chainId(chainId);
-        network = vm.indexOf(name, "fork-test-") == 0 ? name : string.concat("core-", name);
+        network = vm.indexOf(name, "rehearsal-") == 0 ? name : string.concat("core-", name);
         dir = string.concat("cache/core-test/deployments/", network);
         if (vm.exists(dir)) vm.removeDir(dir, true);
         vm.createDir(dir, true);

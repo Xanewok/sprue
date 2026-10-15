@@ -3,7 +3,7 @@
     "graph": "script/DeployGraph.s.sol",
     "units": "script/units",
     "deployments": "deployments",
-    "rehearsal": "deployments/fork-test"
+    "rehearsal": "deployments/rehearsal"
   },
   "chains": {
     "default": "l2",

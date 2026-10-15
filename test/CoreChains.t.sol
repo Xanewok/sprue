@@ -60,7 +60,7 @@ contract CoreChainsTest is Test {
 
     /// @dev Each file breaks one rule, so each check must refuse it alone.
     function test_project_isRefusedUnlessItIsExactlyTheShape() public {
-        string memory paths = '{"graph":"g.s.sol","units":"u","deployments":"d","rehearsal":"d/fork-test"}';
+        string memory paths = '{"graph":"g.s.sol","units":"u","deployments":"d","rehearsal":"d/rehearsal"}';
         string memory chains = '"local":[31337],"test":[],"unrecordedDeploys":{}';
         string memory shape = "sprue.json is not exactly paths and chains";
         string memory keys = "sprue.json: unknown or missing key under paths or chains";
@@ -82,9 +82,9 @@ contract CoreChainsTest is Test {
         _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":5'), chains, path);
         _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":"g(x).s.sol"'), chains, path);
         _project(vm.replace(paths, '"graph":"g.s.sol"', '"graph":"g$x.s.sol"'), chains, path);
-        _project(vm.replace(paths, "d/fork-test", "other/fork-test"), chains, rehearsal);
-        _project(vm.replace(paths, "d/fork-test", "d/Fork"), chains, rehearsal);
-        _project(vm.replace(paths, "d/fork-test", "d/-fork"), chains, rehearsal);
+        _project(vm.replace(paths, "d/rehearsal", "other/rehearsal"), chains, rehearsal);
+        _project(vm.replace(paths, "d/rehearsal", "d/Fork"), chains, rehearsal);
+        _project(vm.replace(paths, "d/rehearsal", "d/-fork"), chains, rehearsal);
         _project(paths, '"local":[0],"test":[],"unrecordedDeploys":{}', list);
         _project(paths, '"local":["31337"],"test":[],"unrecordedDeploys":{}', list);
         _project(paths, '"local":[],"test":[0],"unrecordedDeploys":{}', list);

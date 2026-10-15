@@ -23,7 +23,7 @@ contract NoDefaultGraph is FileGraph {
 }
 
 contract FileGraphChainsTest is Test, Declares {
-    string private constant NET = "fork-test-filegraph-chains";
+    string private constant NET = "rehearsal-filegraph-chains";
 
     function _graph(bool named) private returns (NoDefaultGraph) {
         Step[] memory s = new Step[](1);
@@ -59,7 +59,7 @@ contract FileGraphChainsTest is Test, Declares {
     /// @dev Neither refusal is the command's: a step not judged before its date prints only the date,
     ///      and the default chain a step reads is no chain it sends on.
     function test_noDefaultChain_refusesAnUnjudgedStepsDate_andADefaultRead() public {
-        string memory net = "fork-test-filegraph-chains-dated";
+        string memory net = "rehearsal-filegraph-chains-dated";
         vm.createDir(string.concat("deployments/", net), true);
         vm.writeFile(
             string.concat("deployments/", net, "/network.json"),
@@ -135,7 +135,7 @@ contract FileGraphProjectTest is Test, Declares {
     }
 
     function test_plan_listsTheChainsAndTheVariablesACommandReads() public {
-        _network("fork-test-fgp-chains", vm.toString(owner), "");
+        _network("rehearsal-fgp-chains", vm.toString(owner), "");
 
         assertEq(
             _plan(_fund().on("a").reads("ghost").reads("b")),
@@ -173,7 +173,7 @@ contract FileGraphProjectTest is Test, Declares {
     }
 
     function test_plan_refusesAnInputDateOnAChainOtherThanTheDefault() public {
-        _network("fork-test-fgp-clock", vm.toString(owner), "");
+        _network("rehearsal-fgp-clock", vm.toString(owner), "");
         assertEq(
             _plan(_fund().on("l2").notBefore("network.openAt")),
             string.concat(HEADER, "# not before 100 fixture.fund\n# then plan again fixture.fund\n")
@@ -193,7 +193,7 @@ contract FileGraphProjectTest is Test, Declares {
     }
 
     function test_plan_refusesWhatTheNetworkOrTheProjectCannotServe() public {
-        _network("fork-test-fgp-refusals", vm.toString(owner), "");
+        _network("rehearsal-fgp-refusals", vm.toString(owner), "");
         _refuses(
             _fund().on("ghost"), string.concat("fixture.fund sends on ghost, which ", net, "'s network.json lacks")
         );
@@ -224,7 +224,7 @@ contract FileGraphProjectTest is Test, Declares {
     function test_rehearse_stagesTheNetworkAndSendsOnlyAsTheStepsSender() public {
         _network("filegraph-rehearse", vm.toString(address(this)), "");
         string memory dir = string.concat("deployments/", net);
-        string memory staged = "deployments/fork-test-rehearse-filegraph-rehearse";
+        string memory staged = "deployments/rehearsal-rehearse-filegraph-rehearse";
         vm.writeFile(string.concat(dir, "/foo.input.json"), "{}");
         vm.createDir(string.concat(dir, "/sub"), true);
         vm.writeFile(string.concat(dir, "/sub/inner.json"), "{}");
@@ -256,9 +256,9 @@ contract FileGraphProjectTest is Test, Declares {
     }
 
     function test_isRehearsalNetwork_isThePrefixAloneOrWithADashedSuffix() public view {
-        assertTrue(isRehearsalNetwork("fork-test") && isRehearsalNetwork("fork-test-x"));
+        assertTrue(isRehearsalNetwork("rehearsal") && isRehearsalNetwork("rehearsal-x"));
         assertFalse(
-            isRehearsalNetwork("fork-testing") || isRehearsalNetwork("fork-tes") || isRehearsalNetwork("fork-tesx")
+            isRehearsalNetwork("rehearsaling") || isRehearsalNetwork("fork-tes") || isRehearsalNetwork("fork-tesx")
         );
         assertFalse(isRehearsalNetwork("mainnet"));
     }
@@ -268,7 +268,7 @@ contract FileGraphProjectTest is Test, Declares {
     }
 
     function test_plan_aSlowStepEndsItsCommandWithTheFlag() public {
-        _network("fork-test-fgp-slow", vm.toString(owner), "");
+        _network("rehearsal-fgp-slow", vm.toString(owner), "");
         assertTrue(vm.contains(_plan(_fund().slow()), string.concat(" --sender $DEPLOYER --slow\n")));
         vm.removeDir(string.concat("deployments/", net), true);
     }

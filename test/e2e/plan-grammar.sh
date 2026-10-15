@@ -11,9 +11,9 @@ trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/deployments/net" "$W/script"
 cd "$W"
 git init -q
-printf 'deployments/fork-test*/\n' >.gitignore
+printf 'deployments/rehearsal*/\n' >.gitignore
 cat >sprue.json <<'JSON'
-{"paths":{"graph":"script/G.s.sol","units":"script/units","deployments":"deployments","rehearsal":"deployments/fork-test"},
+{"paths":{"graph":"script/G.s.sol","units":"script/units","deployments":"deployments","rehearsal":"deployments/rehearsal"},
  "chains":{"default":"l2","local":[31337],"test":[],"unrecordedDeploys":{}}}
 JSON
 echo '{"chains":{"l2":{"id":31337}}}' >deployments/net/network.json
@@ -43,7 +43,7 @@ done
 run_line() {
   local net=net
   # A rehearsal network's line runs on that network, the only one whose records it may move.
-  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(fork-test-[a-z0-9-]+)/broadcast\ FOUNDRY_CACHE_PATH= ]]; then
+  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(rehearsal-[a-z0-9-]+)/broadcast\ FOUNDRY_CACHE_PATH= ]]; then
     net=${BASH_REMATCH[1]}; mkdir -p "deployments/$net"; cp deployments/net/network.json "deployments/$net/"
   fi
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK

@@ -12,7 +12,7 @@ PIDS=
 
 die() { echo "FAIL $*" >&2; exit 1; }
 # The example project is copied here and runs there. Only `forge test` in scenario_grammar
-# runs in the checkout, as it does in CI: it writes out/, cache/ and its own deployments/fork-test-*.
+# runs in the checkout, as it does in CI: it writes out/, cache/ and its own deployments/rehearsal-*.
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
@@ -271,9 +271,9 @@ scenario_two_chain() {
   [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
   all_done two-chain "$(G plan local receiver.notify.2 2>>log)"
   # A step that selects its own forks never reads its journal through _use, and is refused all the same.
-  cp -R deployments/local deployments/fork-test-two
+  cp -R deployments/local deployments/rehearsal-two
   out=$(forge script script/deploy/units/receiver/DeployReceiver.s.sol:DeployReceiver --sig 'notify(string,uint8)' \
-    fork-test-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
+    rehearsal-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "two-chain: a dry run without the prefix: ${out: -400}"
   cd "$W"; rm -rf "$d"
   echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
@@ -282,7 +282,7 @@ scenario_two_chain() {
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
 scenario_attended() {
   command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip attended: it needs python3 and setsid"; return; }
-  local net=fork-test-live out rc n0 account=e2e
+  local net=rehearsal-live out rc n0 account=e2e
   # The keystore lives in a home of its own; the compilers are shared.
   mkdir -p "$W/home/.foundry" "$W/home/.local/share"
   [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
@@ -358,7 +358,7 @@ scenario_attended() {
   ! grep -q '^# cannot reach' <<<"$out" || die "attended: the plan could not probe a step: $out"
   grep -q "forge script script/deploy/units/vault" <<<"$out" || die "attended: the plan has no vault step: $out"
   # --resume can send the graph's saved simulation, so rehearse keeps both paths under the staged network.
-  local staged=deployments/fork-test-rehearse-$net
+  local staged=deployments/rehearsal-rehearse-$net
   local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS")
   out=$("${rehearse[@]}" 2>&1) && die "attended: the graph rehearsed without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a rehearse without the prefix: ${out: -400}"
@@ -368,7 +368,7 @@ scenario_attended() {
   [ -z "$(ls -d broadcast/DeployGraph.s.sol cache/DeployGraph.s.sol 2>/dev/null)" ] || die "attended: a rehearse kept records or resume data outside its network"
   # A rehearsal network's journals leave the tree clean only while git ignores them, which the runner checks.
   exits 0 tty no "${run[@]}"
-  sed -i.bak '/fork-test/d' .gitignore && rm .gitignore.bak
+  sed -i.bak '/rehearsal/d' .gitignore && rm .gitignore.bak
   git commit -qam unignore
   refused 'git does not ignore' tty no "${run[@]}"
   echo "ok  attended refusals send nothing, a change during the question stops the send, no sends nothing, yes sends once and asks every step, the rehearsal directories need the ignore line"
