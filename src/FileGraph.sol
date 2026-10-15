@@ -65,8 +65,7 @@ abstract contract FileGraph is Graph {
 
     /// @dev A script reads a chain's `<CHAIN>_RPC` only when the chain has no alias. The assignments
     ///      follow `network.json`'s `chains` order, then any other chain in the order the step reads
-    ///      it. Replaces empty names in `chains` with the default chain, in place. A rehearsal
-    ///      network's commands first move forge's outputs under the network (`outputsEnv`).
+    ///      it. Replaces empty names in `chains` with the default chain, in place.
     function _chainEnv(string memory net, string[] memory chains) internal view override returns (string memory out) {
         if (isRehearsalNetwork(net)) out = outputsEnv(string.concat(deploymentsDir(), "/", net));
         string memory file = _networkFile(net);

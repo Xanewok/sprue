@@ -16,7 +16,7 @@ die() { echo "FAIL $*" >&2; exit 1; }
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.geth"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
 }
 trap cleanup EXIT
 
@@ -138,9 +138,9 @@ scenario_failure() {
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml.
   network elsewhere 31337; local n0; n0=$(nonce)
-  refused 'forge config puts this line.s records in elsewhere' env FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check
+  refused 'forge would keep this run.s records in elsewhere, not broadcast' env FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check
   mv foundry.toml foundry.toml.ok; { echo '[profile.default]'; echo 'broadcast = "elsewhere"'; tail -n +2 foundry.toml.ok; } >foundry.toml
-  refused 'forge config puts this line.s records in elsewhere' G run elsewhere token.check
+  refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
   [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
   echo "ok  a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
@@ -298,12 +298,11 @@ scenario_attended() {
   refused 'no terminal' setsid -w "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
-  # A rehearsal records only in a git-ignored directory, so it never sends to a real node.
-  geth_stub "$W.geth"
-  PATH=$W.geth:$PATH refused 'is not a development node' tty no "${run[@]}"
+  # Rehearsal records are git-ignored, so an attended rehearsal must use development nodes.
+  geth_stub "$W.bin"
+  PATH=$W.bin:$PATH refused 'is not a development node' tty no "${run[@]}"
   # A node that does not name its client could be a development node, so it is refused too.
-  mkdir -p "$W.bin"; printf '#!/bin/sh\n[ "$1 $2" != "rpc web3_clientVersion" ] || exit 1\nexec %s "$@"\n' "$(command -v cast)" >"$W.bin/cast"
-  chmod +x "$W.bin/cast"
+  printf '#!/bin/sh\n[ "$1 $2" != "rpc web3_clientVersion" ] || exit 1\nexec %s "$@"\n' "$(command -v cast)" >"$W.bin/cast"
   PATH=$W.bin:$PATH refused 'cannot read the node' tty no G run livenet token.check --account "$account"
   refused 'exactly one of' tty no G run "$net" token.check
   echo dirt >>README.md
@@ -354,11 +353,11 @@ scenario_attended() {
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a dry run without the prefix: ${out: -400}"
   out=$(FOUNDRY_BROADCAST=deployments/$net/broadcast "${check[@]}" 2>&1) && die "attended: a rehearsal ran with resume data in cache/"
   grep -q 'forge would keep this run.s resume data in cache, not' <<<"$out" || die "attended: resume data in cache/: ${out: -400}"
-  # The plan, run without the prefix, still probes a step's done view, which reads the journal the same way.
+  # sprue plan passes the prefix to the graph's probes of done views, not only to the commands it prints.
   out=$(G plan "$net" vault.check 2>&1) || die "attended: the plan of the next unit failed: ${out: -400}"
   ! grep -q '^# cannot reach' <<<"$out" || die "attended: the plan could not probe a step: $out"
   grep -q "forge script script/deploy/units/vault" <<<"$out" || die "attended: the plan has no vault step: $out"
-  # The graph's rehearse sends every step from inside one dry run, which --resume can send too.
+  # --resume can send the graph's saved simulation, so rehearse keeps both paths under the staged network.
   local staged=deployments/fork-test-rehearse-$net
   local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS")
   out=$("${rehearse[@]}" 2>&1) && die "attended: the graph rehearsed without its prefix"

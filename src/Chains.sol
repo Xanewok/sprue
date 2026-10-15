@@ -143,10 +143,10 @@ function validatedProject(string memory path) view returns (string memory json) 
     string[4] memory keys = ["graph", "units", "deployments", "rehearsal"];
     for (uint256 i; i < keys.length; ++i) {
         string memory key = string.concat(".paths.", keys[i]);
+        string memory path = cheats.keyExistsJson(json, key) ? pathIn(json, keys[i]) : "";
         require(
-            cheats.keyExistsJson(json, key) && bytes(pathIn(json, keys[i])).length != 0
-                && _encodes(json, key, abi.encode(pathIn(json, keys[i]))) && _shellSafe(pathIn(json, keys[i])),
-            "sprue.json: a path is missing, empty, not a string or not of A-Z a-z 0-9 _ . / -"
+            bytes(path).length != 0 && _encodes(json, key, abi.encode(path)) && _shellSafe(path),
+            "sprue.json: paths must be nonempty strings using only A-Z a-z 0-9 _ . / -"
         );
     }
     string memory prefix = pathIn(json, "deployments");
@@ -188,7 +188,6 @@ function validatedProject(string memory path) view returns (string memory json) 
     }
 }
 
-/// @dev What the runner accepts of a network name: `[a-z0-9-]`, not starting with `-`.
 /// @dev Plan lines carry paths unquoted, so a path holds no character that a shell acts on.
 function _shellSafe(string memory path) pure returns (bool) {
     bytes memory b = bytes(path);
@@ -200,6 +199,7 @@ function _shellSafe(string memory path) pure returns (bool) {
     return true;
 }
 
+/// @dev What the runner accepts of a network name: `[a-z0-9-]`, not starting with `-`.
 function _plainName(string memory name) pure returns (bool) {
     bytes memory b = bytes(name);
     if (b.length == 0 || b[0] == "-") return false;

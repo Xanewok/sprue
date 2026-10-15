@@ -88,20 +88,14 @@ for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PW
     fail=$((fail + 1)); echo "FAIL ran hostile: $prefix${lines[0]}" >&2
   fi
 done
-rehearsed=$(grep -m1 '^FOUNDRY_BROADCAST=' "$CORPUS" || true)
-cache=$(grep -o 'FOUNDRY_CACHE_PATH=[^ ]* ' <<<"$rehearsed" || true)
-for hostile in "${rehearsed/"$cache"/}" "${rehearsed/\/cache /\/elsewhere }"; do
+rehearsalLine=$(grep -m1 '^FOUNDRY_BROADCAST=' "$CORPUS" || true)
+cacheAssignment=$(grep -o 'FOUNDRY_CACHE_PATH=[^ ]* ' <<<"$rehearsalLine" || true)
+for hostile in "${rehearsalLine/"$cacheAssignment"/}" "${rehearsalLine/\/cache /\/elsewhere }"; do
   total=$((total + 1))
-  if [ -z "$cache" ] || [ "${#hostile}" -lt $((${#rehearsed} - ${#cache})) ] || run_line "$hostile" || [ -e MARK ]; then
+  if [ -z "$cacheAssignment" ] || run_line "$hostile" || [ -e MARK ]; then
     fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
   fi
 done
-# What forge resolves counts, not the line: an inherited variable moves a live line's records.
-live=$(grep -m1 -v '^FOUNDRY_BROADCAST=' "$CORPUS")
-total=$((total + 1))
-if FOUNDRY_BROADCAST=elsewhere run_line "$live"; then
-  fail=$((fail + 1)); echo "FAIL ran with forge's records elsewhere: $live" >&2
-fi
 # A variable that holds whitespace or a flag stays one argument of the command.
 for var in R DEPLOYER; do
   total=$((total + 1))
@@ -126,7 +120,7 @@ for bad in 'deployments(archive)' 'deployments$archive'; do
   cp sprue.json sprue.json.ok
   sed -i.bak "s|\"graph\":\"script/G.s.sol\"|\"graph\":\"script/$bad.s.sol\"|" sprue.json && rm sprue.json.bak
   rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
-  { [ "$rc" = 2 ] && grep -q 'each of A-Z' out; } || { fail=$((fail + 1)); echo "FAIL a path of $bad exited $rc: $(<out)" >&2; }
+  { [ "$rc" = 2 ] && grep -q 'nonempty strings using only A-Z' out; } || { fail=$((fail + 1)); echo "FAIL a path of $bad exited $rc: $(<out)" >&2; }
   mv sprue.json.ok sprue.json
 done
 # A line JavaScript ends at U+2028 is still one plan line, and refused: dropped, the plan would look

@@ -24,9 +24,10 @@ function isRehearsalNetwork(string memory network) view returns (bool) {
     return true;
 }
 
-/// @dev The assignments that keep forge's records and resume data under a rehearsal network's `dir`,
-///      so that a fork keeping a public chain id never reads or writes that chain's: a live `--resume`
-///      loads the snapshot in `<cache_path>/<script>/<chain id>/` and publishes it as the live records.
+/// @dev The assignments that keep forge's records and resume data under a rehearsal network's `dir`:
+///      a fork can keep a live chain id, and a live `--resume` publishes whatever snapshot
+///      `<cache_path>/<script>/<chain id>/` holds as the live records. The trailing space lets a caller
+///      prepend the assignments to a command.
 function outputsEnv(string memory dir) pure returns (string memory) {
     return string.concat("FOUNDRY_BROADCAST=", dir, "/broadcast FOUNDRY_CACHE_PATH=", dir, "/cache ");
 }
@@ -80,13 +81,15 @@ abstract contract Journal is Script {
         return _usedNetwork;
     }
 
-    /// @dev Sets the network the unit works on. Reverts on an empty name, and on a run whose records
-    ///      or resume data forge would keep elsewhere than the network's.
+    /// @dev Sets the network the unit works on. Reverts on an empty name, and on a send or dry run
+    ///      whose environment puts forge's records (on a rehearsal network, also its resume data)
+    ///      elsewhere than the network's.
     function _adopt(string memory network) internal {
         require(bytes(network).length != 0, string.concat("name the network: a directory under ", _deployments(), "/"));
         _usedNetwork = network;
-        // A dry run too, the graph's plan and rehearse included: `--resume` sends a script's saved dry
-        // run when it has no saved broadcast, and no caller tells a probe from a step that broadcasts.
+        // Here and not in `_use`: a step that selects its own forks never calls `_use`. A dry run too, the
+        // graph's plan and rehearse included: `--resume` sends a saved dry run when no broadcast was
+        // saved, and no caller tells a probe from a step that broadcasts.
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun)) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
             if (_rehearsal()) {
@@ -113,15 +116,18 @@ abstract contract Journal is Script {
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
     }
 
-    /// @dev Reads only the environment: the runner checks `forge config`, which `foundry.toml` moves too.
-    function _requireOutput(string memory what, string memory key, string memory unset, string memory own)
+    /// @dev Reads only the environment, which cannot see `foundry.toml`: the runner checks
+    ///      `forge config` too.
+    function _requireOutput(string memory label, string memory variable, string memory unset, string memory expected)
         internal
         view
     {
-        string memory dir = vm.envOr(key, unset);
+        string memory actual = vm.envOr(variable, unset);
         require(
-            keccak256(bytes(dir)) == keccak256(bytes(own)),
-            string.concat("forge would keep this run's ", what, " in ", dir, ", not ", own, ": run it as plan prints")
+            keccak256(bytes(actual)) == keccak256(bytes(expected)),
+            string.concat(
+                "forge would keep this run's ", label, " in ", actual, ", not ", expected, ": run it as plan prints"
+            )
         );
     }
 
@@ -210,8 +216,8 @@ abstract contract Journal is Script {
     /// @dev The directory of broadcast records, with `<script>/<chain id>/<step>-latest.json`
     ///      beneath it. A rehearsal network keeps its own, so that a fork keeping a public chain id
     ///      never reads or writes that chain's. `forge test` writes none, so a test keeps its own
-    ///      too, where no local run's record can reach it. `_use` refuses a send whose records forge
-    ///      would write elsewhere.
+    ///      too, where no local run's record can reach it. `_adopt` refuses a send or dry run whose
+    ///      records forge would write elsewhere.
     function _records() internal view returns (string memory) {
         return
             vm.isContext(VmSafe.ForgeContext.Test) || _rehearsal() ? string.concat(_dir(), "/broadcast") : "broadcast";

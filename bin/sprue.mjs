@@ -31,8 +31,8 @@ run flags may appear anywhere after the command.
 
 On a network whose chains sprue.json lists all as local it sends unattended, sending from Anvil's unlocked
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
-terminal and no CI variable, refuses a development node unless the network is a rehearsal network (the name that paths.rehearsal ends in),
-signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
+terminal and no CI variable. A rehearsal network (the name that paths.rehearsal ends in, or it and -<suffix>) requires
+Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
 interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
@@ -249,7 +249,7 @@ async function main(argv) {
       Object.values(project.paths).every((v) => typeof v === "string" && /^[A-Za-z0-9_./-]+$/.test(v))
     )
   ) {
-    fail(2, `refusing: ${PROJECT} is not a file of exactly paths and chains, with the paths deployments, graph, rehearsal and units, each of A-Z a-z 0-9 _ . / -`);
+    fail(2, `refusing: ${PROJECT} must hold exactly paths and chains; paths must hold exactly deployments, graph, rehearsal and units, as nonempty strings using only A-Z a-z 0-9 _ . / -`);
   }
   const { deployments: DEPLOYMENTS, graph: GRAPH_SCRIPT, rehearsal: REHEARSAL } = project.paths;
   // The graph contract is named like its script file, and the saved export lies beside it.
@@ -322,10 +322,10 @@ async function main(argv) {
   if (!R) fail(2, "set R to the RPC the plan reads");
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
-  const records = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
-  const cache = records && `${DEPLOYMENTS}/${network}/cache`;
+  const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
+  const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
   const plan = () =>
-    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", R], records ? { FOUNDRY_BROADCAST: records, FOUNDRY_CACHE_PATH: cache } : {});
+    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", R], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
   if (verb === "plan") {
     for (const l of plan()) out(`${l}\n`);
     return 0;
@@ -413,13 +413,14 @@ async function main(argv) {
     // Outside a rehearsal network a development node is refused: a run on a fork or devnet would write
     // the network's committed journals and records. On one it is required: a real send would be
     // recorded only in a git-ignored directory.
+    // A rehearsal's chains.local devnet need not name its client.
     for (const rpc of endpoints) {
-      const v = clientVersion(rpc);
-      if (v.status !== 0) fail(2, `cannot read the node at ${rpc}`);
       const id = chainId(rpc);
+      const v = clientVersion(rpc);
+      if (v.status !== 0 && !(broadcastDir && isLocal(Number(id)))) fail(2, `cannot read the node at ${rpc}`);
       const dev = isAnvil(v) || isLocal(Number(id));
-      if (dev && !records) fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
-      if (!dev && records) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal network sends only to a fork or devnet`);
+      if (dev && !broadcastDir) fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
+      if (!dev && broadcastDir) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal requires Anvil or a chains.local id`);
     }
     signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
@@ -580,16 +581,18 @@ async function main(argv) {
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
       else if (line) {
         const cmd = parse(line);
-        // Forge's resolved directories, which foundry.toml and the inherited environment move too, not
-        // the line's assignments alone.
-        const c = spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...cmd.env } });
-        let at;
+        // The resolved paths: foundry.toml and inherited variables can move them past the line's assignments.
+        const result = spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...cmd.env } });
+        let config;
         try {
-          at = JSON.parse(c.stdout);
+          config = JSON.parse(result.stdout);
         } catch {}
-        if (c.status !== 0 || !isObject(at)) fail(2, "refusing: forge config --json failed");
-        if (at.broadcast !== (records ?? "broadcast") || (cache && at.cache_path !== cache)) {
-          fail(2, `refusing: forge config puts this line's records in ${at.broadcast} and resume data in ${at.cache_path}, not ${cache ? `${records} and ${cache}` : "broadcast"}; leave foundry.toml's broadcast key and FOUNDRY_ variables unset: ${line}`);
+        if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
+        if (config.broadcast !== (broadcastDir ?? "broadcast")) {
+          fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
+        }
+        if (cacheDir && config.cache_path !== cacheDir) {
+          fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
         }
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
