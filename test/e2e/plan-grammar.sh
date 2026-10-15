@@ -49,7 +49,7 @@ run_line() {
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
   node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run "$net" t >out 2>&1 </dev/null || true
   [ -s calls ] || return 1
-  [ "$(wc -l <calls)" = 1 ] && [[ $(<calls) == '[script]['* && $(<calls) == *'[--broadcast][--unlocked]' ]] \
+  [ "$(wc -l <calls)" -eq 1 ] && [[ $(<calls) == '[script]['* && $(<calls) == *'[--broadcast][--unlocked]' ]] \
     || { echo "FAIL not one forge script argv: $(<calls)" >&2; fail=$((fail + 1)); }
 }
 
@@ -60,7 +60,7 @@ while IFS= read -r line; do
 done <"$CORPUS"
 
 # Each payload is added to a real line at two of five places, rotating through the corpus.
-mapfile -t lines <"$CORPUS"
+lines=(); while IFS= read -r line; do lines+=("$line"); done <"$CORPUS"
 payloads=(
   "; touch \$MARK" ";touch \$MARK" "&& touch \$MARK" "|| touch \$MARK" "| touch \$MARK" "& touch \$MARK"
   "\$(touch \$MARK)" '`touch $MARK`' "> \$MARK" "' ; touch \$MARK ; '" '"' '\' ' --broadcast'
