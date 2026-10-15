@@ -553,8 +553,19 @@ scenario_tag() {
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered: $(tail -c 600 <<<"$out")"
   ! git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: a dirty journal's tag was pushed"
+  # A unit certified on a test chain gets no offer, though its network also names a live chain.
+  start_anvil $((PORT + 6)) 11155111
+  network stage 11155111
+  echo '{"chains":{"l2":{"id":11155111},"eth":{"id":10}}}' >deployments/stage/network.json
+  git add -A; git commit -qm stage
+  out=$(tty yes,yes,yes,yes,yes,yes env PATH="$W.bin:$PATH" R="http://127.0.0.1:$((PORT + 6))" ETH_RPC="$prod" G run stage token.check --account e2e 2>&1) \
+    || die "tag: the test-chain run failed: $(tail -c 600 <<<"$out")"
+  grep -q '# chain eth 10 live' <<<"$out" || die "tag: the stage network names no live chain: $(tail -c 600 <<<"$out")"
+  jq -e '.checked' deployments/stage/token.json >/dev/null || die "tag: the test-chain run certified nothing"
+  ! git rev-parse -q --verify refs/tags/deploy/stage/token >/dev/null || die "tag: a test-chain unit was tagged"
+  ! grep -q 'deploy/stage/token' <<<"$out" || die "tag: a test-chain unit was offered: $(tail -c 600 <<<"$out")"
   rm -rf "$W.remote"
-  echo "ok  a live run offers a tag at the journal's commit and its push; a rerun offers only what is missing, a failed push keeps the status, a tag never moves, a dirty journal gets none"
+  echo "ok  a live run offers a tag at the journal's commit and its push; a rerun offers only what is missing, a failed push keeps the status, a tag never moves, a dirty journal or a unit on a test chain gets none"
 }
 
 # `run` sends the command lines that the FileGraph tests and the example's plan print, and nothing hostile.

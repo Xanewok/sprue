@@ -108,8 +108,8 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
 8. Commit each step's journal and `broadcast/` records (the step prints the `git add`). The records
    are what `recover` reads, so never git-ignore a public chain's.
 9. When a run on a live chain ends done or waiting, it offers a git tag `deploy/<network>/<unit>`
-   for each unit of the network whose check passed, at the commit its journal records, and then its
-   push. A tag never moves, and a remote tag is never overwritten. A journal that records a dirty
+   for each unit whose check certified it on a live chain, at the commit its journal records, and
+   then its push. A tag never moves, and a remote tag is never overwritten. A journal that records a dirty
    tree or several commits gets no tag. A failed push prints its retry command and keeps the run's
    status.
 
