@@ -371,6 +371,14 @@ scenario_rehearse() {
   echo "FOUNDRY_ETH_RPC_URL=$LIVE" >.env
   refused 'resolves an eth_rpc_url' "${go[@]}" main token.check
   rm .env
+  # A copied check whose code the fork lacks, as at a --block before its deployment, is refused.
+  cp "$d/token.json" deployments/main/token.json
+  refused 'lacks the code token.json certifies' "${go[@]}" main token.check
+  # A role certified on another chain is read on that chain's fork, and this network forks none.
+  jq '.checked.tokenChainId = 99' "$d/token.json" >deployments/main/token.json
+  out=$("${go[@]}" main token.check 2>&1) || true
+  ! grep -q 'lacks the code' <<<"$out" || die "rehearse: a role was read on another chain's fork"
+  rm deployments/main/token.json
   refused 'set R' env -u R G rehearse main token.check
   refused 'usage:' "${go[@]}" --wait main token.check
   network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
