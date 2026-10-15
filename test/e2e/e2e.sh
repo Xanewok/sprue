@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop main) >/dev/null 2>&1 || true
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote" "$W.pty.py"
 }
 trap cleanup EXIT
 
@@ -491,7 +491,7 @@ scenario_tag() {
   start_anvil $((PORT + 5)) 10
   echo 'deployments/rehearsal*/' >>.gitignore
   network prod 10; git add -A; git commit -qm prod
-  git init -q --bare "$W.remote"; git remote add origin "$W.remote"
+  git init -q --bare "$W.remote"; git remote add origin "$W.remote" "$W.pty.py"
   geth_stub "$W.bin"
   local run=(env PATH="$W.bin:$PATH" R="$prod" G run prod token.check --account e2e)
   out=$(tty yes,yes,yes,yes "${run[@]}" 2>&1) || die "tag: the run failed: $(tail -c 600 <<<"$out")"
@@ -509,7 +509,7 @@ scenario_tag() {
   git push -q origin ":refs/tags/$tag"; git remote set-url origin "$W.nowhere"
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a failed push failed the run"
   grep -q "push failed; retry with git push origin refs/tags/$tag" <<<"$out" || die "tag: no retry command: $(tail -c 600 <<<"$out")"
-  git remote set-url origin "$W.remote"
+  git remote set-url origin "$W.remote" "$W.pty.py"
   first=$(git rev-list --max-parents=0 HEAD)
   git tag -d "$tag" >/dev/null; git tag -a -m other "$tag" "$first"
   out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
@@ -522,7 +522,7 @@ scenario_tag() {
   git add deployments/prod/token.json; git commit -qm dirty
   out=$(tty no "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered a tag: $(tail -c 600 <<<"$out")"
-  rm -rf "$W.remote"
+  rm -rf "$W.remote" "$W.pty.py"
   echo "ok  a live run offers a tag at the journal's commit and its push; a rerun offers only what is missing, a failed push keeps the status, a tag never moves, a dirty journal gets none"
 }
 
