@@ -409,6 +409,8 @@ scenario_attended() {
   mkdir -p "$W/home/.foundry" "$W/home/.local/share"
   [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
   [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W/home/.local/share/svm"
+  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W/home/Library/Application Support"
+    ln -s "$HOME/Library/Application Support/svm" "$W/home/Library/Application Support/svm"; }
   export HOME=$W/home
   cast wallet import "$account" --mnemonic 'test test test test test test test test test test test junk' \
     --unsafe-password "$KEYSTORE_PW" >/dev/null
