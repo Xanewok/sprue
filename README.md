@@ -20,7 +20,7 @@ this repository:
 
 ```sh
 cp -R examples/token-vault ../my-deploy && cd ../my-deploy
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.1
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.2
 anvil &                                   # chain 31337 on :8545
 export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
@@ -61,7 +61,7 @@ then loses a journal and rebuilds it.
 ## Install
 
 ```sh
-forge install foundry-rs/forge-std Xanewok/sprue@v0.1.1
+forge install foundry-rs/forge-std Xanewok/sprue@v0.1.2
 ```
 
 The remapping is `sprue/=lib/sprue/src/` and the runner `node lib/sprue/bin/sprue.mjs`. With npm

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2
 
 When an attended run on a live chain ends done or waiting, it offers an annotated tag
 `deploy/<network>/<unit>` for each certified unit, at the commit its journal records, and its push. A
