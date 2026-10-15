@@ -16,6 +16,8 @@ die() { echo "FAIL $*" >&2; exit 1; }
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
+  # A failed check can leave a --keep fork running.
+  (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop main) >/dev/null 2>&1 || true
   [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
 }
 trap cleanup EXIT
@@ -263,6 +265,11 @@ scenario_two_chain() {
   opened() { cast call "$(jq -r .receiver deployments/local/receiver.input.json)" 'opened(uint8)(address)' "$1" --rpc-url "$rcv"; }
   [ "$(cast code "$(jq -r .receiver deployments/local/receiver.input.json)" --rpc-url "$rcv")" != 0x ] || die "two-chain: no receiver at the input's address"
 
+  # rehearse forks both chains and sets the receiver fork's clock; the real nodes mine nothing.
+  local b0; b0="$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")"
+  out=$(G rehearse local receiver.notify.2 2>&1) || die "two-chain: rehearse failed: $(tail -c 600 <<<"$out")"
+  [ "$(grep -c '^fork ' <<<"$out")" = 2 ] || die "two-chain: rehearse did not fork both chains: $(tail -c 600 <<<"$out")"
+  [ "$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")" = "$b0" ] || die "two-chain: rehearse mined on a real node"
   exits 0 G run local receiver.notify.2
   for w in 0 1 2; do
     [ "$(opened $w)" = "$(jq -r .checked.source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
@@ -277,6 +284,73 @@ scenario_two_chain() {
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "two-chain: a dry run without the prefix: ${out: -400}"
   cd "$W"; rm -rf "$d"
   echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
+}
+
+# rehearse runs a target on forks of the network's chains that it starts and stops, as senders that hold no
+# key. The real chain mines nothing, and the network's own directory gets no journal.
+scenario_rehearse() {
+  local d=deployments/rehearsal-main dead=0x000000000000000000000000000000000000dEaD b0 out url
+  network main 1 "$(($(now "$LIVE") + 1000))"
+  cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
+  b0=$(cast block-number --rpc-url "$LIVE")
+  local go=(env R="$LIVE" DEPLOYER="$dead" G rehearse)
+  # An inherited keystore name, which forge would fail to find, is cleared.
+  out=$(ETH_KEYSTORE_ACCOUNT=nosuch "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
+  [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
+  [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
+  jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
+  url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' <<<"$out" | awk '{print $NF}')
+  [ -n "$url" ] || die "rehearse: no fork line: $(tail -c 600 <<<"$out")"
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: the fork still runs"
+  [ -z "$(ls -d broadcast/*/1 cache/*/1 2>/dev/null)" ] || die "rehearse: records or resume data outside $d"
+  jq -e '.tokenDirty == true' "$d/token.json" >/dev/null || die "rehearse: a run from a dirty tree journaled the token clean"
+
+  # A chain's rpc alias names the fork's upstream, and the commands, which read the copy without it, use the fork.
+  mv foundry.toml foundry.toml.ok; { cat foundry.toml.ok; echo '[rpc_endpoints]'; echo "live = \"$LIVE\""; } >foundry.toml
+  network aliased 1; echo '{"chains":{"l2":{"id":1,"rpc":"live"}}}' >deployments/aliased/network.json
+  out=$(env -u R DEPLOYER="$dead" G rehearse aliased token.check 2>&1) || die "rehearse: the aliased network failed: $(tail -c 600 <<<"$out")"
+  grep -q '(from alias live)' <<<"$out" || die "rehearse: the alias did not name the upstream: $(tail -c 600 <<<"$out")"
+  mv foundry.toml.ok foundry.toml
+  [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: a command sent to the alias's real chain"
+
+  # Ctrl-C stops the forks too.
+  "${go[@]}" main vault.check >"$W.int" 2>&1 & local pid=$! rc=0
+  for _ in $(seq 1 300); do grep -q '^senders are impersonated' "$W.int" && break; sleep 0.1; done
+  url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' "$W.int" | awk '{print $NF}')
+  kill -INT "$pid"; wait "$pid" || rc=$?
+  [ "$rc" = 130 ] || die "rehearse: an interrupt exited $rc, not 130"
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: an interrupt left the fork running"
+  rm -f "$W.int"
+
+  # --keep leaves the fork running and prints its variables. The next rehearse stops it and starts over;
+  # --stop stops a kept one.
+  url=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  [ "$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "$url")" != 0x ] || die "rehearse: the kept fork has no token"
+  exits 0 "${go[@]}" main token.check
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
+  url=$("${go[@]}" main token.check --keep 2>/dev/null | sed -n 's/^R=//p')
+  exits 0 G rehearse --stop main
+  ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: --stop left the fork running"
+
+  refused 'no key signs' "${go[@]}" main token.check --account e2e
+  refused 'it is a rehearsal network' "${go[@]}" rehearsal-main token.check
+  # forge reads .env only for names unset, so a keystore named there is refused.
+  echo 'ETH_KEYSTORE_ACCOUNT=nosuch' >.env
+  refused 'sets ETH_KEYSTORE_ACCOUNT' "${go[@]}" main token.check
+  rm .env
+  refused 'set R' env -u R G rehearse main token.check
+  refused 'usage:' "${go[@]}" --wait main token.check
+  network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
+  refused 'no rehearse staged it' "${go[@]}" hand token.check
+  [ -f deployments/rehearsal-hand/notes ] || die "rehearse: deleted a directory it did not stage"
+  mkdir -p "$W.noanvil"; ln -sf "$(command -v forge)" "$(command -v cast)" "$(command -v git)" "$W.noanvil/"
+  refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" R="$LIVE" DEPLOYER="$dead" G rehearse main token.check
+  rm -rf "$W.noanvil" deployments/rehearsal-hand
+  local m=$d/.sprue/rehearsal.json
+  jq --argjson p $$ '.runner = $p' "$m" >"$W.marker" && mv "$W.marker" "$m"
+  refused 'is running, as pid' "${go[@]}" main token.check
+  jq '.runner = 0' "$m" >"$W.marker" && mv "$W.marker" "$m"
+  echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
 }
 
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
@@ -403,5 +477,6 @@ scenario_recover
 scenario_wait
 scenario_kill
 scenario_two_chain
+scenario_rehearse
 scenario_attended
 echo "PASS e2e"

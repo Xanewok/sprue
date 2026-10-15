@@ -115,6 +115,28 @@ Before each send the runner checks `forge config --json`: forge must keep the re
 read them, and a rehearsal's resume data in its own directory. A `foundry.toml` setting or an
 inherited variable that moves either path is refused.
 
+## Rehearse
+
+`sprue rehearse <network> <target>` runs what `run` would send on Anvil forks it starts, in a fresh copy
+`<paths.rehearsal>-<network>` of `deployments/<network>/`:
+
+```sh
+R=<rpc> sprue rehearse mainnet vault.check     # forks, runs, stops the forks; the copy stays as the report
+```
+
+Each chain forks from `R` (the default chain only), else its `rpc` alias, else `<CHAIN>_RPC`, at the
+latest block or `--block [<chain>=]<n>`; a chain in `chains.local` with none of these starts empty. The
+copy keeps the journals, so what landed stays done, and drops the aliases, so every command reads a fork.
+Senders are impersonated: `DEPLOYER` (else the pinned `deployer`) and each `.by(...)`. No key signs, so a
+signer flag is refused, and so is a `.env` that names a keystore. It runs unattended, on a dirty tree too
+(the journals record it), and moves each fork's clock to the next date. The forks stop at the end and on
+Ctrl-C. `--keep` leaves them running and prints their `R=` and `<CHAIN>_RPC=` lines, until the next
+`rehearse` of the network or `sprue rehearse --stop <network>`. Every `rehearse` starts over, and deletes
+the copy only if a `rehearse` staged it.
+
+A rehearsal shows what Anvil reproduces. With `--block` before a landed unit's deployment, its copied
+journal still says done; a bridge message between forks is never delivered.
+
 ## Configuration
 
 `sprue.json` has exactly the keys `paths` and `chains`:
@@ -129,7 +151,8 @@ inherited variable that moves either path is refused.
   never touches the real chain's `broadcast/` or `cache/`, and the real run's `--resume` never sends
   the rehearsal's transactions. A send or a dry run without that `FOUNDRY_BROADCAST=…
   FOUNDRY_CACHE_PATH=…` prefix is refused, the graph's own `plan` and `rehearse` included.
-  `sprue plan` adds it; `rehearse` takes the prefix of its staged copy `<paths.rehearsal>-rehearse-<network>`.
+  `sprue plan` adds it; `sprue rehearse` stages `<paths.rehearsal>-<network>`, and the graph's
+  `rehearse` takes the prefix of its staged copy `<paths.rehearsal>-rehearse-<network>`.
 - `chains.default` (optional): the chain of a step without `.on(...)`. Without it, a network of
   one chain uses that chain.
 - `chains.local` and `chains.test`: chain ids of development and test chains. Any other is live.
