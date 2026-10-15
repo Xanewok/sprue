@@ -40,8 +40,13 @@ done
 # run_line <line>: whether `run` sent it to forge, as exactly one `forge script` call. A hostile line
 # may also leave $MARK.
 run_line() {
+  local net=net
+  # A rehearsal network's line runs on that network, the only one whose records it may move.
+  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(fork-test-[a-z0-9-]+)/broadcast\  ]]; then
+    net=${BASH_REMATCH[1]}; mkdir -p "deployments/$net"; cp deployments/net/network.json "deployments/$net/"
+  fi
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
-  node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || true
+  node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run "$net" t >out 2>&1 </dev/null || true
   [ -s calls ] || return 1
   [ "$(wc -l <calls)" = 1 ] && [[ $(<calls) == '[script]['* && $(<calls) == *'[--broadcast][--unlocked]' ]] \
     || { echo "FAIL not one forge script argv: $(<calls)" >&2; fail=$((fail + 1)); }
@@ -73,8 +78,9 @@ for p in "${payloads[@]}"; do
   done
   i=$((i + 1))
 done
-# An environment assignment other than a chain's RPC variable could redirect `forge` itself.
-for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PWD '; do
+# An environment assignment other than a chain's RPC variable could redirect `forge` itself, and only
+# a rehearsal network's lines move its records.
+for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PWD ' 'FOUNDRY_BROADCAST=deployments/net/broadcast '; do
   total=$((total + 1))
   if run_line "$prefix${lines[0]}" || [ -e MARK ]; then
     fail=$((fail + 1)); echo "FAIL ran hostile: $prefix${lines[0]}" >&2

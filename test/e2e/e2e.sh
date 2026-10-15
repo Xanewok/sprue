@@ -133,7 +133,12 @@ scenario_failure() {
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
-  echo "ok  a failed step ends with forge's Error: line"
+  # A send whose records forge would write where no unit reads them is refused, before it sends.
+  network elsewhere 31337; local n0; n0=$(nonce)
+  out=$(FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check 2>&1) && die "failure: a send with records elsewhere ran"
+  grep -q 'forge would write this send.s records to elsewhere, not broadcast' <<<"$out" || die "failure: records elsewhere: ${out: -400}"
+  [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
+  echo "ok  a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -322,6 +327,13 @@ scenario_attended() {
   out=$(tty yes "${run[@]}" 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
+  # The fork keeps chain id 1, so records in broadcast/ would read as that chain's.
+  [ -z "$(ls broadcast/*/1 2>/dev/null)" ] || die "attended: a rehearsal wrote records under broadcast/"
+  ls "deployments/$net/broadcast/DeployToken.s.sol/1/"*-latest.json >/dev/null || die "attended: no record under the rehearsal network"
+  grep -q '"tokenTx"' "deployments/$net/token.json" || die "attended: the journal has no receipt from the rehearsal's record"
+  out=$(forge script script/deploy/units/token/DeployToken.s.sol --sig 'check(string)' "$net" --rpc-url "$LIVE" \
+    --sender "$OPS" --unlocked --broadcast 2>&1) && die "attended: a rehearsal sent without its records prefix"
+  grep -q 'forge would write this send.s records to broadcast, not' <<<"$out" || die "attended: a send without the prefix: ${out: -400}"
   # A rehearsal network's journals leave the tree clean only while git ignores them, which the runner checks.
   exits 0 tty no "${run[@]}"
   sed -i.bak '/fork-test/d' .gitignore && rm .gitignore.bak

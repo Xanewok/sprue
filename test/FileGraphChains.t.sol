@@ -141,6 +141,9 @@ contract FileGraphProjectTest is Test, Declares {
             _plan(_fund().on("a").reads("ghost").reads("b")),
             string.concat(
                 HEADER,
+                "FOUNDRY_BROADCAST=deployments/",
+                net,
+                "/broadcast ",
                 "B_RPC=$B_RPC GHOST_RPC=$GHOST_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --rpc-url alpha --sender $DEPLOYER\n"
@@ -151,6 +154,9 @@ contract FileGraphProjectTest is Test, Declares {
             _plan(_fund().on("c").reads("").reads("b").ownsForks()),
             string.concat(
                 HEADER,
+                "FOUNDRY_BROADCAST=deployments/",
+                net,
+                "/broadcast ",
                 "L2_RPC=$L2_RPC B_RPC=$B_RPC C_RPC=$C_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --sender $DEPLOYER\n"

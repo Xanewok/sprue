@@ -13,7 +13,7 @@ import {
     isTestChain,
     rehearsalPrefix
 } from "./Chains.sol";
-import {stageInputs, unitInputPath} from "./Journal.sol";
+import {isRehearsalNetwork, stageInputs, unitInputPath} from "./Journal.sol";
 import {Graph} from "./graph/Graph.sol";
 
 /// @notice Implements `Graph`'s hooks from the files in `<paths.deployments>/<network>/`. A project's
@@ -65,8 +65,13 @@ abstract contract FileGraph is Graph {
 
     /// @dev A script reads a chain's `<CHAIN>_RPC` only when the chain has no alias. The assignments
     ///      follow `network.json`'s `chains` order, then any other chain in the order the step reads
-    ///      it. Replaces empty names in `chains` with the default chain, in place.
+    ///      it. Replaces empty names in `chains` with the default chain, in place. A rehearsal
+    ///      network's commands first move forge's records under the network: on a fork that keeps a
+    ///      public chain id, records in `broadcast/` would read as the real chain's.
     function _chainEnv(string memory net, string[] memory chains) internal view override returns (string memory out) {
+        if (isRehearsalNetwork(net)) {
+            out = string.concat("FOUNDRY_BROADCAST=", deploymentsDir(), "/", net, "/broadcast ");
+        }
         string memory file = _networkFile(net);
         string memory home = _homeChain(file);
         string[] memory declared =
