@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The runner (bin/sprue.mjs) against real Anvil nodes, on the projects in examples/.
-# Needs anvil, forge, cast, node, jq; the attended scenario also python3 and setsid.
+# Needs anvil, forge, cast, node, jq; the attended scenario also python3.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$HERE/../..
@@ -36,7 +36,7 @@ setup() {
   cp "$HERE/pty.py" "$W/../$(basename "$W").pty.py"
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
-  # A command of its own, so that `setsid` and the pseudo-terminal can run it.
+  # A command of its own, so that the pseudo-terminal can run it.
   # The attended scenario changes HOME, which a version manager's node shim cannot survive: name the binary.
   mkdir -p bin; printf '#!/bin/sh\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
@@ -63,6 +63,12 @@ refused() {
   grep -q "$want" <<<"$out" || die "$* refused for another reason: $out"
 }
 tty() { PTY_ANSWER=$1 PTY_PASSWORD=$KEYSTORE_PW python3 -I "$PTY" "${@:2}"; }
+# detached <command...>: the command in a session of its own, so without a controlling terminal.
+detached() { python3 -c 'import os, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))' "$@"; }
 nonce() { cast nonce "$OPS" --rpc-url "${1:-$RPC}"; }
 now() { cast block latest -f timestamp --rpc-url "${1:-$RPC}"; }
 all_done() { ! grep -Eqv '^# (done|chain) ' <<<"$2" || die "$1 left a node not done: $2"; }
@@ -397,12 +403,14 @@ scenario_rehearse() {
 
 # On a live chain (an Anvil of chain 1) a run is attended: each refusal sends nothing, and a change while the question waits stops it.
 scenario_attended() {
-  command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip attended: it needs python3 and setsid"; return; }
+  command -v python3 >/dev/null || { echo "skip attended: it needs python3"; return; }
   local net=rehearsal-live out rc n0 account=e2e
   # The keystore lives in a home of its own; the compilers are shared.
   mkdir -p "$W/home/.foundry" "$W/home/.local/share"
   [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
   [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W/home/.local/share/svm"
+  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W/home/Library/Application Support"
+    ln -s "$HOME/Library/Application Support/svm" "$W/home/Library/Application Support/svm"; }
   export HOME=$W/home
   cast wallet import "$account" --mnemonic 'test test test test test test test test test test test junk' \
     --unsafe-password "$KEYSTORE_PW" >/dev/null
@@ -411,7 +419,7 @@ scenario_attended() {
   unset CI
   local run=(G run "$net" token.check --account "$account")
   export R=$LIVE
-  refused 'no terminal' setsid -w "${run[@]}"
+  refused 'no terminal' detached "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
   # Rehearsal records are git-ignored, so an attended rehearsal must use development nodes.
@@ -493,7 +501,7 @@ scenario_attended() {
 # On a live chain an attended run offers a tag at the journal's commit for each certified unit, and its
 # push. A rerun offers only what is missing; a failed push keeps the run's status; a tag never moves.
 scenario_tag() {
-  command -v python3 >/dev/null && command -v setsid >/dev/null || { echo "skip tag: it needs python3 and setsid"; return; }
+  command -v python3 >/dev/null || { echo "skip tag: it needs python3"; return; }
   local tag=deploy/prod/token out first commit prod=http://127.0.0.1:$((PORT + 5))
   # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
   start_anvil $((PORT + 5)) 10
