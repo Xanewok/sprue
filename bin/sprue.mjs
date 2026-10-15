@@ -761,11 +761,12 @@ async function main(argv) {
       // forge records an abbreviated commit, and a ref of that name would win over it.
       const resolve = (c) => {
         const r = typeof c === "string" && /^[0-9a-f]{7,40}$/.test(c) ? git("rev-parse", "-q", "--verify", `${c}^{commit}`) : undefined;
-        return r?.status === 0 && r.out.startsWith(c) ? r.out : `${c}`;
+        return r?.status === 0 && r.out.startsWith(c) ? r.out : "";
       };
-      const commits = [...new Set(Object.keys(j).filter((k) => k.endsWith("Commit")).map((k) => resolve(j[k])))];
+      const recorded = [...new Set(Object.keys(j).filter((k) => k.endsWith("Commit")).map((k) => j[k]))];
+      const commits = [...new Set(recorded.map(resolve))];
       if (dirty.length) { note(`not tagged: ${dirty.join(", ")} records a dirty tree`); continue; }
-      if (commits.length !== 1 || !/^[0-9a-f]{40}$/.test(commits[0])) { note(`not tagged: its roles record ${commits.join(", ") || "no commit"}, not one commit of this repository`); continue; }
+      if (commits.length !== 1 || !commits[0]) { note(`not tagged: its roles record ${recorded.join(", ") || "no commit"}, not one commit of this repository`); continue; }
       const tree = (rev) => git("rev-parse", "-q", "--verify", `${rev}^{tree}`).out;
       const local = tree(ref);
       if (!local) {

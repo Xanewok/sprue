@@ -527,6 +527,11 @@ scenario_tag() {
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not one commit of this repository' <<<"$out" || die "tag: a ref named as the commit was tagged: $(tail -c 600 <<<"$out")"
   git branch -D "$commit" >/dev/null
+  # A recorded object that is no commit is never tagged.
+  jq --arg t "$(git rev-parse HEAD^{tree})" '.tokenCommit = $t' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
+  git add deployments/prod/token.json; git commit -qm tree
+  out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
+  grep -q 'not one commit of this repository' <<<"$out" || die "tag: a tree was tagged: $(tail -c 600 <<<"$out")"
   # A journal that records a dirty tree is neither tagged nor, tagged by hand, pushed.
   git tag -a -m by-hand "$tag" "$commit^{commit}"
   jq '.tokenDirty = true' deployments/prod/token.json >"$W/j" && mv "$W/j" deployments/prod/token.json
