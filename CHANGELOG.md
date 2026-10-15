@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+The tag offer skips a unit certified only on test or local chains, even when its network also names
+a live chain that it reads.
+
 ## 0.1.2
 
 When an attended run on a live chain ends done or waiting, it offers an annotated tag

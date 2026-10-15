@@ -597,7 +597,7 @@ async function main(argv) {
     if (rpc) endpoints.push(rpc);
   }
   let me = "";
-  let live = false;
+  const live = new Set();
   if (attended) {
     // Not stdin: the question is read from the terminal, so it is the terminal that must open.
     if ("CI" in process.env) fail(2, `refusing ${network}: CI is set; a person at a terminal sends to a public chain`);
@@ -766,6 +766,8 @@ async function main(argv) {
     for (const unit of [...units].sort()) {
       const j = readJson(`${DEPLOYMENTS}/${network}/${unit}.json`);
       if (!isObject(j?.checked)) continue;
+      // A tag marks what landed on a live chain, not a test deployment that reads one.
+      if (!Object.entries(j.checked).some(([k, v]) => k.endsWith("ChainId") && live.has(String(v)))) continue;
       const tag = `deploy/${network}/${unit}`;
       const ref = `refs/tags/${tag}`;
       // One tag by name: push.followTags would add others.
@@ -806,7 +808,7 @@ async function main(argv) {
   };
   if (attended && !broadcastDir) {
     atExit = (code) => {
-      if (!live || ![0, 3, 4].includes(code)) return;
+      if (!live.size || ![0, 3, 4].includes(code)) return;
       // The run's status stands whatever the offer meets.
       try { offerTags(); } catch (e) { err(`${NAME}: tags not offered: ${e.message}\n`); }
     };
@@ -848,7 +850,8 @@ async function main(argv) {
         out(`${line}\n`);
         throw new Exit(3);
       } else if (line.startsWith("# chain ") || line.startsWith("# done ")) {
-        if (/^# chain [^ ]+ [0-9]+ live$/.test(line)) live = true;
+        const chain = /^# chain [^ ]+ ([0-9]+) live$/.exec(line);
+        if (chain) live.add(chain[1]);
         out(`${line}\n`);
       }
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
