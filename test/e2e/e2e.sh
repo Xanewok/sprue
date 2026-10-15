@@ -355,6 +355,8 @@ scenario_rehearse() {
   rm -rf "$W.noanvil" deployments/rehearsal-hand
   echo $$ >"$d/.sprue/lock"
   refused 'is running, as pid' "${go[@]}" main token.check
+  sh -c 'echo $$' >"$d/.sprue/lock"
+  refused 'which has exited; remove it' "${go[@]}" main token.check
   rm "$d/.sprue/lock"
   echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
 }

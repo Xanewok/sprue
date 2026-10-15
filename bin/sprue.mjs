@@ -392,26 +392,28 @@ async function main(argv) {
         try { process.kill(f.pid); } catch {}
       }
     };
-    if (!existsSync(dir)) {
-      if (stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
-      mkdirSync(dirname(markerFile), { recursive: true });
-      save({ source, forks: [] });
-    }
-    const marker = readJson(markerFile);
-    if (!isObject(marker) || !Array.isArray(marker.forks)) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
-    // Exclusive: two rehearses of one network would share its journals over different forks.
-    for (;;) {
-      try {
-        writeFileSync(lock, String(process.pid), { flag: "wx" });
-        break;
-      } catch (e) {
-        if (e.code !== "EEXIST") throw e;
-        const pid = Number(readFileSync(lock, "utf8"));
-        if (alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
-        rmSync(lock, { force: true });
-      }
+    if (!existsSync(dir) && stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
+    if (existsSync(dir) && !existsSync(dirname(markerFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
+    mkdirSync(dirname(markerFile), { recursive: true });
+    // Exclusive, and read under it: two rehearses of one network would share its journals over different
+    // forks. A stale lock is not taken over, since two runs could both take it.
+    try {
+      writeFileSync(lock, String(process.pid), { flag: "wx" });
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      const pid = Number(readFileSync(lock, "utf8"));
+      if (alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
+      fail(2, `refusing: ${lock} names pid ${pid}, which has exited; remove it if no rehearse of ${source} runs`);
     }
     atExit = () => rmSync(lock, { force: true });
+    for (const sig of ["SIGINT", "SIGTERM"]) {
+      process.on(sig, () => {
+        atExit();
+        process.exit(130);
+      });
+    }
+    const marker = readJson(markerFile) ?? { source, forks: [] };
+    if (!isObject(marker) || !Array.isArray(marker.forks)) fail(2, `refusing: ${markerFile} is not a rehearse's record; move ${dir} away`);
     stopKept(marker.forks);
     if (stopOnly) {
       save({ ...marker, forks: [] });
@@ -477,12 +479,6 @@ async function main(argv) {
         err(`${NAME}: the forks keep running; stop them with ${NAME} rehearse --stop ${source}\n`);
       }
     };
-    for (const sig of ["SIGINT", "SIGTERM"]) {
-      process.on(sig, () => {
-        atExit();
-        process.exit(130);
-      });
-    }
     for (const f of readdirSync(`${DEPLOYMENTS}/${source}`)) {
       if (isFile(`${DEPLOYMENTS}/${source}/${f}`)) copyFileSync(`${DEPLOYMENTS}/${source}/${f}`, `${dir}/${f}`);
     }
