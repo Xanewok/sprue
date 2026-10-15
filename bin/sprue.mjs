@@ -411,16 +411,15 @@ async function main(argv) {
       fail(2, "refusing: the working tree is not clean; commit it (the journals of an interrupted run too), or on a test chain pass --allow-dirty");
     }
     // Outside a rehearsal network a development node is refused: a run on a fork or devnet would write
-    // the network's committed journals and records.
-    if (!records) {
-      for (const rpc of endpoints) {
-        const v = clientVersion(rpc);
-        if (v.status !== 0) fail(2, `cannot read the node at ${rpc}`);
-        const id = chainId(rpc);
-        if (isAnvil(v) || isLocal(Number(id))) {
-          fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
-        }
-      }
+    // the network's committed journals and records. On one it is required: a real send would be
+    // recorded only in a git-ignored directory.
+    for (const rpc of endpoints) {
+      const v = clientVersion(rpc);
+      if (v.status !== 0) fail(2, `cannot read the node at ${rpc}`);
+      const id = chainId(rpc);
+      const dev = isAnvil(v) || isLocal(Number(id));
+      if (dev && !records) fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
+      if (!dev && records) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal network sends only to a fork or devnet`);
     }
     signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);

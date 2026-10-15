@@ -16,7 +16,7 @@ die() { echo "FAIL $*" >&2; exit 1; }
 W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.geth"
 }
 trap cleanup EXIT
 
@@ -117,11 +117,13 @@ scenario_refuses() {
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
 
-# A ./stub/cast that makes every Anvil report itself as Geth, so the runner cannot set its clock.
+# A <dir>/cast (default ./stub) that makes every Anvil report itself as Geth, so the runner cannot set
+# its clock.
 geth_stub() {
-  mkdir -p stub
-  printf '#!/bin/sh\nif [ "$1 $2" = "rpc web3_clientVersion" ]; then echo \\"Geth/stub\\"; exit; fi\nexec %s "$@"\n' "$(command -v cast)" >stub/cast
-  chmod +x stub/cast
+  local d=${1:-stub}
+  mkdir -p "$d"
+  printf '#!/bin/sh\nif [ "$1 $2" = "rpc web3_clientVersion" ]; then echo \\"Geth/stub\\"; exit; fi\nexec %s "$@"\n' "$(command -v cast)" >"$d/cast"
+  chmod +x "$d/cast"
 }
 
 # A failed step ends with forge's last Error: line, after the output that buries it.
@@ -296,6 +298,9 @@ scenario_attended() {
   refused 'no terminal' setsid -w "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
+  # A rehearsal records only in a git-ignored directory, so it never sends to a real node.
+  geth_stub "$W.geth"
+  PATH=$W.geth:$PATH refused 'is not a development node' tty no "${run[@]}"
   # A node that does not name its client could be a development node, so it is refused too.
   mkdir -p "$W.bin"; printf '#!/bin/sh\n[ "$1 $2" != "rpc web3_clientVersion" ] || exit 1\nexec %s "$@"\n' "$(command -v cast)" >"$W.bin/cast"
   chmod +x "$W.bin/cast"
