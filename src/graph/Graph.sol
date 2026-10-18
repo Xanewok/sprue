@@ -114,7 +114,7 @@ abstract contract Graph is Script {
     ///           serves). The command after it is valid only once the date is reached.
     ///         - `# cannot reach <id>: <reason>`: the node's step would refuse now, and its command
     ///           follows; or, for a predicate node, its condition is not met, and no command follows.
-    ///           A view or predicate that fails in a cheatcode reverts the plan instead.
+    ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
     function plan(string calldata network, string calldata target) external returns (string memory out) {
@@ -687,22 +687,25 @@ abstract contract Graph is Script {
         require(sender != address(0), string.concat(ref, " is the zero address: set it in the network's files"));
     }
 
-    /// @dev An `Error(string)`'s text; any other revert as hex. A failed cheatcode is the project's own
-    ///      setup (a missing or malformed file, an unreachable RPC), never the world, so it fails the plan.
+    /// @dev An `Error(string)`'s text; any other revert as hex. A failed file read or JSON parse is the
+    ///      project's own setup, never the world, so it fails the plan. Other cheatcodes stay waits: a
+    ///      `vm.rpc` call fails when the contract it calls refuses for now.
     function _reason(string memory id, bytes memory ret) private pure returns (string memory) {
+        string memory raw = vm.toString(ret);
         bytes4 selector = bytes4(ret);
         bool cheatcode = selector == bytes4(keccak256("CheatcodeError(string)"));
-        if (ret.length < 68 || !(cheatcode || selector == bytes4(keccak256("Error(string)")))) {
-            return vm.toString(ret);
-        }
+        if (ret.length < 68 || !(cheatcode || selector == bytes4(keccak256("Error(string)")))) return raw;
         assembly ("memory-safe") {
             let length := mload(ret)
             ret := add(ret, 4)
             mstore(ret, sub(length, 4))
         }
         string memory text = abi.decode(ret, (string));
-        require(!cheatcode, string.concat(id, ": ", text));
-        return text;
+        if (!cheatcode) return text;
+        require(
+            vm.indexOf(text, "vm.readFile") != 0 && vm.indexOf(text, "vm.parseJson") != 0, string.concat(id, ": ", text)
+        );
+        return raw;
     }
 
     function _cannotReach(string memory id, string memory reason) internal pure returns (string memory) {

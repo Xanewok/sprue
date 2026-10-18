@@ -46,6 +46,15 @@ contract StepFunctions {
         return true;
     }
 
+    function refused(string calldata) external {}
+
+    function refusedDue(string calldata) external pure returns (bool) {
+        bytes memory error = abi.encodeWithSignature("CheatcodeError(string)", "vm.rpc: execution reverted");
+        assembly ("memory-safe") {
+            revert(add(error, 32), mload(error))
+        }
+    }
+
     function notify(string calldata, uint8) external {}
 
     function notifyDue(string calldata, uint8) external pure returns (bool) {
@@ -380,8 +389,8 @@ contract StepBuildersTest is Test, Declares {
         );
     }
 
-    /// @dev A missing input is the project's mistake: waiting for it would end the run as not yet reachable.
-    function test_plan_failsWhenAViewFailsInACheatcode() public {
+    /// @dev A missing input is the project's mistake, but a remote refusal through `vm.rpc` may pass later.
+    function test_plan_failsOnAFailedFileReadButWaitsOnARefusedRpc() public {
         Step[] memory s = new Step[](1);
         s[0] = _step("fixture.unread", StepFunctions.unread.selector).due(StepFunctions.unreadDue.selector);
         BuilderGraph g = new BuilderGraph(unit, s);
@@ -390,6 +399,16 @@ contract StepBuildersTest is Test, Declares {
         } catch Error(string memory reason) {
             assertEq(vm.indexOf(reason, "fixture.unread: vm.readFile: failed to open file"), 0);
         }
+
+        s[0] = _step("fixture.refused", StepFunctions.refused.selector).due(StepFunctions.refusedDue.selector);
+        assertEq(
+            new BuilderGraph(unit, s).plan("anvil", "fixture.refused"),
+            string.concat(
+                "# cannot reach fixture.refused: ",
+                vm.toString(abi.encodeWithSignature("CheatcodeError(string)", "vm.rpc: execution reverted")),
+                "\nforge script test/Fixture.s.sol:Fixture --sig 'refused(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
+            )
+        );
     }
 
     function test_rehearse_sendsAStepOnceAcrossADateWarp() public {
