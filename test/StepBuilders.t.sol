@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {Graph} from "../src/graph/Graph.sol";
 import {Registration, Step, Declares} from "../src/graph/Step.sol";
@@ -36,6 +37,22 @@ contract StepFunctions {
 
     function lockedDue(string calldata) external pure returns (bool) {
         revert Closed();
+    }
+
+    function unread(string calldata) external {}
+
+    function unreadDue(string calldata) external view returns (bool) {
+        Vm(address(uint160(uint256(keccak256("hevm cheat code"))))).readFile("deployments/anvil/missing.json");
+        return true;
+    }
+
+    function refused(string calldata) external {}
+
+    function refusedDue(string calldata) external pure returns (bool) {
+        bytes memory error = abi.encodeWithSignature("CheatcodeError(string)", "vm.rpc: execution reverted");
+        assembly ("memory-safe") {
+            revert(add(error, 32), mload(error))
+        }
     }
 
     function notify(string calldata, uint8) external {}
@@ -368,6 +385,28 @@ contract StepBuildersTest is Test, Declares {
                 "# cannot reach fixture.locked: ",
                 vm.toString(abi.encodeWithSelector(StepFunctions.Closed.selector)),
                 "\nforge script test/Fixture.s.sol:Fixture --sig 'locked(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
+            )
+        );
+    }
+
+    /// @dev A missing input is the project's mistake, but a remote refusal through `vm.rpc` may pass later.
+    function test_plan_failsOnAFailedFileReadButWaitsOnARefusedRpc() public {
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.unread", StepFunctions.unread.selector).due(StepFunctions.unreadDue.selector);
+        BuilderGraph g = new BuilderGraph(unit, s);
+        try g.plan("anvil", "fixture.unread") {
+            fail();
+        } catch Error(string memory reason) {
+            assertEq(vm.indexOf(reason, "fixture.unread: vm.readFile: failed to open file"), 0);
+        }
+
+        s[0] = _step("fixture.refused", StepFunctions.refused.selector).due(StepFunctions.refusedDue.selector);
+        assertEq(
+            new BuilderGraph(unit, s).plan("anvil", "fixture.refused"),
+            string.concat(
+                "# cannot reach fixture.refused: ",
+                vm.toString(abi.encodeWithSignature("CheatcodeError(string)", "vm.rpc: execution reverted")),
+                "\nforge script test/Fixture.s.sol:Fixture --sig 'refused(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
             )
         );
     }

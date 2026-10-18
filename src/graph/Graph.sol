@@ -114,6 +114,7 @@ abstract contract Graph is Script {
     ///           serves). The command after it is valid only once the date is reached.
     ///         - `# cannot reach <id>: <reason>`: the node's step would refuse now, and its command
     ///           follows; or, for a predicate node, its condition is not met, and no command follows.
+    ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
     function plan(string calldata network, string calldata target) external returns (string memory out) {
@@ -314,12 +315,12 @@ abstract contract Graph is Script {
         }
         if (bytes(n.until).length != 0) {
             (bool ok, bytes memory ret) = n.unit.call(_calldata(n, n.until, network));
-            if (!ok) return (Status.Waiting, _reason(ret));
+            if (!ok) return (Status.Waiting, _reason(n.id, ret));
             return (abi.decode(ret, (bool)) ? Status.Done : Status.Waiting, "its condition is not met");
         }
         if (n.due) {
             (bool ok, bytes memory ret) = n.unit.call(_calldata(n, string.concat(n.step, "Due"), network));
-            if (!ok) return (Status.Waiting, _reason(ret));
+            if (!ok) return (Status.Waiting, _reason(n.id, ret));
             return (abi.decode(ret, (bool)) ? Status.Due : Status.Done, "");
         }
         return (Status.Due, "");
@@ -686,15 +687,25 @@ abstract contract Graph is Script {
         require(sender != address(0), string.concat(ref, " is the zero address: set it in the network's files"));
     }
 
-    /// @dev An `Error(string)`'s text; any other revert as hex.
-    function _reason(bytes memory ret) private pure returns (string memory) {
-        if (ret.length < 68 || bytes4(ret) != bytes4(keccak256("Error(string)"))) return vm.toString(ret);
+    /// @dev An `Error(string)`'s text; any other revert as hex. A failed file read or JSON parse is the
+    ///      project's own setup, never the world, so it fails the plan. Other cheatcodes stay waits: a
+    ///      `vm.rpc` call fails when the contract it calls refuses for now.
+    function _reason(string memory id, bytes memory ret) private pure returns (string memory) {
+        string memory raw = vm.toString(ret);
+        bytes4 selector = bytes4(ret);
+        bool cheatcode = selector == bytes4(keccak256("CheatcodeError(string)"));
+        if (ret.length < 68 || !(cheatcode || selector == bytes4(keccak256("Error(string)")))) return raw;
         assembly ("memory-safe") {
             let length := mload(ret)
             ret := add(ret, 4)
             mstore(ret, sub(length, 4))
         }
-        return abi.decode(ret, (string));
+        string memory text = abi.decode(ret, (string));
+        if (!cheatcode) return text;
+        require(
+            vm.indexOf(text, "vm.readFile") != 0 && vm.indexOf(text, "vm.parseJson") != 0, string.concat(id, ": ", text)
+        );
+        return raw;
     }
 
     function _cannotReach(string memory id, string memory reason) internal pure returns (string memory) {
