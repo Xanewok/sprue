@@ -189,24 +189,12 @@ function ask(prompt) {
   return WIN ? answer.replace(/\r$/, "") : answer;
 }
 
-// A plan line that COMMAND matched whole, as forge's environment and argv. A `$NAME` is one argument
-// whatever it holds, and COMMAND lists the only names a line can use.
+// COMMAND admits only literal assignments and $DEPLOYER, which stays one argument.
 function parse(line) {
-  const env = {};
-  const args = [];
   const toks = line.split(" ");
-  let i = 0;
-  for (; toks[i] !== "forge"; i++) {
-    const at = toks[i].indexOf("=");
-    const value = toks[i].slice(at + 1);
-    env[toks[i].slice(0, at)] = value[0] === "$" ? (process.env[value.slice(1)] ?? "") : value;
-  }
-  for (i++; i < toks.length; i++) {
-    const t = toks[i];
-    if (t[0] !== "$") args.push(t[0] === "'" ? t.slice(1, -1) : t);
-    else if (process.env[t.slice(1)]) args.push(process.env[t.slice(1)]);
-    else fail(2, `refusing: ${t} is not set`);
-  }
+  const at = toks.indexOf("forge");
+  const env = Object.fromEntries(toks.slice(0, at).map((t) => t.split("=")));
+  const args = toks.slice(at + 1).map((t) => t === "$DEPLOYER" ? process.env.DEPLOYER : t[0] === "'" ? t.slice(1, -1) : t);
   return { env, args };
 }
 
