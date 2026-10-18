@@ -131,6 +131,7 @@ scenario_refuses() {
   local n=deployments/refuse/network.json
   echo '[]' >$n; refused "not a plain lower-case name" G run refuse vault.check
   echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" G run refuse vault.check
+  echo '{"chains":{}}' >$n; refused "network.json names no chain" G run refuse vault.check
   echo '{"chains":{"other":{"id":31337,"rpc":"local"}}}' >$n; refused "has no chain l2" G run refuse vault.check
   echo '{"chains":{"l2":{"id":31337}}}' >$n; refused "chain l2's rpc is not a plain alias" G plan refuse vault.check
   echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check

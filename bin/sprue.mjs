@@ -340,6 +340,7 @@ async function main(argv) {
       fail(2, `refusing ${name}: a chain's name is not a plain lower-case name`);
     }
     const chains = Object.keys(chainMap);
+    if (!chains.length) fail(2, `refusing ${name}: network.json names no chain`);
     // The default chain: sprue.json's chains.default, which the network must have, else its only chain,
     // else none (a step without .on then refuses at plan).
     let home = project.chains.default;
@@ -419,7 +420,6 @@ async function main(argv) {
     }
 
     const { net, chainMap, chains, home } = chainsOf(source);
-    if (!chains.length) fail(2, `refusing ${source}: network.json names no chain to fork`);
     const blocksByChain = new Map();
     for (const b of blocks) {
       const m = /^(?:([a-z][a-z0-9]*)=)?([0-9]+)$/.exec(b);
@@ -531,7 +531,6 @@ async function main(argv) {
     network = name;
   }
   const { chainMap, chains, home } = chainsOf(network);
-  if (!chains.length) fail(2, `refusing ${network}: network.json names no chain`);
   // The chain the plan reads, and whose clock a date line without `on` names.
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
