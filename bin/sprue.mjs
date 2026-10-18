@@ -575,13 +575,11 @@ async function main(argv) {
   // Each endpoint must serve the chain that network.json names. With FOUNDRY_CHAIN_ID set, forge's own
   // chain check reads the variable and not the node, so the preview would show the network's chain for
   // a send to another node.
-  const expectChain = (rpc, id) => {
-    if (!rpc) return;
+  const endpoints = [...new Set(chains.map((c) => chainMap[c].rpc))];
+  for (const { rpc, id } of Object.values(chainMap)) {
     const got = chainId(rpc);
     if (got !== String(id)) fail(2, `refusing ${network}: ${rpc} is chain ${got}, network.json says ${id}`);
-  };
-  const endpoints = [...new Set(chains.map((c) => chainMap[c].rpc))];
-  for (const c of chains) expectChain(chainMap[c].rpc, chainMap[c].id);
+  }
   let me = "";
   const live = new Set();
   if (attended) {
