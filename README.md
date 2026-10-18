@@ -143,7 +143,10 @@ as stopped. Every `rehearse` starts over, one at a time per network, and refuses
 without its `.sprue/`.
 
 A fork that lacks the code a copied check certifies, as at a `--block` before the deployment, is
-refused. A rehearsal shows what Anvil reproduces: a bridge message between forks is never delivered.
+refused. A fork of a chain that [`bin/chains.json`](bin/chains.json) lists takes that chain's
+deployed-code limit, and twice that for init code; other forks keep Ethereum's 24576 and 49152 bytes.
+Each entry names its evidence. A rehearsal shows what Anvil reproduces: a bridge message between forks
+is never delivered.
 
 ## Configuration
 
@@ -168,9 +171,7 @@ refused. A rehearsal shows what Anvil reproduces: a bridge message between forks
   chain, for a deploy key that already deployed outside the graph. Leave it `{}` otherwise.
 
 In `network.json` a chain may name an `"rpc"` alias from `foundry.toml`; without one, a chain other
-than the default is read from `<CHAIN>_RPC`. A chain that raised Ethereum's code limits, such as an Arbitrum
-chain, names its deployed-code limit as `"codeSizeLimit": <bytes>`: `rehearse` passes it to that
-chain's Anvil fork, which then allows init code of twice that size. A top-level `"deployer": "0x..."` pins the deploy key.
+than the default is read from `<CHAIN>_RPC`. A top-level `"deployer": "0x..."` pins the deploy key.
 
 ## When a run refuses
 

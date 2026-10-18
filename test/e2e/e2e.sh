@@ -17,7 +17,7 @@ W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
-  (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop main) >/dev/null 2>&1 || true
+  for n in main wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
   [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote" "$W.pty.py"
 }
 trap cleanup EXIT
@@ -336,7 +336,7 @@ scenario_rehearse() {
   # record could stop it later.
   local mute=$((PORT + 4)) fork=
   python3 -c "import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', $mute)); s.listen(); c=s.accept(); time.sleep(120)" &
-  local silent=$!
+  local silent=$!; PIDS="$PIDS $silent"
   env R="http://127.0.0.1:$mute" DEPLOYER="$dead" G rehearse --keep main token.check >/dev/null 2>&1 & pid=$!
   for _ in $(seq 1 300); do
     fork=$(ps -eo pid=,args= | awk -v u="--fork-url http://127.0.0.1:$mute " 'index($0, u) && !/awk/ {print $1; exit}')
@@ -369,23 +369,25 @@ scenario_rehearse() {
   mv "$W.main" deployments/main
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: --stop left the fork running"
 
-  # A fork keeps Ethereum's code limits unless its chain names its own: one init code returns 24577
-  # bytes, one over Ethereum's code limit, and one is 49153 bytes, one over its init-code limit.
-  local n=deployments/main/network.json code
+  # A fork of a chain that bin/chains.json lists takes its code limit; others keep Ethereum's. One init
+  # code returns 24577 bytes, one over Ethereum's code limit, and one is 49153 bytes, one over its
+  # init-code limit.
+  local code wide=http://127.0.0.1:$((PORT + 4))
   local big=(0x620060016000f3 "0x60006000f3$(printf '%098296d' 0)")
   kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
   for code in "${big[@]}"; do
-    ! cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null 2>&1 || die "rehearse: a fork took code over Ethereum's limits"
+    ! cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null 2>&1 || die "rehearse: a fork of an unlisted chain took larger code"
   done
-  cp "$n" "$W.net"; jq '.chains.l2.codeSizeLimit = 98304' "$W.net" >"$n"
-  out=$("${go[@]}" --keep main token.check 2>&1) || die "rehearse: a chain's code limit failed: $(tail -c 600 <<<"$out")"
+  start_anvil $((PORT + 4)) 4663
+  cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$wide" >/dev/null
+  network wide 4663
+  out=$(env R="$wide" DEPLOYER="$dead" G rehearse --keep wide token.check 2>&1) || die "rehearse: a fork of a listed chain failed: $(tail -c 600 <<<"$out")"
+  grep -q '^fork l2 chain 4663 block [0-9]* code limit 98304 ' <<<"$out" || die "rehearse: the listed chain's code limit was not used: $(tail -c 600 <<<"$out")"
   kept=$(sed -n 's/^R=//p' <<<"$out")
   for code in "${big[@]}"; do
-    cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null || die "rehearse: the chain's code limit did not reach its fork"
+    cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null || die "rehearse: the listed chain's code limit did not reach its fork"
   done
-  jq '.chains.l2.codeSizeLimit = "big"' "$W.net" >"$n"
-  refused "chain l2's codeSizeLimit is not a positive integer" "${go[@]}" main token.check
-  mv "$W.net" "$n"
+  exits 0 G rehearse --stop wide
 
   refused 'no key signs' "${go[@]}" main token.check --account e2e
   refused 'it is a rehearsal network' "${go[@]}" rehearsal-main token.check

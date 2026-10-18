@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-A `network.json` chain may name its deployed-code limit as `"codeSizeLimit"`; `rehearse` passes it to
-that chain's Anvil fork as `--code-size-limit`.
+`rehearse` gives a fork of a chain that `bin/chains.json` lists that chain's code-size limit. It lists
+Robinhood Chain and its testnet, at 98304 bytes.
 
 The tag offer skips a unit certified only on test or local chains, even when its network also names
 a live chain that it reads.
