@@ -351,8 +351,7 @@ async function main(argv) {
     const copy = name === rehearsal || name.startsWith(`${rehearsal}-`);
     for (const c of chains) {
       const rpc = chainMap[c]?.rpc;
-      if (rpc == null || rpc === "") fail(2, `refusing ${name}: chain ${c} names no rpc; give it an alias from foundry.toml's [rpc_endpoints]`);
-      if (typeof rpc !== "string" || !(ALIAS.test(rpc) || (copy && LOOPBACK.test(rpc)))) fail(2, `refusing ${name}: chain ${c}'s rpc alias is not a plain name`);
+      if (typeof rpc !== "string" || !(ALIAS.test(rpc) || (copy && LOOPBACK.test(rpc)))) fail(2, `refusing ${name}: chain ${c}'s rpc is not a plain alias from foundry.toml's [rpc_endpoints]`);
     }
     return { net, chainMap, chains, home };
   }

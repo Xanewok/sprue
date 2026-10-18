@@ -132,13 +132,13 @@ scenario_refuses() {
   echo '[]' >$n; refused "not a plain lower-case name" G run refuse vault.check
   echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" G run refuse vault.check
   echo '{"chains":{"other":{"id":31337,"rpc":"local"}}}' >$n; refused "has no chain l2" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337}}}' >$n; refused "chain l2 names no rpc" G plan refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc alias is not a plain name" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"my.node"}}}' >$n; refused "rpc alias is not a plain name" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"123"}}}' >$n; refused "rpc alias is not a plain name" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"Node"}}}' >$n; refused "rpc alias is not a plain name" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337}}}' >$n; refused "chain l2's rpc is not a plain alias" G plan refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"my.node"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"123"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"Node"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
   # Only a rehearsal copy names a URL: its forks'.
-  echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"$RPC\"}}}" >$n; refused "rpc alias is not a plain name" G run refuse vault.check
+  echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"$RPC\"}}}" >$n; refused "rpc is not a plain alias" G run refuse vault.check
   echo '{"chains":{"l2":{"id":1,"rpc":"local"}}}' >$n; refused "local is chain 31337, network.json says 1" G run refuse vault.check
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
@@ -422,8 +422,6 @@ scenario_rehearse() {
   out=$("${go[@]}" main token.check 2>&1) || true
   ! grep -q 'lacks the code' <<<"$out" || die "rehearse: a role was read on another chain's fork"
   rm deployments/main/token.json
-  network bare 1; jq 'del(.chains.l2.rpc)' deployments/bare/network.json >deployments/bare/n && mv deployments/bare/n deployments/bare/network.json
-  refused 'chain l2 names no rpc' "${go[@]}" bare token.check
   refused 'usage:' "${go[@]}" --wait main token.check
   network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
   refused 'no rehearse staged it' "${go[@]}" hand token.check
