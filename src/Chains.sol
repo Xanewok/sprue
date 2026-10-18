@@ -29,7 +29,7 @@ function chainRpc(string memory network, string memory chain, bool optional) vie
     return cheats.rpcUrl(rpc);
 }
 
-/// @dev The `rpc` that `plan` reads: the default chain's, else the first chain's, else `<rpc>`. Never
+/// @dev The `rpc` that `plan` reads: the default chain's, else the first chain's. Never
 ///      reverts: a step prints it after it sends.
 function planRpc(string memory network) view returns (string memory rpc) {
     string memory project = projectJson();
@@ -41,7 +41,6 @@ function planRpc(string memory network) view returns (string memory rpc) {
         chain = chains.length == 0 ? "" : chains[0];
     }
     rpc = bytes(chain).length == 0 ? "" : chainAlias(network, chain);
-    if (bytes(rpc).length == 0) rpc = "<rpc>";
 }
 
 function noRpc(string memory chain) pure returns (string memory) {
