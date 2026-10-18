@@ -870,14 +870,9 @@ contract CoreUnitTest is Test {
         if (vm.exists(dir)) vm.removeDir(dir, true);
         vm.createDir(dir, true);
         unit.setTestSender(ops);
-        vm.writeFile(
-            string.concat(dir, "/network.json"),
-            bytes(pin).length == 0
-                ? string.concat('{"chains": {"main": {"rpc": "main", "id": ', vm.toString(chainId), "}}}")
-                : string.concat(
-                    '{"chains": {"main": {"rpc": "main", "id": ', vm.toString(chainId), '}}, "deployer": "', pin, '"}'
-                )
-        );
+        string memory json = string.concat('{"chains":{"main":{"rpc":"main","id":', vm.toString(chainId), "}}");
+        if (bytes(pin).length != 0) json = string.concat(json, ',"deployer":"', pin, '"');
+        vm.writeFile(string.concat(dir, "/network.json"), string.concat(json, "}"));
     }
 
     function _stray(address from) private returns (address) {
