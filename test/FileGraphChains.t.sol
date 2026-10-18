@@ -138,33 +138,24 @@ contract FileGraphProjectTest is Test, Declares {
 
     function test_plan_listsTheChainsAndNamesEachCommandsRpc() public {
         _network("rehearsal-fgp-chains", vm.toString(owner), "");
+        string memory prefix = string.concat(
+            HEADER,
+            "FOUNDRY_BROADCAST=deployments/",
+            net,
+            "/broadcast FOUNDRY_CACHE_PATH=deployments/",
+            net,
+            "/cache forge script toy.s.sol:Toy --sig 'fund(string)' ",
+            net
+        );
 
         assertEq(
             _plan(_fund().on("a").reads("ghost").reads("b")),
-            string.concat(
-                HEADER,
-                "FOUNDRY_BROADCAST=deployments/",
-                net,
-                "/broadcast FOUNDRY_CACHE_PATH=deployments/",
-                net,
-                "/cache forge script toy.s.sol:Toy --sig 'fund(string)' ",
-                net,
-                " --rpc-url alpha --sender $DEPLOYER\n"
-            ),
+            string.concat(prefix, " --rpc-url alpha --sender $DEPLOYER\n"),
             "a chain the step only reads adds nothing to its command"
         );
         assertEq(
             _plan(_fund().on("c").reads("").reads("b").ownsForks()),
-            string.concat(
-                HEADER,
-                "FOUNDRY_BROADCAST=deployments/",
-                net,
-                "/broadcast FOUNDRY_CACHE_PATH=deployments/",
-                net,
-                "/cache forge script toy.s.sol:Toy --sig 'fund(string)' ",
-                net,
-                " --sender $DEPLOYER\n"
-            ),
+            string.concat(prefix, " --sender $DEPLOYER\n"),
             "a step that selects its own forks passes no --rpc-url"
         );
         assertTrue(vm.contains(_plan(_fund()), "--rpc-url local --sender"));
