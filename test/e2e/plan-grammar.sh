@@ -109,18 +109,11 @@ for other in mainnet http://127.0.0.1:1; do
   rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
   { [ "$rc" = 2 ] && grep -q 'which no chain of net names' out; } || { fail=$((fail + 1)); echo "FAIL a date line on $other exited $rc: $(<out)" >&2; }
 done
-# A variable that holds whitespace or a flag stays one argument of the command.
-for var in DEPLOYER; do
-  total=$((total + 1))
-  saved=${!var}
-  using=$(grep -m1 "\\\$$var\b" "$CORPUS" || true)
-  [ -n "$using" ] || continue
-  export "$var=$saved --ffi"
-  if { run_line "$using" && [[ $(<calls) == *'[--ffi]'* ]]; } || [ -e MARK ]; then
-    fail=$((fail + 1)); echo "FAIL $var holding whitespace added an argument: $(<calls)" >&2
-  fi
-  export "$var=$saved"
-done
+# $DEPLOYER is one argument because run refuses any value but an address.
+total=$((total + 1))
+if DEPLOYER="$DEPLOYER --ffi" run_line "$(grep -m1 -F '$DEPLOYER' "$CORPUS")" || [ -e MARK ] || ! grep -q 'DEPLOYER is not a 0x address' out; then
+  fail=$((fail + 1)); echo "FAIL DEPLOYER holding a flag: $(<out) $(<calls)" >&2
+fi
 # Plan lines carry the paths unquoted, so a path that a shell would act on is refused.
 for bad in 'deployments(archive)' 'deployments$archive'; do
   total=$((total + 1))
