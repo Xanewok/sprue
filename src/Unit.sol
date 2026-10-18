@@ -63,9 +63,7 @@ abstract contract Unit is Deployment, Declares {
         return bytes(_selected).length == 0 ? super._selectedChain() : _selected;
     }
 
-    /// @dev The RPC for `chain`: its `rpc` alias in `network.json`, else `<CHAIN>_RPC`. Environment
-    ///      variables are shared by test suites that run in parallel, so a test that needs another
-    ///      RPC overrides this instead of setting the variable.
+    /// @dev The RPC URL of `chain`'s `rpc`. A test that needs another RPC overrides this.
     function _rpc(string memory chain) internal view virtual returns (string memory) {
         return chainRpc(_networkJson(), chain, false);
     }
@@ -83,14 +81,17 @@ abstract contract Unit is Deployment, Declares {
         }
         vm.selectFork(_forkOf[id] - 1);
         _selected = chain;
-        string memory name = vm.toUppercase(chain);
         require(
-            block.chainid == chainId(_networkJson(), chain), string.concat(name, "_RPC is not network.json's ", name)
+            block.chainid == chainId(_networkJson(), chain),
+            string.concat("chain ", chain, "'s rpc serves another chain id than network.json's")
         );
         journal = _journal();
         string memory key = string.concat(".", chain, "ChainId");
         if (_has(journal, key)) {
-            require(block.chainid == _uint(journal, key), string.concat(name, "_RPC is not the journal's ", name));
+            require(
+                block.chainid == _uint(journal, key),
+                string.concat("chain ", chain, "'s rpc serves another chain id than the journal's")
+            );
         }
     }
 

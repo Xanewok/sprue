@@ -1,1 +1,1 @@
-{"chains":{"source":{"id":31337},"receiver":{"id":31338}}}
+{"chains":{"source":{"id":31337,"rpc":"source"},"receiver":{"id":31338,"rpc":"receiver"}}}

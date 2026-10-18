@@ -218,7 +218,7 @@ contract CoreUnitTest is Test {
 
         assertEq(
             unit.deploy(network),
-            string.concat("forge script toy.s.sol --sig 'plan(string,string)' ", network, " <node> --rpc-url $R")
+            string.concat("forge script toy.s.sol --sig 'plan(string,string)' ", network, " <node> --rpc-url main")
         );
         assertEq(unit.hooks(), 1);
         assertFalse(unit.journaledAtHook(), "the hook ran after the address was journaled");
@@ -603,7 +603,7 @@ contract CoreUnitTest is Test {
                     " that landed or may land: restore the journal, or rebuild it: forge script ",
                     "test/ToyUnit.sol --sig 'recover(string)' ",
                     network,
-                    " --rpc-url $R --sender ",
+                    " --rpc-url main --sender ",
                     vm.toString(someone)
                 )
             )
@@ -623,7 +623,7 @@ contract CoreUnitTest is Test {
                 dir,
                 "/cache forge script toy.s.sol --sig 'plan(string,string)' ",
                 network,
-                " <node> --rpc-url $R"
+                " <node> --rpc-url main"
             )
         );
     }
@@ -647,7 +647,7 @@ contract CoreUnitTest is Test {
                     dir,
                     "/cache forge script test/ToyUnit.sol --sig 'recover(string)' ",
                     network,
-                    " --rpc-url $R --sender ",
+                    " --rpc-url main --sender ",
                     vm.toString(someone)
                 )
             )
@@ -823,11 +823,11 @@ contract CoreUnitTest is Test {
         _network("sole", FREE, "");
         vm.writeFile(
             string.concat(dir, "/network.json"),
-            string.concat('{"chains":{"main":{"id":', vm.toString(block.chainid), "}}}")
+            string.concat('{"chains":{"main":{"rpc":"main","id":', vm.toString(block.chainid), "}}}")
         );
         unit.useNetwork(network);
 
-        vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"main":{"id":1}}}');
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"main":{"rpc":"main","id":1}}}');
         vm.expectRevert(bytes(string.concat("the RPC's chain is not ", network, "'s default chain")));
         unit.useNetwork(network);
     }
@@ -870,12 +870,9 @@ contract CoreUnitTest is Test {
         if (vm.exists(dir)) vm.removeDir(dir, true);
         vm.createDir(dir, true);
         unit.setTestSender(ops);
-        vm.writeFile(
-            string.concat(dir, "/network.json"),
-            bytes(pin).length == 0
-                ? string.concat('{"chains": {"main": {"id": ', vm.toString(chainId), "}}}")
-                : string.concat('{"chains": {"main": {"id": ', vm.toString(chainId), '}}, "deployer": "', pin, '"}')
-        );
+        string memory json = string.concat('{"chains":{"main":{"rpc":"main","id":', vm.toString(chainId), "}}");
+        if (bytes(pin).length != 0) json = string.concat(json, ',"deployer":"', pin, '"');
+        vm.writeFile(string.concat(dir, "/network.json"), string.concat(json, "}"));
     }
 
     function _stray(address from) private returns (address) {

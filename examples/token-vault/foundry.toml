@@ -14,3 +14,6 @@ fs_permissions = [
   { access = "read", path = "./script/deploy/units" },
   { access = "read", path = "./sprue.json" },
 ]
+
+[rpc_endpoints]
+local = "http://127.0.0.1:8545"

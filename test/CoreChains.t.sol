@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {chainRpc, defaultChainIn, validatedProject} from "../src/Chains.sol";
+import {chainRpc, defaultChainIn, noRpc, validatedProject} from "../src/Chains.sol";
 
 /// @dev Free functions revert in the test's own frame, which `expectRevert` cannot see.
 contract ChainsCaller {
@@ -14,6 +14,10 @@ contract ChainsCaller {
     function validated(string calldata path) external view returns (string memory) {
         return validatedProject(path);
     }
+
+    function rpc(string calldata network, string calldata chain, bool optional) external view returns (string memory) {
+        return chainRpc(network, chain, optional);
+    }
 }
 
 contract CoreChainsTest is Test {
@@ -23,25 +27,15 @@ contract CoreChainsTest is Test {
     string internal constant CHAINS =
         '{"chains":{"near":{"id":101,"rpc":"toy-alias"},"l2":{"id":102},"far":{"id":103}}}';
 
-    /// @dev Chains of their own, so that no other suite's `<CHAIN>_RPC` is touched.
-    function test_chainRpc_readsTheChainVariableWithoutAnAlias() public {
-        string memory saved = vm.envOr("ENVONLY_RPC", string(""));
-        vm.setEnv("ENVONLY_RPC", "http://envonly");
-        assertEq(chainRpc(CHAINS, "envonly", false), "http://envonly", "no rpc: <CHAIN>_RPC");
-        assertEq(chainRpc(CHAINS, "unset-chain", true), "", "optional and unset");
-        vm.setEnv("ENVONLY_RPC", saved);
-    }
-
-    /// @dev `foundry.toml` declares the literal alias `probe`.
-    function test_chainRpc_theAliasWinsOverTheChainVariable() public {
-        string memory savedProbe = vm.envOr("PROBE_RPC", string(""));
-        vm.setEnv("PROBE_RPC", "http://probe");
-        assertEq(
-            chainRpc('{"chains":{"probe":{"id":1,"rpc":"probe"}}}', "probe", false),
-            "http://127.0.0.1:1",
-            "the alias wins over a set <CHAIN>_RPC"
-        );
-        vm.setEnv("PROBE_RPC", savedProbe);
+    /// @dev `foundry.toml` declares the literal alias `probe`. A rehearsal copy's URL resolves to itself.
+    function test_chainRpc_resolvesTheChainsRpc_andRefusesAChainWithoutOne() public {
+        assertEq(chainRpc('{"chains":{"probe":{"id":1,"rpc":"probe"}}}', "probe", false), "http://127.0.0.1:1");
+        assertEq(chainRpc('{"chains":{"x":{"id":1,"rpc":"http://127.0.0.1:2"}}}', "x", false), "http://127.0.0.1:2");
+        assertEq(chainRpc(CHAINS, "absent", true), "", "optional and absent");
+        vm.expectRevert(bytes("network.json lacks chain absent"));
+        caller.rpc(CHAINS, "absent", false);
+        vm.expectRevert(bytes(noRpc("l2")));
+        caller.rpc(CHAINS, "l2", true);
     }
 
     function test_defaultChain_isTheProjectsKeyElseTheOnlyOne() public {

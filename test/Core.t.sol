@@ -58,6 +58,10 @@ contract ToyGraph is Graph {
         return false;
     }
 
+    function _rpcFlag(string memory, string memory) internal pure override returns (string memory) {
+        return "node";
+    }
+
     function _stage(string calldata network) internal pure override returns (string memory) {
         return network;
     }
@@ -88,7 +92,7 @@ contract CoreTest is Test, Declares {
     function test_plan_blocksADependentUntilItsDependencyIsDone() public {
         assertEq(
             g.plan("net", "toy.check"),
-            "forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url $R --sender $DEPLOYER\n"
+            "forge script toy.s.sol:Toy --sig 'deploy(string)' net --rpc-url node --sender $DEPLOYER\n"
             "# then plan again toy.check\n"
         );
     }

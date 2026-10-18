@@ -17,7 +17,7 @@ W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
-  for n in main wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
+  for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
   [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote" "$W.pty.py"
 }
 trap cleanup EXIT
@@ -28,6 +28,21 @@ start_anvil() { # start_anvil <port> <chain id>
   die "no anvil at port $1"
 }
 
+# Each test port's foundry.toml alias, which a network names by its chain id.
+ENDPOINTS="local = \"$RPC\"
+live = \"$LIVE\"
+geth = \"$GETH\"
+receiver = \"http://127.0.0.1:$((PORT + 3))\"
+wide = \"http://127.0.0.1:$((PORT + 4))\"
+prod = \"http://127.0.0.1:$((PORT + 5))\"
+stage = \"http://127.0.0.1:$((PORT + 6))\""
+alias_of() {
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; *) die "no alias for chain $1" ;; esac
+}
+endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
+  sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
+}
+
 setup() {
   cp -R "$ROOT/examples/token-vault/." "$W/"
   mkdir -p "$W/lib/sprue"
@@ -36,6 +51,7 @@ setup() {
   cp "$HERE/pty.py" "$W/../$(basename "$W").pty.py"
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
+  endpoints foundry.toml
   # A command of its own, so that the pseudo-terminal can run it.
   # The attended scenario changes HOME, which a version manager's node shim cannot survive: name the binary.
   mkdir -p bin; printf '#!/bin/sh\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
@@ -51,7 +67,7 @@ setup() {
   start_anvil "$PORT" 31337; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
   OPS=$(cast rpc eth_accounts --rpc-url "$RPC" | jq -r '.[0]')
-  export R=$RPC DEPLOYER=$OPS
+  export DEPLOYER=$OPS
 }
 
 exits() { local rc=0; "${@:2}" >/dev/null 2>>"$W/log" || rc=$?; [ "$rc" = "$1" ] || die "${*:2} exited $rc, not $1"; }
@@ -75,7 +91,7 @@ all_done() { ! grep -Eqv '^# (done|chain) ' <<<"$2" || die "$1 left a node not d
 # network <name> <chain id> [openAt]: a fresh network of one chain.
 network() {
   rm -rf "deployments/$1"; mkdir -p "deployments/$1"
-  echo "{\"chains\":{\"l2\":{\"id\":$2}}}" >"deployments/$1/network.json"
+  echo "{\"chains\":{\"l2\":{\"id\":$2,\"rpc\":\"$(alias_of "$2")\"}}}" >"deployments/$1/network.json"
   echo "{\"openAt\":${3:-0}}" >"deployments/$1/vault.input.json"
 }
 fresh() { # fresh <rpc>: the seeded chain and no records
@@ -111,17 +127,20 @@ scenario_refuses() {
   rm -rf "$d"
 
   network refuse 31337
-  refused "not a plain name" env R="$RPC" G plan Bad_name vault.check
-  refused "set R" env -u R G plan refuse vault.check
+  refused "not a plain name" G plan Bad_name vault.check
   local n=deployments/refuse/network.json
-  echo '[]' >$n; refused "not a plain lower-case name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"other":{"id":31337}}}' >$n; refused "has no chain l2" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"my.node"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"123"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":31337,"rpc":"Node"}}}' >$n; refused "rpc alias is not a plain name" env R="$RPC" G run refuse vault.check
-  echo '{"chains":{"l2":{"id":1}}}' >$n; refused "is chain 31337, network.json says 1" env R="$RPC" G run refuse vault.check
+  echo '[]' >$n; refused "not a plain lower-case name" G run refuse vault.check
+  echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" G run refuse vault.check
+  echo '{"chains":{}}' >$n; refused "network.json names no chain" G run refuse vault.check
+  echo '{"chains":{"other":{"id":31337,"rpc":"local"}}}' >$n; refused "has no chain l2" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337}}}' >$n; refused "chain l2's rpc is not a plain alias" G plan refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"a b"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"my.node"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"123"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":31337,"rpc":"Node"}}}' >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  # Only a rehearsal copy names a URL: its forks'.
+  echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"$RPC\"}}}" >$n; refused "rpc is not a plain alias" G run refuse vault.check
+  echo '{"chains":{"l2":{"id":1,"rpc":"local"}}}' >$n; refused "local is chain 31337, network.json says 1" G run refuse vault.check
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
 
@@ -137,7 +156,7 @@ geth_stub() {
 # A failed step ends with forge's last Error: line, after the output that buries it.
 scenario_failure() {
   fresh "$RPC"; network pinned 31337
-  echo '{"chains":{"l2":{"id":31337}},"deployer":"0x000000000000000000000000000000000000dEaD"}' >deployments/pinned/network.json
+  echo '{"chains":{"l2":{"id":31337,"rpc":"local"}},"deployer":"0x000000000000000000000000000000000000dEaD"}' >deployments/pinned/network.json
   local out rc=0
   out=$(G run pinned token.check 2>&1) || rc=$?
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
@@ -191,18 +210,18 @@ scenario_wait() {
   fresh "$GETH"; network wait 412346 "$(($(now "$GETH") + 3600))"
   geth_stub
   export OLD_PATH=$PATH
-  R=$GETH PATH="$PWD/stub:$PATH" exits 4 G run wait vault.check
+  PATH="$PWD/stub:$PATH" exits 4 G run wait vault.check
   [ -n "$(jq -r '.vault // empty' deployments/wait/vault.json)" ] || die "wait: the work before the date was not done"
   local at; at=$(jq .openAt deployments/wait/vault.input.json)
   (sleep 3; cast rpc evm_setNextBlockTimestamp "$at" --rpc-url "$GETH" >/dev/null; cast rpc evm_mine --rpc-url "$GETH" >/dev/null) &
   local bumper=$!
-  R=$GETH PATH="$PWD/stub:$PATH" exits 0 G run wait vault.check --wait
+  PATH="$PWD/stub:$PATH" exits 0 G run wait vault.check --wait
   wait "$bumper"
   [ -n "$(jq -r '.checked // empty' deployments/wait/vault.json)" ] || die "wait: --wait did not finish the target"
   network onanvil 31337 0
   exits 2 G run --wait onanvil vault.check
   exits 2 G plan onanvil no.such.target
-  R=$RPC refused "unknown network 'nosuch'" G plan nosuch vault.check
+  refused "unknown network 'nosuch'" G plan nosuch vault.check
   echo "ok  wait exit 4 before a date, --wait waits for it; Anvil, an unknown target or network exit 2"
 }
 
@@ -260,11 +279,12 @@ scenario_two_chain() {
   local d=$W/two-chain rcv=http://127.0.0.1:$((PORT + 3)) at out zero=0x0000000000000000000000000000000000000000
   cp -R "$ROOT/examples/two-chain" "$d"; ln -s "$W/lib" "$d/lib"
   cd "$d"
+  sed -i.bak '/^\[rpc_endpoints\]/,$d' foundry.toml && rm -f foundry.toml.bak
+  printf '[rpc_endpoints]\nsource = "%s"\nreceiver = "%s"\n' "$RPC" "$rcv" >>foundry.toml
   start_anvil $((PORT + 3)) 31338
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the two-chain example does not build"; }
   node "$W/lib/sprue/bin/sprue.mjs" json | diff - script/deploy/graph.generated.json || die "two-chain: graph.generated.json is stale"
   fresh "$RPC"
-  export SOURCE_RPC=$RPC RECEIVER_RPC=$rcv
   # The receiver is the first contract of account 0 on its fresh chain: the address the input file names.
   at=$(jq .openAt deployments/local/receiver.input.json)
   forge create script/deploy/units/receiver/Receiver.sol:Receiver --rpc-url "$rcv" --unlocked --from "$OPS" --broadcast >/dev/null 2>>log
@@ -299,7 +319,8 @@ scenario_rehearse() {
   network main 1 "$(($(now "$LIVE") + 1000))"
   cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
   b0=$(cast block-number --rpc-url "$LIVE")
-  local go=(env R="$LIVE" DEPLOYER="$dead" G rehearse)
+  local go=(env DEPLOYER="$dead" G rehearse)
+  forkof() { jq -r .chains.l2.rpc "deployments/rehearsal-$1/network.json"; }
   # Inherited, a keystore name that forge would fail to find, and an eth_rpc_url that forge would send to
   # over --rpc-url, are dropped.
   out=$(ETH_KEYSTORE_ACCOUNT=nosuch FOUNDRY_ETH_RPC_URL=$LIVE "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
@@ -311,14 +332,10 @@ scenario_rehearse() {
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: the fork still runs"
   [ -z "$(ls -d broadcast/*/1 cache/*/1 2>/dev/null)" ] || die "rehearse: records or resume data outside $d"
   jq -e '.tokenDirty == true' "$d/token.json" >/dev/null || die "rehearse: a run from a dirty tree journaled the token clean"
-
-  # A chain's rpc alias names the fork's upstream, and the commands, which read the copy without it, use the fork.
-  mv foundry.toml foundry.toml.ok; { cat foundry.toml.ok; echo '[rpc_endpoints]'; echo "live = \"$LIVE\""; } >foundry.toml
-  network aliased 1; echo '{"chains":{"l2":{"id":1,"rpc":"live"}}}' >deployments/aliased/network.json
-  out=$(env -u R DEPLOYER="$dead" G rehearse aliased token.check 2>&1) || die "rehearse: the aliased network failed: $(tail -c 600 <<<"$out")"
+  # The chain's alias names the fork's upstream; the copy names the fork, so every command reads it.
   grep -q '(from alias live)' <<<"$out" || die "rehearse: the alias did not name the upstream: $(tail -c 600 <<<"$out")"
-  mv foundry.toml.ok foundry.toml
-  [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: a command sent to the alias's real chain"
+  [ "$(forkof main)" = "$url" ] || die "rehearse: the copy names $(forkof main), not its fork $url"
+  [ "$(jq -r .chains.l2.rpc deployments/main/network.json)" = live ] || die "rehearse: the source network's rpc changed"
 
   # A signal to the runner alone stops the running step before the lock is released: the step writes
   # its journal until it exits, and a kept fork would let it finish.
@@ -335,11 +352,12 @@ scenario_rehearse() {
   # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no
   # record could stop it later.
   local mute=$((PORT + 4)) fork=
+  network mute 4663
   python3 -c "import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', $mute)); s.listen(); c=s.accept(); time.sleep(120)" &
   local silent=$!; PIDS="$PIDS $silent"
-  env R="http://127.0.0.1:$mute" DEPLOYER="$dead" G rehearse --keep main token.check >/dev/null 2>&1 & pid=$!
+  "${go[@]}" --keep mute token.check >/dev/null 2>&1 & pid=$!
   for _ in $(seq 1 300); do
-    fork=$(ps -eo pid=,args= | awk -v u="--fork-url http://127.0.0.1:$mute " 'index($0, u) && !/awk/ {print $1; exit}')
+    fork=$(ps -eo pid=,args= | awk -v u="--fork-url wide " 'index($0, u) && !/awk/ {print $1; exit}')
     [ -n "$fork" ] && break; sleep 0.05
   done
   [ -n "$fork" ] || die "rehearse: no fork of the silent upstream started"
@@ -355,12 +373,12 @@ scenario_rehearse() {
   ! cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 && [ -n "$url" ] || die "rehearse: an interrupt left the fork '$url' running"
   rm -f "$W.int"
 
-  # --keep leaves the fork running and prints its variables. The next rehearse stops it and starts over;
+  # --keep leaves the fork running, and the copy names it. The next rehearse stops it and starts over;
   # --stop stops a kept one.
   local kept
-  kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  "${go[@]}" --keep main token.check >/dev/null 2>&1; kept=$(forkof main)
   out=$(cast code "$(jq -r .token "$d/token.json")" --rpc-url "${kept:-none}") && [ "$out" != 0x ] || die "rehearse: no kept fork with the token at '$kept'"
-  url=$("${go[@]}" main token.check --keep 2>/dev/null | sed -n 's/^R=//p')
+  "${go[@]}" main token.check --keep >/dev/null 2>&1; url=$(forkof main)
   ! cast chain-id --rpc-url "$kept" >/dev/null 2>&1 || die "rehearse: a rerun left the kept fork running"
   cast chain-id --rpc-url "${url:-none}" >/dev/null 2>&1 || die "rehearse: no kept fork at '$url'"
   # --stop reads only the copy, so it stops forks whose source network is gone.
@@ -374,16 +392,16 @@ scenario_rehearse() {
   # init-code limit.
   local code wide=http://127.0.0.1:$((PORT + 4))
   local big=(0x620060016000f3 "0x60006000f3$(printf '%098296d' 0)")
-  kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  "${go[@]}" --keep main token.check >/dev/null 2>&1; kept=$(forkof main)
   for code in "${big[@]}"; do
     ! cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null 2>&1 || die "rehearse: a fork of an unlisted chain took larger code"
   done
   start_anvil $((PORT + 4)) 4663
   cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$wide" >/dev/null
   network wide 4663
-  out=$(env R="$wide" DEPLOYER="$dead" G rehearse --keep wide token.check 2>&1) || die "rehearse: a fork of a listed chain failed: $(tail -c 600 <<<"$out")"
+  out=$("${go[@]}" --keep wide token.check 2>&1) || die "rehearse: a fork of a listed chain failed: $(tail -c 600 <<<"$out")"
   grep -q '^fork l2 chain 4663 block [0-9]* code limit 98304 ' <<<"$out" || die "rehearse: the listed chain's code limit was not used: $(tail -c 600 <<<"$out")"
-  kept=$(sed -n 's/^R=//p' <<<"$out")
+  kept=$(forkof wide)
   for code in "${big[@]}"; do
     cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null || die "rehearse: the listed chain's code limit did not reach its fork"
   done
@@ -405,13 +423,12 @@ scenario_rehearse() {
   out=$("${go[@]}" main token.check 2>&1) || true
   ! grep -q 'lacks the code' <<<"$out" || die "rehearse: a role was read on another chain's fork"
   rm deployments/main/token.json
-  refused 'set R' env -u R G rehearse main token.check
   refused 'usage:' "${go[@]}" --wait main token.check
   network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
   refused 'no rehearse staged it' "${go[@]}" hand token.check
   [ -f deployments/rehearsal-hand/notes ] || die "rehearse: deleted a directory it did not stage"
   mkdir -p "$W.noanvil"; ln -sf "$(command -v forge)" "$(command -v cast)" "$(command -v git)" "$W.noanvil/"
-  refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" R="$LIVE" DEPLOYER="$dead" G rehearse main token.check
+  refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" DEPLOYER="$dead" G rehearse main token.check
   rm -rf "$W.noanvil" deployments/rehearsal-hand
   echo $$ >"$d/.sprue/lock"
   refused 'is running, as pid' "${go[@]}" main token.check
@@ -438,7 +455,6 @@ scenario_attended() {
   git add -A; git commit -qm networks
   unset CI
   local run=(G run "$net" token.check --account "$account")
-  export R=$LIVE
   refused 'no terminal' detached "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
@@ -531,7 +547,7 @@ scenario_tag() {
   # The push names one tag, whatever the configuration follows.
   git config push.followTags true; git tag -a -m other unrelated
   geth_stub "$W.bin"
-  local run=(env PATH="$W.bin:$PATH" R="$prod" G run prod token.check --account e2e)
+  local run=(env PATH="$W.bin:$PATH" G run prod token.check --account e2e)
   out=$(tty yes,yes,yes,yes "${run[@]}" 2>&1) || die "tag: the run failed: $(tail -c 600 <<<"$out")"
   [ "$(git cat-file -t "$tag")" = tag ] || die "tag: no annotated tag $tag: $(tail -c 600 <<<"$out")"
   [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse "$(jq -r .tokenCommit deployments/prod/token.json)^{commit}")" ] || die "tag: not at the journal's commit"
@@ -584,9 +600,9 @@ scenario_tag() {
   # A unit certified on a test chain gets no offer, though its network also names a live chain.
   start_anvil $((PORT + 6)) 11155111
   network stage 11155111
-  echo '{"chains":{"l2":{"id":11155111},"eth":{"id":10}}}' >deployments/stage/network.json
+  echo '{"chains":{"l2":{"id":11155111,"rpc":"stage"},"eth":{"id":10,"rpc":"prod"}}}' >deployments/stage/network.json
   git add -A; git commit -qm stage
-  out=$(tty yes,yes,yes,yes,yes,yes env PATH="$W.bin:$PATH" R="http://127.0.0.1:$((PORT + 6))" ETH_RPC="$prod" G run stage token.check --account e2e 2>&1) \
+  out=$(tty yes,yes,yes,yes,yes,yes env PATH="$W.bin:$PATH" G run stage token.check --account e2e 2>&1) \
     || die "tag: the test-chain run failed: $(tail -c 600 <<<"$out")"
   grep -q '# chain eth 10 live' <<<"$out" || die "tag: the stage network names no live chain: $(tail -c 600 <<<"$out")"
   jq -e '.checked' deployments/stage/token.json >/dev/null || die "tag: the test-chain run certified nothing"

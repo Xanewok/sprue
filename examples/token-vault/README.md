@@ -21,7 +21,7 @@ Copy this directory out of the sprue checkout, then:
 ```sh
 git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.2
 anvil &                                  # chain 31337 on :8545
-export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 G="node lib/sprue/bin/sprue.mjs"
 $G plan local vault.check                # the next commands; sends nothing
 $G run local vault.check                 # deploys, checks, funds, checks
@@ -39,8 +39,8 @@ $G run local vault.check                 # refused: prints the `recover` command
 
 ## For a real network
 
-- Add `deployments/<network>/network.json` with the chain's id (and an `rpc` alias if `$R` is not its
-  node), and list the id in `sprue.json`'s `chains.test` if it is a test chain.
+- Add `deployments/<network>/network.json` with the chain's id and an `rpc` alias from `foundry.toml`'s
+  `[rpc_endpoints]`, and list the id in `sprue.json`'s `chains.test` if it is a test chain.
 - Set `openAt` in `vault.input.json` to the real date. Off Anvil, `run` exits 4 until the chain's clock
   reaches it, or waits with `--wait`.
 - A non-local `run` is attended ([Your own project](https://github.com/Xanewok/sprue#your-own-project), step 7). Commit

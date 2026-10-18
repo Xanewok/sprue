@@ -111,8 +111,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 12. **A network may pin its deployer.** `network.json`'s `deployer`. A CREATE step sent by another key
     refuses before it sends, unless `--unsafe-unexpected-deployer` (`UNSAFE_UNEXPECTED_DEPLOYER=1`). One pin
     per network; a pin per chain waits for a network that needs one.
-13. **Chains are a named map.** `network.json` keys chains by name with an id and an optional `rpc` alias
-    from `foundry.toml`, else `<CHAIN>_RPC`; a file never holds a URL, which may carry a key. A chain's kind
+13. **Chains are a named map.** `network.json` keys chains by name with an id and an `rpc` alias from
+    `foundry.toml`'s `[rpc_endpoints]`, the one RPC configuration, which forge and cast resolve; a file never
+    holds a URL, which may carry a key, but for a rehearsal copy's loopback forks. Rejected: an `R` variable
+    and `<CHAIN>_RPC` fallbacks beside the aliases (a second configuration that printed commands depended on). A chain's kind
     (`local`, `test`, `live`) derives from `sprue.json` by id and is never stored. `chains.default` names the
     chain of a step without `.on`; `chains.unrecordedDeploys` exempts a live chain from the fence, with a reason.
 14. **Public chains run attended.** A run on a network with a chain not listed `local` needs a terminal, no
@@ -133,14 +135,13 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     cannot be judged until a dependency lands (an input date not yet reached, or a view or predicate whose
     dependency is not done). `rehearse` simulates the closure in that order on a staged copy of the
     network, warping to each date (`FOUNDRY_BROADCAST=<d>/broadcast FOUNDRY_CACHE_PATH=<d>/cache forge script
-    <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url $R --sender <deployer>`, where `<d>` is
+    <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url <rpc> --sender <deployer>`, where `<d>` is
     `<paths.rehearsal>-rehearse-<network>`); it refuses `--broadcast`, and stops at the first node whose sender is
     another account, since a forge run has one sender and a fork forgets the simulation. A predicate is
     judged after its dependencies and date, and stops the run when unmet.
 20. **`sprue rehearse` starts over on forks it owns.** Each invocation stops the forks a `--keep` left, copies
-    `deployments/<network>/`'s files into `<paths.rehearsal>-<network>` without the `rpc` aliases, starts one
-    Anvil per upstream (`R` for the default chain, else the alias, else `<CHAIN>_RPC`; an empty chain for a
-    `chains.local` one without), and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
+    `deployments/<network>/`'s files into `<paths.rehearsal>-<network>`, starts one Anvil per `rpc` alias,
+    names each fork's loopback URL as the copy's `rpc` for its chains, and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
     sender impersonated. No key signs, so a fork that keeps a public chain id never holds a transaction the
     real chain would accept. Copied journals keep `checked`, so a landed unit stays done without reading the
     fork, as on the real chain. So a fork that lacks a certified role's code, as at a `--block` before its

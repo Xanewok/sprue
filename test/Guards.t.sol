@@ -222,7 +222,9 @@ contract GuardsTest is Test, Declares {
         SiblingGraph g = new SiblingGraph();
         string memory net = "rehearsal-guards-siblings";
         vm.createDir(string.concat("deployments/", net), true);
-        vm.writeFile(string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337}}}');
+        vm.writeFile(
+            string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"local"}}}'
+        );
         assertTrue(vm.contains(g.plan(net, "fixture.check.0"), "forge script"));
         assertTrue(vm.contains(g.plan(net, "fixture.check.1"), "forge script"));
         vm.expectRevert(

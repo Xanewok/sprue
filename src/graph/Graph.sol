@@ -100,18 +100,17 @@ abstract contract Graph is Script {
     ///         printed behind `PLAN ` and the lines are returned together.
     ///
     ///         Each command is a dry run. The same command with `--account <keystore> --broadcast`
-    ///         sends it. `$R` is the RPC URL of the default chain and `$DEPLOYER` the account that
-    ///         sends a step with no `.by`. A command whose script reads a chain through an
-    ///         environment variable starts with that variable's assignment.
+    ///         sends it. Its `--rpc-url` is the chain's `rpc` alias, and `$DEPLOYER` the account that
+    ///         sends a step with no `.by`.
     ///
     ///         Every other line is a comment, `# <keyword> ...`. The executor rejects any keyword not
     ///         listed here:
     ///         - `# chain <chain> <chain id> <kind>`: a chain of `network.json`. These lines come
     ///           before everything else.
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
-    ///         - `# not before <unix time> [on <RPC variable or alias>] <id>[, movable until reached]`:
-    ///           the node's date has not been reached on that chain (without `on`, the chain `$R`
-    ///           serves). The command after it is valid only once the date is reached.
+    ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
+    ///           has not been reached on that chain (without `on`, the default chain). The command
+    ///           after it is valid only once the date is reached.
     ///         - `# cannot reach <id>: <reason>`: the node's step would refuse now, and its command
     ///           follows; or, for a predicate node, its condition is not met, and no command follows.
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
@@ -570,17 +569,12 @@ abstract contract Graph is Script {
 
     function _isTestChain() internal view virtual returns (bool);
 
-    /// @dev The `--rpc-url` value `plan` prints for `chain`: a `foundry.toml` alias, or an
-    ///      environment variable with its `$`. An empty `chain` is the default chain, which `plan`
-    ///      reaches with `$R`.
-    function _rpcFlag(string memory, string memory) internal view virtual returns (string memory) {
-        return "$R";
-    }
-
-    /// @dev The variable assignments (`NAME=$NAME `, each ending in a space) that start a command
-    ///      whose script reads the named chains through environment variables. An empty name is the
+    /// @dev The `--rpc-url` value `plan` prints for `chain`, its `rpc`. An empty `chain` is the
     ///      default chain.
-    function _chainEnv(string memory, string[] memory) internal view virtual returns (string memory) {
+    function _rpcFlag(string memory, string memory) internal view virtual returns (string memory);
+
+    /// @dev The variable assignments (`NAME=value `, each ending in a space) that start every command.
+    function _commandEnv(string memory) internal view virtual returns (string memory) {
         return "";
     }
 
@@ -619,7 +613,7 @@ abstract contract Graph is Script {
         string memory sender =
             bytes(n.sender).length == 0 ? "$DEPLOYER" : vm.toString(_senderAddress(network, n.sender));
         return string.concat(
-            _chainEnv(network, _envChains(n)),
+            _commandEnv(network),
             "forge script ",
             n.script,
             " --sig '",
@@ -634,19 +628,8 @@ abstract contract Graph is Script {
         );
     }
 
-    /// @dev The chains the command's script reads by variable: what the step reads, and, when it
-    ///      selects its own forks, the one it sends on.
-    function _envChains(Node storage n) private view returns (string[] memory chains) {
-        uint256 count = n.reads.length;
-        chains = new string[](count + (n.ownForks ? 1 : 0));
-        for (uint256 i; i < count; ++i) {
-            chains[i] = n.reads[i];
-        }
-        if (n.ownForks) chains[count] = n.on;
-    }
-
-    /// @dev ` on <name>` for the chain whose clock the date is read against. Empty when `$R` already
-    ///      serves that chain.
+    /// @dev ` on <rpc>` for the chain whose clock the date is read against. Empty for the default
+    ///      chain.
     function _clockOn(string memory network, Node storage n) private view returns (string memory) {
         string memory flag = _rpcFlag(network, n.on);
         require(
@@ -654,7 +637,7 @@ abstract contract Graph is Script {
             string.concat(n.id, " has no chain: add .on(...) to it or set chains.default in sprue.json")
         );
         if (_onDefaultChain(network, n)) return "";
-        return string.concat(" on ", vm.replace(flag, "$", ""));
+        return string.concat(" on ", flag);
     }
 
     function _onDefaultChain(string memory network, Node storage n) private view returns (bool) {

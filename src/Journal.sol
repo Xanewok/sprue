@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {Script, console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, defaultChain, deploymentsDir, rehearsalPrefix} from "./Chains.sol";
+import {chainId, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
 import {cheats} from "./DeployChecks.sol";
 
 /// @dev The unit's own parameters, `<root>/<network>/<unit>.input.json`.
@@ -165,7 +165,8 @@ abstract contract Journal is Script {
             _graphScript(),
             " --sig 'plan(string,string)' ",
             _networkName(),
-            " <node> --rpc-url $R"
+            " <node> --rpc-url ",
+            planRpc(_networkJson())
         );
         console.log(string.concat("next: ", command));
     }

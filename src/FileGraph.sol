@@ -7,10 +7,10 @@ import {
     chainAlias,
     chainId,
     chainKind,
-    defaultChain,
     defaultChainOrNone,
     deploymentsDir,
     isTestChain,
+    noRpc,
     rehearsalPrefix
 } from "./Chains.sol";
 import {isRehearsalNetwork, outputsEnv, stageInputs, unitInputPath} from "./Journal.sol";
@@ -50,58 +50,17 @@ abstract contract FileGraph is Graph {
         return defaultChainOrNone(file);
     }
 
-    /// @dev A chain with an `rpc` alias is named by it. The default chain without one is `$R`. Any
-    ///      other chain is `$<CHAIN>_RPC`. Empty when `chain` is empty and the network has no default
-    ///      chain.
-    function _rpcFlag(string memory net, string memory chain) internal view override returns (string memory) {
+    /// @dev Empty when `chain` is empty and the network has no default chain.
+    function _rpcFlag(string memory net, string memory chain) internal view override returns (string memory rpc) {
         string memory file = _networkFile(net);
-        string memory home = _homeChain(file);
-        string memory named = bytes(chain).length == 0 ? home : chain;
+        string memory named = bytes(chain).length == 0 ? _homeChain(file) : chain;
         if (bytes(named).length == 0) return "";
-        string memory rpcAlias = chainAlias(file, named);
-        if (bytes(rpcAlias).length != 0) return rpcAlias;
-        return _same(named, home) ? "$R" : string.concat("$", vm.toUppercase(named), "_RPC");
+        rpc = chainAlias(file, named);
+        require(bytes(rpc).length != 0, noRpc(named));
     }
 
-    /// @dev A script reads a chain's `<CHAIN>_RPC` only when the chain has no alias. The assignments
-    ///      follow `network.json`'s `chains` order, then any other chain in the order the step reads
-    ///      it. Replaces empty names in `chains` with the default chain, in place.
-    function _chainEnv(string memory net, string[] memory chains) internal view override returns (string memory out) {
-        if (isRehearsalNetwork(net)) out = outputsEnv(string.concat(deploymentsDir(), "/", net));
-        string memory file = _networkFile(net);
-        string memory home = _homeChain(file);
-        string[] memory declared =
-            vm.keyExistsJson(file, ".chains") ? vm.parseJsonKeys(file, ".chains") : new string[](0);
-        for (uint256 i; i < chains.length; ++i) {
-            if (bytes(chains[i]).length == 0) {
-                require(
-                    bytes(home).length != 0, "a step reads the default chain, and sprue.json sets no chains.default"
-                );
-                chains[i] = home;
-            }
-        }
-        for (uint256 i; i < declared.length; ++i) {
-            if (_listed(chains, chains.length, declared[i])) out = string.concat(out, _env(file, declared[i]));
-        }
-        for (uint256 i; i < chains.length; ++i) {
-            if (!_listed(declared, declared.length, chains[i]) && !_listed(chains, i, chains[i])) {
-                out = string.concat(out, _env(file, chains[i]));
-            }
-        }
-    }
-
-    function _env(string memory file, string memory chain) private view returns (string memory) {
-        if (bytes(chainAlias(file, chain)).length != 0) return "";
-        string memory name = string.concat(vm.toUppercase(chain), "_RPC");
-        return string.concat(name, "=$", name, " ");
-    }
-
-    /// @dev Whether `chain` is among the first `n` of `chains`.
-    function _listed(string[] memory chains, uint256 n, string memory chain) private pure returns (bool) {
-        for (uint256 i; i < n; ++i) {
-            if (_same(chains[i], chain)) return true;
-        }
-        return false;
+    function _commandEnv(string memory net) internal view override returns (string memory) {
+        return isRehearsalNetwork(net) ? outputsEnv(string.concat(deploymentsDir(), "/", net)) : "";
     }
 
     function _same(string memory a, string memory b) private pure returns (bool) {
@@ -126,9 +85,8 @@ abstract contract FileGraph is Graph {
     }
 
     /// @dev Reverts if the step has no chain to send on, or names a chain that `network.json` lacks.
-    ///      A step that creates its own forks needs every chain it reads in `network.json`. For any
-    ///      other step the reads are environment variables that its script may leave unset, such as a
-    ///      read-only chain that a local network omits.
+    ///      A step that creates its own forks needs every chain it reads in `network.json`. Any other
+    ///      step's script may skip a read chain that a network omits, such as a local one.
     function _requireChains(string memory net, Node storage n) internal view override {
         string memory file = _networkFile(net);
         if (bytes(n.on).length == 0 && bytes(_homeChain(file)).length == 0) {
@@ -138,7 +96,8 @@ abstract contract FileGraph is Graph {
             revert(string.concat(n.id, " sends on ", n.on, ", which ", net, "'s network.json lacks"));
         }
         for (uint256 i; n.ownForks && i < n.reads.length; ++i) {
-            string memory chain = bytes(n.reads[i]).length == 0 ? defaultChain(file) : n.reads[i];
+            string memory chain = bytes(n.reads[i]).length == 0 ? _homeChain(file) : n.reads[i];
+            require(bytes(chain).length != 0, "a step reads the default chain, and sprue.json sets no chains.default");
             if (!vm.keyExistsJson(file, string.concat(".chains.", chain))) {
                 revert(string.concat(n.id, " reads ", chain, ", which ", net, "'s network.json lacks"));
             }
