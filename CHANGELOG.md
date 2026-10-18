@@ -8,6 +8,10 @@ Robinhood Chain and its testnet, at 98304 bytes.
 The tag offer skips a unit certified only on test or local chains, even when its network also names
 a live chain that it reads.
 
+A step's view or predicate that fails in a cheatcode, such as reading a missing input file, fails
+`plan`, `run` and `rehearse` with the node's id and the cheatcode's message. It no longer shows as
+`# cannot reach`, which made a setup mistake end as a wait (exit 3).
+
 ## 0.1.2
 
 When an attended run on a live chain ends done or waiting, it offers an annotated tag

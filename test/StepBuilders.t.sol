@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {Graph} from "../src/graph/Graph.sol";
 import {Registration, Step, Declares} from "../src/graph/Step.sol";
@@ -36,6 +37,13 @@ contract StepFunctions {
 
     function lockedDue(string calldata) external pure returns (bool) {
         revert Closed();
+    }
+
+    function unread(string calldata) external {}
+
+    function unreadDue(string calldata) external view returns (bool) {
+        Vm(address(uint160(uint256(keccak256("hevm cheat code"))))).readFile("deployments/anvil/missing.json");
+        return true;
     }
 
     function notify(string calldata, uint8) external {}
@@ -370,6 +378,18 @@ contract StepBuildersTest is Test, Declares {
                 "\nforge script test/Fixture.s.sol:Fixture --sig 'locked(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
             )
         );
+    }
+
+    /// @dev A missing input is the project's mistake: waiting for it would end the run as not yet reachable.
+    function test_plan_failsWhenAViewFailsInACheatcode() public {
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.unread", StepFunctions.unread.selector).due(StepFunctions.unreadDue.selector);
+        BuilderGraph g = new BuilderGraph(unit, s);
+        try g.plan("anvil", "fixture.unread") {
+            fail();
+        } catch Error(string memory reason) {
+            assertEq(vm.indexOf(reason, "fixture.unread: vm.readFile: failed to open file"), 0);
+        }
     }
 
     function test_rehearse_sendsAStepOnceAcrossADateWarp() public {
