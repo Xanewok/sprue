@@ -103,6 +103,12 @@ for other in mainnet http://127.0.0.1:1; do
     fail=$((fail + 1)); echo "FAIL ran a line that reads another endpoint: $hostile" >&2
   fi
 done
+for other in mainnet http://127.0.0.1:1; do
+  total=$((total + 1))
+  printf '# not before 2000000000 on %s\n' "$other" >plan
+  rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
+  { [ "$rc" = 2 ] && grep -q 'which no chain of net names' out; } || { fail=$((fail + 1)); echo "FAIL a date line on $other exited $rc: $(<out)" >&2; }
+done
 # A variable that holds whitespace or a flag stays one argument of the command.
 for var in DEPLOYER; do
   total=$((total + 1))

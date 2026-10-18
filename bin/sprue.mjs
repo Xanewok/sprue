@@ -740,7 +740,7 @@ async function main(argv) {
 
   // A date line names its chain's rpc (`# not before <ts> on <rpc> ...`). Without `on`, the plan's.
   const before = (line, at, on) => {
-    if (on && !ALIAS.test(on) && !LOOPBACK.test(on)) fail(2, `unknown plan line: ${line}`);
+    if (on && !endpoints.includes(on)) fail(2, `refusing: the line reads ${on}, which no chain of ${network} names: ${line}`);
     const clock = on || planRpc;
     const now = must("cast", ["block", "latest", "--field", "timestamp", "--rpc-url", clock]);
     if (!/^[0-9]+$/.test(now)) fail(1, `cannot read the clock at ${clock}`);
