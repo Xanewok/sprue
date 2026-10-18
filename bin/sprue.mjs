@@ -446,6 +446,11 @@ async function main(argv) {
       const key = upstream || `chain ${id}`;
       const group = groups.get(key) ?? { upstream, from, id, chains: [] };
       group.chains.push(c);
+      // Anvil applies Ethereum's code limits to every fork; a chain that raised them would refuse what it accepts.
+      const limit = chainMap[c].codeSizeLimit;
+      if (limit !== undefined && !(Number.isSafeInteger(limit) && limit > 0)) fail(2, `refusing ${source}: chain ${c}'s codeSizeLimit is not a positive integer`);
+      if (group.codeSizeLimit !== undefined && limit !== undefined && limit !== group.codeSizeLimit) fail(2, `refusing ${source}: ${group.chains.join(" and ")} share one fork and name different codeSizeLimits`);
+      group.codeSizeLimit ??= limit;
       if (blocksByChain.has(c)) {
         if (!upstream) fail(2, `refusing --block for ${c}: rehearse starts it as an empty chain`);
         if (group.block && group.block !== blocksByChain.get(c)) fail(2, `refusing --block: ${group.chains.join(" and ")} share one fork`);
@@ -494,6 +499,7 @@ async function main(argv) {
       const log = `${dir}/.sprue/anvil-${forks.length}.log`;
       const fd = openSync(log, "w");
       const args = group.upstream ? ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])] : ["--chain-id", String(group.id)];
+      if (group.codeSizeLimit) args.push("--code-size-limit", String(group.codeSizeLimit));
       const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd] });
       closeSync(fd);
       child.unref();

@@ -369,6 +369,24 @@ scenario_rehearse() {
   mv "$W.main" deployments/main
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: --stop left the fork running"
 
+  # A fork keeps Ethereum's code limits unless its chain names its own: one init code returns 24577
+  # bytes, one over Ethereum's code limit, and one is 49153 bytes, one over its init-code limit.
+  local n=deployments/main/network.json code
+  local big=(0x620060016000f3 "0x60006000f3$(printf '%098296d' 0)")
+  kept=$("${go[@]}" --keep main token.check 2>/dev/null | sed -n 's/^R=//p')
+  for code in "${big[@]}"; do
+    ! cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null 2>&1 || die "rehearse: a fork took code over Ethereum's limits"
+  done
+  cp "$n" "$W.net"; jq '.chains.l2.codeSizeLimit = 98304' "$W.net" >"$n"
+  out=$("${go[@]}" --keep main token.check 2>&1) || die "rehearse: a chain's code limit failed: $(tail -c 600 <<<"$out")"
+  kept=$(sed -n 's/^R=//p' <<<"$out")
+  for code in "${big[@]}"; do
+    cast estimate --from "$dead" --rpc-url "${kept:-none}" --create "$code" >/dev/null || die "rehearse: the chain's code limit did not reach its fork"
+  done
+  jq '.chains.l2.codeSizeLimit = "big"' "$W.net" >"$n"
+  refused "chain l2's codeSizeLimit is not a positive integer" "${go[@]}" main token.check
+  mv "$W.net" "$n"
+
   refused 'no key signs' "${go[@]}" main token.check --account e2e
   refused 'it is a rehearsal network' "${go[@]}" rehearsal-main token.check
   # forge reads .env only for names unset, so a keystore named there is refused.

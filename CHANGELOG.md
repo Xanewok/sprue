@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+A `network.json` chain may name its deployed-code limit as `"codeSizeLimit"`; `rehearse` passes it to
+that chain's Anvil fork as `--code-size-limit`.
+
 The tag offer skips a unit certified only on test or local chains, even when its network also names
 a live chain that it reads.
 
