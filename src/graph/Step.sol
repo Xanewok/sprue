@@ -104,7 +104,7 @@ library StepLib {
         return s;
     }
 
-    /// @dev The step's script reads `chain`, through its `rpc` alias or its `<CHAIN>_RPC` variable.
+    /// @dev The step's script reads `chain`. With `ownsForks`, `plan` refuses a network that lacks it.
     ///      May be called more than once. An empty name is the default chain.
     function reads(Step memory s, string memory chain) internal pure returns (Step memory) {
         string[] memory chains = new string[](s.readChains.length + 1);

@@ -3,28 +3,51 @@ pragma solidity ^0.8.27;
 
 import {cheats} from "./DeployChecks.sol";
 
-// A network's chains by name, from the `chains` map of its `network.json`. A file never holds an RPC
-// URL, which may carry an API key: it names an alias or an environment variable.
+// A network's chains by name, from the `chains` map of its `network.json`. Each chain names its RPC by a
+// `foundry.toml` `[rpc_endpoints]` alias, never a URL, which may carry an API key. Only a rehearsal copy
+// holds URLs: the loopback URLs of the forks that `rehearse` started.
 
 function chainId(string memory network, string memory chain) view returns (uint256) {
     return cheats.parseJsonUint(network, string.concat(".chains.", chain, ".id"));
 }
 
-/// @dev The `foundry.toml` `[rpc_endpoints]` alias a chain names, or empty.
+/// @dev The `rpc` a chain names, or empty.
 function chainAlias(string memory network, string memory chain) view returns (string memory) {
     string memory key = string.concat(".chains.", chain, ".rpc");
     return cheats.keyExistsJson(network, key) ? cheats.parseJsonString(network, key) : "";
 }
 
-/// @dev The RPC URL of `chain`: its `rpc` alias resolved through `foundry.toml`, else the
-///      `<CHAIN>_RPC` variable, which is read only for a chain without `rpc`. A missing variable
-///      reverts, unless `optional` is true, which returns empty. A variable set to the empty string
-///      is not rejected.
+/// @dev The RPC URL of `chain`, resolved from its `rpc` through `foundry.toml`. A chain the network
+///      lacks is empty if `optional`; a chain without `rpc` always reverts.
 function chainRpc(string memory network, string memory chain, bool optional) view returns (string memory) {
-    string memory rpcAlias = chainAlias(network, chain);
-    if (bytes(rpcAlias).length != 0) return cheats.rpcUrl(rpcAlias);
-    string memory name = string.concat(cheats.toUppercase(chain), "_RPC");
-    return optional ? cheats.envOr(name, string("")) : cheats.envString(name);
+    if (!cheats.keyExistsJson(network, string.concat(".chains.", chain))) {
+        require(optional, string.concat("network.json lacks chain ", chain));
+        return "";
+    }
+    string memory rpc = chainAlias(network, chain);
+    require(bytes(rpc).length != 0, noRpc(chain));
+    return cheats.rpcUrl(rpc);
+}
+
+/// @dev The `rpc` that `plan` reads: the default chain's, else the first chain's, else `<rpc>`. Never
+///      reverts: a step prints it after it sends.
+function planRpc(string memory network) view returns (string memory rpc) {
+    string memory project = projectJson();
+    string memory chain =
+        cheats.keyExistsJson(project, ".chains.default") ? cheats.parseJsonString(project, ".chains.default") : "";
+    if (bytes(chain).length == 0 || !cheats.keyExistsJson(network, string.concat(".chains.", chain))) {
+        string[] memory chains =
+            cheats.keyExistsJson(network, ".chains") ? cheats.parseJsonKeys(network, ".chains") : new string[](0);
+        chain = chains.length == 0 ? "" : chains[0];
+    }
+    rpc = bytes(chain).length == 0 ? "" : chainAlias(network, chain);
+    if (bytes(rpc).length == 0) rpc = "<rpc>";
+}
+
+function noRpc(string memory chain) pure returns (string memory) {
+    return string.concat(
+        "network.json's chain ", chain, " names no rpc: give it an alias from foundry.toml's [rpc_endpoints]"
+    );
 }
 
 /// @dev The chain a step without `.on` sends on: `chains.default` of `sprue.json`, which the network

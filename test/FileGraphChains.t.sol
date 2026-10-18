@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {defaultChainIn} from "../src/Chains.sol";
+import {defaultChainIn, noRpc} from "../src/Chains.sol";
 import {isRehearsalNetwork} from "../src/Journal.sol";
 import {FileGraph} from "../src/FileGraph.sol";
 import {Registration, Step, Declares} from "../src/graph/Step.sol";
@@ -75,6 +75,7 @@ contract FileGraphChainsTest is Test, Declares {
                 .due(StepFunctions.deployDue.selector)
                 .on("a")
                 .reads("")
+                .ownsForks()
         );
         vm.expectRevert(bytes("fixture.deploy has no chain: add .on(...) to it or set chains.default in sprue.json"));
         dated.plan(net, "fixture.deploy");
@@ -113,7 +114,8 @@ contract FileGraphProjectTest is Test, Declares {
             string.concat(
                 '{"openAt":"100","owner":"',
                 ownerValue,
-                '","chains":{"l2":{"id":31337},"a":{"id":11155111,"rpc":"alpha"},"b":{"id":1},"c":{"id":1337}',
+                '","chains":{"l2":{"id":31337,"rpc":"local"},"a":{"id":11155111,"rpc":"alpha"},"b":{"id":1,"rpc":"beta"},'
+                '"c":{"id":1337,"rpc":"gamma"}',
                 extraChain,
                 "}}"
             )
@@ -134,7 +136,7 @@ contract FileGraphProjectTest is Test, Declares {
         return _project(address(new StepFunctions()), step).plan(net, "fixture.fund");
     }
 
-    function test_plan_listsTheChainsAndTheVariablesACommandReads() public {
+    function test_plan_listsTheChainsAndNamesEachCommandsRpc() public {
         _network("rehearsal-fgp-chains", vm.toString(owner), "");
 
         assertEq(
@@ -145,12 +147,11 @@ contract FileGraphProjectTest is Test, Declares {
                 net,
                 "/broadcast FOUNDRY_CACHE_PATH=deployments/",
                 net,
-                "/cache ",
-                "B_RPC=$B_RPC GHOST_RPC=$GHOST_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
+                "/cache forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --rpc-url alpha --sender $DEPLOYER\n"
             ),
-            "declared chains first, then the others as the step reads them; an alias needs no variable"
+            "a chain the step only reads adds nothing to its command"
         );
         assertEq(
             _plan(_fund().on("c").reads("").reads("b").ownsForks()),
@@ -160,14 +161,14 @@ contract FileGraphProjectTest is Test, Declares {
                 net,
                 "/broadcast FOUNDRY_CACHE_PATH=deployments/",
                 net,
-                "/cache ",
-                "L2_RPC=$L2_RPC B_RPC=$B_RPC C_RPC=$C_RPC forge script toy.s.sol:Toy --sig 'fund(string)' ",
+                "/cache forge script toy.s.sol:Toy --sig 'fund(string)' ",
                 net,
                 " --sender $DEPLOYER\n"
             ),
             "a step that selects its own forks passes no --rpc-url"
         );
-        assertTrue(vm.contains(_plan(_fund().on("b")), "--rpc-url $B_RPC --sender"));
+        assertTrue(vm.contains(_plan(_fund()), "--rpc-url local --sender"));
+        assertTrue(vm.contains(_plan(_fund().on("b")), "--rpc-url beta --sender"));
         assertTrue(vm.contains(_plan(_fund().by("network.owner")), string.concat("--sender ", vm.toString(owner))));
         vm.removeDir(string.concat("deployments/", net), true);
     }
@@ -210,8 +211,10 @@ contract FileGraphProjectTest is Test, Declares {
         _network(net, vm.toString(address(0)), "");
         _refuses(_fund().by("network.owner"), "network.owner is the zero address: set it in the network's files");
 
-        _network(net, vm.toString(owner), ',"x":{"id":666}');
+        _network(net, vm.toString(owner), ',"x":{"id":666,"rpc":"x"}');
         _refuses(_fund(), "the project refuses chain 666");
+        _network(net, vm.toString(owner), ',"d":{"id":5}');
+        _refuses(_fund().on("d"), noRpc("d"));
         vm.removeDir(string.concat("deployments/", net), true);
     }
 

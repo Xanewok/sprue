@@ -16,7 +16,11 @@ cat >sprue.json <<'JSON'
 {"paths":{"graph":"script/G.s.sol","units":"script/units","deployments":"deployments","rehearsal":"deployments/rehearsal"},
  "chains":{"default":"l2","local":[31337],"test":[],"unrecordedDeploys":{}}}
 JSON
-echo '{"chains":{"l2":{"id":31337}}}' >deployments/net/network.json
+# A chain for each alias the corpus reads: a line may name only its network's chains.
+{ printf '{"chains":{"l2":{"id":31337,"rpc":"local"}'; i=0
+  for a in $(grep -Eoh -- '--rpc-url [a-z][a-z0-9_-]*' "$CORPUS" | awk '{print $2}' | sort -u | grep -vx local); do
+    i=$((i + 1)); printf ',"c%d":{"id":31337,"rpc":"%s"}' "$i" "$a"
+  done; printf '}}\n'; } >deployments/net/network.json
 echo '{"nodes":[{"id":"t","unit":"u"}]}' >script/graph.generated.json
 cat >bin/forge <<'STUB'
 #!/bin/sh
@@ -31,12 +35,7 @@ cat >bin/cast <<'STUB'
 case $1 in rpc) echo '"anvil/v1"' ;; chain-id) echo 31337 ;; esac
 STUB
 chmod +x bin/forge bin/cast
-export PATH=$W/bin:$PATH PLAN_FILE=$W/plan CALLS=$W/calls R=http://127.0.0.1:1 DEPLOYER=0x1111111111111111111111111111111111111111 MARK=$W/MARK
-
-# The corpus names the RPC variables of its chains; a variable a line names must be set.
-for v in $(grep -Eoh '\$[A-Z][A-Z0-9_]*' "$CORPUS" | tr -d '$' | sort -u); do
-  [ -n "${!v-}" ] || export "$v=http://127.0.0.1:1"
-done
+export PATH=$W/bin:$PATH PLAN_FILE=$W/plan CALLS=$W/calls DEPLOYER=0x1111111111111111111111111111111111111111 MARK=$W/MARK
 
 # run_line <line>: whether `run` sent it to forge, as exactly one `forge script` call. A hostile line
 # may also leave $MARK.
@@ -96,8 +95,16 @@ for hostile in "${rehearsalLine/"$cacheAssignment"/}" "${rehearsalLine/\/cache /
     fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
   fi
 done
+# A line reads only its network's chains: another alias, or a fork's URL, is refused.
+for other in mainnet http://127.0.0.1:1; do
+  total=$((total + 1))
+  hostile=$(grep -m1 -e '--rpc-url local ' "$CORPUS" | sed "s|--rpc-url local |--rpc-url $other |")
+  if [ -z "$hostile" ] || run_line "$hostile" || [ -e MARK ]; then
+    fail=$((fail + 1)); echo "FAIL ran a line that reads another endpoint: $hostile" >&2
+  fi
+done
 # A variable that holds whitespace or a flag stays one argument of the command.
-for var in R DEPLOYER; do
+for var in DEPLOYER; do
   total=$((total + 1))
   saved=${!var}
   using=$(grep -m1 "\\\$$var\b" "$CORPUS" || true)
@@ -108,12 +115,6 @@ for var in R DEPLOYER; do
   fi
   export "$var=$saved"
 done
-# An unset variable would drop its argument and shift the next flag into its place.
-total=$((total + 1))
-using=$(grep -m1 -e '--rpc-url \$B_RPC' "$CORPUS" || true)
-if [ -n "$using" ] && { (unset B_RPC; run_line "$using"); }; then
-  fail=$((fail + 1)); echo "FAIL ran with B_RPC unset" >&2
-fi
 # Plan lines carry the paths unquoted, so a path that a shell would act on is refused.
 for bad in 'deployments(archive)' 'deployments$archive'; do
   total=$((total + 1))

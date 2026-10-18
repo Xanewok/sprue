@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId} from "./Chains.sol";
+import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
 import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
@@ -242,7 +242,9 @@ abstract contract Deployment is ForgeBroadcasts {
             _deployScript(),
             " --sig 'recover(string)' ",
             _networkName(),
-            " --rpc-url $R --sender ",
+            " --rpc-url ",
+            planRpc(_networkJson()),
+            " --sender ",
             vm.toString(c.from)
         );
     }

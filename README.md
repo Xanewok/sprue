@@ -22,7 +22,7 @@ this repository:
 cp -R examples/token-vault ../my-deploy && cd ../my-deploy
 git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.2
 anvil &                                   # chain 31337 on :8545
-export R=http://127.0.0.1:8545 DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
 node lib/sprue/bin/sprue.mjs run local vault.check    # deploys, checks, funds, checks
 ```
@@ -31,8 +31,8 @@ The first `plan` prints:
 
 ```
 # chain l2 31337 local
-forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'deploy(string)' local --rpc-url $R --sender $DEPLOYER
-forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'check(string)' local --rpc-url $R --sender $DEPLOYER
+forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'deploy(string)' local --rpc-url local --sender $DEPLOYER
+forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'check(string)' local --rpc-url local --sender $DEPLOYER
 # then plan again vault.deploy
 ```
 
@@ -98,9 +98,9 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
 5. Save the graph: `sprue json > script/deploy/graph.generated.json`. Repeat this whenever you
    add, rename or rewire a step: `plan` and `run` look targets up in this file, and refuse one it
    lacks. `sprue list` prints the targets, the nodes nothing depends on.
-6. Plan: `R=<rpc> sprue plan <network> <target>`, where `R` is the RPC of the network's default
-   chain. It sends nothing, so anyone may run it.
-7. Run: `R=<rpc> DEPLOYER=<address> sprue run <network> <target>`. `DEPLOYER` sends the steps
+6. Plan: `sprue plan <network> <target>`. It reads the default chain's `rpc`, and sends nothing,
+   so anyone may run it.
+7. Run: `DEPLOYER=<address> sprue run <network> <target>`. `DEPLOYER` sends the steps
    that name no sender. On a network whose chains are all in `chains.local`, it runs unattended.
    On any other network a person runs it at a terminal, signing with one of `--account`,
    `--ledger` or `--trezor`, from a clean git checkout, and types `yes` for each step after seeing
@@ -126,18 +126,17 @@ inherited variable that moves either path is refused.
 `<paths.rehearsal>-<network>`, a fresh copy of the files directly in `deployments/<network>/`:
 
 ```sh
-R=<rpc> sprue rehearse mainnet vault.check     # forks, runs, stops the forks; the copy stays as the report
+sprue rehearse mainnet vault.check     # forks, runs, stops the forks; the copy stays as the report
 ```
 
-Each chain forks from `R` (the default chain only), else its `rpc` alias, else `<CHAIN>_RPC`, at the
-latest block or `--block [<chain>=]<n>`; a chain in `chains.local` with none of these starts empty. The
-copy keeps the journals, whose `checked` keeps what landed done without reading the fork, and drops the
-aliases, so every command reads a fork.
+Each chain forks from its `rpc` alias, at the latest block or `--block [<chain>=]<n>`. The copy keeps
+the journals, whose `checked` keeps what landed done without reading the fork, and names each fork's
+loopback URL as its chain's `rpc`, so every command reads a fork.
 Senders are impersonated: `DEPLOYER` (else the pinned `deployer`) and each `.by(...)`. No key signs, so a
 signer flag is refused, and so is a `.env` that names a keystore; so is an `eth_rpc_url` that forge
 resolves, which it would send to instead of the forks. It runs unattended, on a dirty tree too
 (the journals record it), and moves each fork's clock to the next date. The forks stop at the end and on
-Ctrl-C. `--keep` leaves them running and prints their `R=` and `<CHAIN>_RPC=` lines, until the next
+Ctrl-C. `--keep` leaves them running, and the copy's `network.json` names them, until the next
 `rehearse` of the network or `sprue rehearse --stop <network>`; a kept fork that does not answer is taken
 as stopped. Every `rehearse` starts over, one at a time per network, and refuses an existing copy
 without its `.sprue/`.
@@ -170,8 +169,9 @@ is never delivered.
 - `chains.unrecordedDeploys`: `{"<chain id>": "<reason>"}` turns off the nonce fence on that live
   chain, for a deploy key that already deployed outside the graph. Leave it `{}` otherwise.
 
-In `network.json` a chain may name an `"rpc"` alias from `foundry.toml`; without one, a chain other
-than the default is read from `<CHAIN>_RPC`. A top-level `"deployer": "0x..."` pins the deploy key.
+In `network.json` each chain names an `"rpc"` alias from `foundry.toml`'s `[rpc_endpoints]`, which
+forge and cast resolve with `.env`; a file never holds a URL, which may carry a key. A top-level
+`"deployer": "0x..."` pins the deploy key.
 
 ## When a run refuses
 

@@ -158,6 +158,10 @@ contract BuilderGraph is Graph {
         _validateGraph();
     }
 
+    function _rpcFlag(string memory, string memory) internal pure override returns (string memory) {
+        return "node";
+    }
+
     function _journalChecked(string memory, string memory) internal pure override returns (bool) {
         return false;
     }
@@ -375,7 +379,7 @@ contract StepBuildersTest is Test, Declares {
         assertEq(
             new BuilderGraph(unit, s).plan("anvil", "fixture.guarded"),
             "# cannot reach fixture.guarded: not yet\n"
-            "forge script test/Fixture.s.sol:Fixture --sig 'guarded(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
+            "forge script test/Fixture.s.sol:Fixture --sig 'guarded(string)' anvil --rpc-url node --sender $DEPLOYER\n"
         );
 
         s[0] = _step("fixture.locked", StepFunctions.locked.selector).due(StepFunctions.lockedDue.selector);
@@ -384,7 +388,7 @@ contract StepBuildersTest is Test, Declares {
             string.concat(
                 "# cannot reach fixture.locked: ",
                 vm.toString(abi.encodeWithSelector(StepFunctions.Closed.selector)),
-                "\nforge script test/Fixture.s.sol:Fixture --sig 'locked(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
+                "\nforge script test/Fixture.s.sol:Fixture --sig 'locked(string)' anvil --rpc-url node --sender $DEPLOYER\n"
             )
         );
     }
@@ -406,7 +410,7 @@ contract StepBuildersTest is Test, Declares {
             string.concat(
                 "# cannot reach fixture.refused: ",
                 vm.toString(abi.encodeWithSignature("CheatcodeError(string)", "vm.rpc: execution reverted")),
-                "\nforge script test/Fixture.s.sol:Fixture --sig 'refused(string)' anvil --rpc-url $R --sender $DEPLOYER\n"
+                "\nforge script test/Fixture.s.sol:Fixture --sig 'refused(string)' anvil --rpc-url node --sender $DEPLOYER\n"
             )
         );
     }
