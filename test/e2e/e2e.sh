@@ -317,6 +317,8 @@ scenario_rehearse() {
   network aliased 1; echo '{"chains":{"l2":{"id":1,"rpc":"live"}}}' >deployments/aliased/network.json
   out=$(env -u R DEPLOYER="$dead" G rehearse aliased token.check 2>&1) || die "rehearse: the aliased network failed: $(tail -c 600 <<<"$out")"
   grep -q '(from alias live)' <<<"$out" || die "rehearse: the alias did not name the upstream: $(tail -c 600 <<<"$out")"
+  out=$(env -u R G plan aliased token.check 2>&1) || die "plan: the default chain's alias did not serve as R: $(tail -c 600 <<<"$out")"
+  grep -q '^forge script' <<<"$out" || die "plan: the aliased network planned no command: $(tail -c 600 <<<"$out")"
   mv foundry.toml.ok foundry.toml
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: a command sent to the alias's real chain"
 

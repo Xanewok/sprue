@@ -29,7 +29,7 @@ Flags may appear anywhere after the command.
   list                      the targets: nodes no other node depends on
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
-  plan <network> <target>   the commands that reach target; reads $R, the default chain's RPC; sends nothing
+  plan <network> <target>   the commands that reach target; reads $R, the default chain's RPC, else its rpc alias; sends nothing
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; needs R and DEPLOYER
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -545,8 +545,12 @@ async function main(argv) {
     if (stopOnly) return 0;
     network = name;
   }
+  if (!process.env.R) {
+    const { chainMap, home } = chainsOf(network);
+    if (home && chainMap[home].rpc) process.env.R = chainMap[home].rpc;
+  }
   const R = process.env.R ?? "";
-  if (!R) fail(2, "set R to the RPC the plan reads");
+  if (!R) fail(2, "set R to the RPC the plan reads, or give the default chain an rpc alias");
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
   const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;

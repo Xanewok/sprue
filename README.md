@@ -99,7 +99,7 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
    add, rename or rewire a step: `plan` and `run` look targets up in this file, and refuse one it
    lacks. `sprue list` prints the targets, the nodes nothing depends on.
 6. Plan: `R=<rpc> sprue plan <network> <target>`, where `R` is the RPC of the network's default
-   chain. It sends nothing, so anyone may run it.
+   chain. Without `R`, the default chain's `rpc` alias serves. It sends nothing, so anyone may run it.
 7. Run: `R=<rpc> DEPLOYER=<address> sprue run <network> <target>`. `DEPLOYER` sends the steps
    that name no sender. On a network whose chains are all in `chains.local`, it runs unattended.
    On any other network a person runs it at a terminal, signing with one of `--account`,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+`plan` and `run` without `R` read the default chain's `rpc` alias, as `rehearse` already forks from it.
+
 `rehearse` gives a fork of a chain that `bin/chains.json` lists that chain's code-size limit. It lists
 Robinhood Chain and its testnet, at 98304 bytes.
 
