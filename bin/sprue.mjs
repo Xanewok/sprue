@@ -490,10 +490,15 @@ async function main(argv) {
     writeFileSync(`${dir}/network.json`, `${JSON.stringify(net, null, 2)}\n`);
     out(`rehearsal ${name}: staged from ${DEPLOYMENTS}/${source}\n`);
 
+    // Anvil gives every fork Ethereum's code limits; a chain listed in chains.json allows more, and its
+    // fork would refuse what the chain takes. Anvil allows init code of twice the limit, as Nitro does.
+    const facts = JSON.parse(readFileSync(new URL("./chains.json", import.meta.url), "utf8"));
     for (const group of groups.values()) {
+      const limit = facts[String(group.id)]?.codeSizeLimit;
       const log = `${dir}/.sprue/anvil-${forks.length}.log`;
       const fd = openSync(log, "w");
       const args = group.upstream ? ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])] : ["--chain-id", String(group.id)];
+      if (limit) args.push("--code-size-limit", String(limit));
       const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd] });
       closeSync(fd);
       child.unref();
@@ -509,7 +514,7 @@ async function main(argv) {
       fork.instanceId = meta?.instanceId ?? "";
       save(record());
       const block = meta?.forkedNetwork?.forkBlockNumber;
-      out(`fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`} ${fork.url} (from ${group.from})\n`);
+      out(`fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`}${limit ? ` code limit ${limit}` : ""} ${fork.url} (from ${group.from})\n`);
       for (const c of group.chains) process.env[c === home ? "R" : rpcVariable(c)] = process.env[rpcVariable(c)] = fork.url;
     }
     // A copied check keeps its unit done without reading the fork, so the fork must hold the code it

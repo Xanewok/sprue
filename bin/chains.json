@@ -1,0 +1,12 @@
+{
+  "4663": {
+    "name": "Robinhood Chain",
+    "codeSizeLimit": 98304,
+    "evidence": "MaxCodeSize 98304 and MaxInitCodeSize 196608 in the chain config of rollup 0x23A19d23e89166adedbDcB432518AB01e4272D94, created on Ethereum in block 24994238 by tx 0x7982d3d9da29185af78f7802cd2bdb04bdfb702766bb583c3b2804d762dc1fa8"
+  },
+  "46630": {
+    "name": "Robinhood Chain Testnet",
+    "codeSizeLimit": 98304,
+    "evidence": "MaxCodeSize 98304 and MaxInitCodeSize 196608 in the chain config of rollup 0xdc5F8E399DBd8a9F5F87AeC4C23Beb12431b386D, created on Sepolia in block 10204516 by tx 0x493fd685b147d4407fc5dad314abadee4ec2fc0778ec07782af7f13a15725a9f"
+  }
+}
