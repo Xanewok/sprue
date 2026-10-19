@@ -85,7 +85,7 @@ abstract contract Unit is Deployment, Declares {
             block.chainid == chainId(_networkJson(), chain),
             string.concat("chain ", chain, "'s rpc serves another chain id than network.json's")
         );
-        _requireNode();
+        _requireClient();
         journal = _journal();
         string memory key = string.concat(".", chain, "ChainId");
         if (_has(journal, key)) {
