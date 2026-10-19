@@ -141,6 +141,19 @@ scenario_refuses() {
   # Only a rehearsal copy names a URL: its forks'.
   echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"$RPC\"}}}" >$n; refused "rpc is not a plain alias" G run refuse vault.check
   echo '{"chains":{"l2":{"id":1,"rpc":"local"}}}' >$n; refused "local is chain 31337, network.json says 1" G run refuse vault.check
+  # forge and cast take these over the line's flags.
+  network refuse 31337
+  local n0; n0=$(nonce)
+  # Set to forge's default sender, it shows no difference in forge config, yet still beats --sender.
+  FOUNDRY_SENDER=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take FOUNDRY_SENDER (" G run refuse vault.check
+  dapp_test_sender=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take dapp_test_sender (" G run refuse vault.check
+  echo "export FOUNDRY_SENDER=$OPS" >.env
+  refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
+  # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.
+  echo "FOUNDRY_RPC_ENDPOINTS={local=\"$RPC\"}" >.env
+  refused "forge would take FOUNDRY_RPC_ENDPOINTS (" G run refuse vault.check
+  rm .env
+  [ "$(nonce)" = "$n0" ] || die "refuses: a run with an overriding variable sent"
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
 
@@ -413,7 +426,7 @@ scenario_rehearse() {
   echo 'ETH_KEYSTORE_ACCOUNT=nosuch' >.env
   refused 'sets ETH_KEYSTORE_ACCOUNT' "${go[@]}" main token.check
   echo "FOUNDRY_ETH_RPC_URL=$LIVE" >.env
-  refused 'resolves an eth_rpc_url' "${go[@]}" main token.check
+  refused 'forge would take FOUNDRY_ETH_RPC_URL, eth_rpc_url (.env or foundry.toml) over the forks' "${go[@]}" main token.check
   rm .env
   # A copied check whose code the fork lacks, as at a --block before its deployment, is refused.
   cp "$d/token.json" deployments/main/token.json

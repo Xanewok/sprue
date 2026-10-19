@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+`run` refuses a line when `FOUNDRY_ETH_RPC_URL`, `FOUNDRY_SENDER` or `FOUNDRY_RPC_ENDPOINTS` (or a
+`DAPP_` or `DAPP_TEST_` form, in any case) is set in the environment or `.env`, whatever the value: forge
+and cast take these over the line's `--rpc-url` and `--sender`, or over the aliases they name, so the line
+shown would not be the one that runs. It refuses an `eth_rpc_url` or a non-default `sender` in
+`foundry.toml` too, as sprue's lines own both settings, and a line that selects its own forks names no
+`--rpc-url`. `rehearse` drops the variables from its own environment and refuses them in `.env`,
+and refuses a resolved `sender` too, as it already refused an `eth_rpc_url`.
+
 An attended `run` without `DEPLOYER` sends as its signer, as forge does with `--account`, `--ledger` or
 `--trezor`: `sprue run --account <name> <network> <target>`. A pinned `deployer` still refuses another
 signer.
