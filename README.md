@@ -58,6 +58,10 @@ then loses a journal and rebuilds it.
 - **plan / run**: `plan` prints the commands a target still needs and sends nothing; `run` sends
   them, plans again, and stops when the target is done.
 
+sprue pins only the external code its own logic assumes: the CREATE2 factory, whose code hash
+`_requireCreate2Address` checks. A unit pins every other contract it reads but does not deploy, by code
+hash or by behaviour, in its own checks.
+
 ## Install
 
 ```sh
