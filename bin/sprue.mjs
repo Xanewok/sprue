@@ -129,6 +129,20 @@ function must(bin, args, refusal, stdio) {
 const clientVersion = (rpc) => exec("cast", ["rpc", "web3_clientVersion", "--rpc-url", rpc], ["ignore", "pipe", "ignore"]);
 const isAnvil = (v) => v.status === 0 && v.out.replaceAll('"', "").startsWith("anvil/");
 const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
+// forge and cast take a resolved eth_rpc_url or sender over a line's --rpc-url and --sender (a FOUNDRY_*
+// variable, also from .env, beats the flag), so the line shown would not be the one that runs. A variable
+// set to forge's default sender overrides too, though config shows no difference, so names count. forge
+// reads each prefix in any case.
+const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints)$/i;
+const overriding = (config, env) => {
+  const dotenv = isFile(".env") ? readFileSync(".env", "utf8") : "";
+  const names = [...Object.keys(env), ...[...dotenv.matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1])];
+  return [
+    ...new Set(names.filter((v) => OVERRIDE.test(v))),
+    ...(config.eth_rpc_url != null ? ["eth_rpc_url"] : []),
+    ...(config.sender != null && String(config.sender).toLowerCase() !== "0x1804c8ab1f12e6bbf3894d4083f33e07309d1f38" ? ["sender"] : []),
+  ];
+};
 
 // forge's stdout and stderr share one file, so the output keeps the order forge wrote it in.
 function forge(args, env) {
@@ -446,11 +460,9 @@ async function main(argv) {
     for (const v of wallet) delete process.env[v];
     const named = isFile(".env") && new RegExp(`^\\s*(export\\s+)?(${wallet.join("|")})\\s*=`, "m").exec(readFileSync(".env", "utf8"));
     if (named) fail(2, `refusing: .env sets ${named[2]}, and forge would sign with that keystore; rehearse holds no key`);
-    // forge sends to eth_rpc_url over --rpc-url.
-    delete process.env.FOUNDRY_ETH_RPC_URL;
-    if (JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).eth_rpc_url != null) {
-      fail(2, "refusing: forge resolves an eth_rpc_url (.env or foundry.toml), which it would send to instead of the forks");
-    }
+    for (const v of Object.keys(process.env)) if (OVERRIDE.test(v)) delete process.env[v];
+    const over = overriding(JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")), process.env);
+    if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`);
 
     // .sprue/ holds the lock.
     for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, { recursive: true, force: true });
@@ -846,6 +858,8 @@ async function main(argv) {
           config = JSON.parse(result.stdout);
         } catch {}
         if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
+        const over = overriding(config, process.env);
+        if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }
