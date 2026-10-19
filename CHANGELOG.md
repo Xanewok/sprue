@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_add(script)` creates a unit from its artifact, so a graph script names each unit once, by its path,
+and imports none. `_add(address, script)` stays for a unit that needs a constructor or a test hook.
+
 Typed step forms: `_step(id, this.fn)`, `_step(id, this.fn, this.fnDue)`, the indexed
 `_step(id, name, this.fn, this.fnDue, i)` and `_until(id, name, this.fn)`. The compiler checks that each
 function exists with the step's arguments and that a `Due` returns a bool; `steps()` becomes `view`. The

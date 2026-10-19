@@ -325,6 +325,12 @@ abstract contract Graph is Script {
         return (Status.Due, "");
     }
 
+    /// @dev Creates the unit from `script`'s artifact, so the graph script imports no unit. Forge builds
+    ///      every source anyway; a renamed unit fails here, when the graph is built, not at compile.
+    function _add(string memory script) internal {
+        _add(vm.deployCode(script), script);
+    }
+
     function _add(address target, string memory script) internal {
         _units.push(target);
         _add(Registration(target, script), IUnitSteps(target).steps());

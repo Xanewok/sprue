@@ -87,11 +87,10 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
    pragma solidity ^0.8.27;
 
    import {FileGraph} from "sprue/FileGraph.sol";
-   import {DeployToken} from "./units/token/DeployToken.s.sol";
 
    contract DeployGraph is FileGraph {
        constructor() {
-           _add(address(new DeployToken()), "script/deploy/units/token/DeployToken.s.sol:DeployToken");
+           _add("script/deploy/units/token/DeployToken.s.sol:DeployToken");
            _validateGraph();
        }
    }

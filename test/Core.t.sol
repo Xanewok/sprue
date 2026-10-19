@@ -41,9 +41,13 @@ contract ToyGraph is Graph {
     Toy public toy = new Toy();
 
     constructor(Step[] memory extra) {
-        _add(address(toy), "toy.s.sol:Toy");
+        _addToy();
         _add(Registration(address(toy), "toy.s.sol:Toy"), extra);
         _validateGraph();
+    }
+
+    function _addToy() internal virtual {
+        _add(address(toy), "toy.s.sol:Toy");
     }
 
     function _journalChecked(string memory, string memory) internal pure override returns (bool) {
@@ -72,6 +76,14 @@ contract ToyGraph is Graph {
 
     function _unmetPredicate(uint256) internal pure override returns (bool) {
         return false;
+    }
+}
+
+contract PathGraph is ToyGraph {
+    constructor() ToyGraph(new Step[](0)) {}
+
+    function _addToy() internal override {
+        _add("test/Core.t.sol:Toy");
     }
 }
 
@@ -120,6 +132,10 @@ contract CoreTest is Test, Declares {
         ToyGraph withTestNode = new ToyGraph(s);
         vm.expectRevert("cannot reach x.test: unknown target");
         withTestNode.plan("net", "x.test");
+    }
+
+    function test_add_createsAUnitFromItsScriptPath() public {
+        assertEq(new PathGraph().graph(), g.graph());
     }
 
     function test_graph_exportsOneLinePerNode_andRefusesWhatJsonWouldEscape() public {
