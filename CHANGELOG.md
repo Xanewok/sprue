@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+An attended `run` without `DEPLOYER` sends as its signer, as forge does with `--account`, `--ledger` or
+`--trezor`: `sprue run --account <name> <network> <target>`. A pinned `deployer` still refuses another
+signer.
+
 Typed step forms: `_step(id, this.fn)`, `_step(id, this.fn, this.fnDue)`, the indexed
 `_step(id, name, this.fn, this.fnDue, i)` and `_until(id, name, this.fn)`. The compiler checks that each
 function exists with the step's arguments and that a `Due` returns a bool; `steps()` becomes `view`. The

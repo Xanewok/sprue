@@ -106,7 +106,8 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
    that name no sender. On a network whose chains are all in `chains.local`, it runs unattended.
    On any other network a person runs it at a terminal, signing with one of `--account`,
    `--ledger` or `--trezor`, from a clean git checkout, and types `yes` for each step after seeing
-   its dry run; [SECURITY.md](SECURITY.md) lists what it compares meanwhile.
+   its dry run. There, as in forge, the signer's address is the default `DEPLOYER`:
+   `sprue run --account <name> <network> <target>`; [SECURITY.md](SECURITY.md) lists what it compares meanwhile.
 8. Commit each step's journal and `broadcast/` records (the step prints the `git add`). The records
    are what `recover` reads, so never git-ignore a public chain's.
 9. When a run on a live chain ends done or waiting, it offers a git tag `deploy/<network>/<unit>`

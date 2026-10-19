@@ -34,7 +34,7 @@ Flags may appear anywhere after the command.
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
-                            sends what plan prints and plans again; needs DEPLOYER
+                            sends what plan prints and plans again; needs DEPLOYER; attended, it defaults to the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
                             runs target on Anvil forks of network's chains, which it starts, in a fresh copy
                             <paths.rehearsal>-<network> of network's files; impersonates each step's sender
@@ -543,10 +543,12 @@ async function main(argv) {
     for (const l of plan()) out(`${l}\n`);
     return 0;
   }
+  const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
+  // Before the signer is unlocked. Without DEPLOYER an attended run sends as its signer, as forge sends as
+  // its wallet.
   const DEPLOYER = process.env.DEPLOYER ?? "";
-  if (!DEPLOYER) fail(2, "set DEPLOYER to the sender of steps without .by");
-  if (!/^0x[0-9a-fA-F]{40}$/.test(DEPLOYER)) fail(2, "DEPLOYER is not a 0x address");
-
+  if (!DEPLOYER && !attended) fail(2, "set DEPLOYER to the sender of steps without .by");
+  if (DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(DEPLOYER)) fail(2, "DEPLOYER is not a 0x address");
   // git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
   // must not hide an untracked file or a dirty submodule, and a failing git is a refusal, never an empty
   // status.
@@ -559,7 +561,6 @@ async function main(argv) {
   // person. This only picks the signer. `plan`, which precedes every send, refuses a malformed list.
   let anvil = false;
   let signer = [];
-  const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
   if (rehearsing) {
     anvil = true;
     signer = ["--unlocked"];
@@ -616,6 +617,7 @@ async function main(argv) {
     signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
     out(`signer ${me}\n`);
+    process.env.DEPLOYER ||= me;
   }
 
   // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any.
