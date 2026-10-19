@@ -111,7 +111,7 @@ abstract contract Journal is Script {
             block.chainid == chainId(file, _defaultChain(file)),
             string.concat("the RPC's chain is not ", network, "'s default chain")
         );
-        _requireNode();
+        _requireClient();
         journal = _journal();
         string memory stamp = _stampKey(file);
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
@@ -132,12 +132,12 @@ abstract contract Journal is Script {
         );
     }
 
-    /// @dev The node this forge script sends to, however forge resolved it (a `FOUNDRY_*` variable beats
-    ///      `--rpc-url`), is Anvil exactly when the network is a rehearsal one, unless the chain is local.
-    ///      The runner checks the node it resolves; this checks the one the sends reach. Only a broadcast
-    ///      sends: a dry run or a simulated rehearsal on a real node stays legitimate. `--resume` sends
-    ///      the cached transactions without this check.
-    function _requireNode() internal {
+    /// @dev The RPC server this forge script sends to, however forge resolved it (a `FOUNDRY_*` variable
+    ///      beats `--rpc-url`), is Anvil exactly when the network is a rehearsal one, unless the chain is
+    ///      local. The runner checks the server it resolves; this checks the one the sends reach. Only a
+    ///      broadcast sends: a dry run, or a simulated rehearsal against a server other than Anvil, stays
+    ///      legitimate. `--resume` sends the cached transactions without this check.
+    function _requireClient() internal {
         if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) return;
         if (keccak256(bytes(chainKind(block.chainid))) == keccak256("local")) return;
         bool anvil = vm.indexOf(abi.decode(vm.rpc("web3_clientVersion", "[]"), (string)), "anvil/") == 0;
