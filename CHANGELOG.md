@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.1.3
+
+Breaking: each chain of `network.json` must name an `rpc` alias of `foundry.toml`'s `[rpc_endpoints]`,
+the one RPC configuration, which forge, cast and anvil resolve with `.env`. `R`, the `<CHAIN>_RPC`
+variables and the `<CHAIN>_RPC=$<CHAIN>_RPC` command prefix are gone: commands print each chain's alias.
+A command line's `--rpc-url` must be one of its network's chains. `rehearse` names each fork's loopback
+URL in its copy's `network.json`, the only file that may hold a URL, and `--keep` no longer prints
+variables. A chain in `chains.local` no longer starts as an empty Anvil: it forks its alias.
 
 Breaking: `Graph._execute` is `_executeTarget`. The new `_executeNode(network, id)` runs one node as
 `_executeTarget` would, without its needs, and sends its step even when it is done, so the unit's own
@@ -34,13 +41,6 @@ Typed step forms: `_step(id, this.fn)`, `_step(id, this.fn, this.fnDue)`, the in
 `_step(id, name, this.fn, this.fnDue, i)` and `_until(id, name, this.fn)`. The compiler checks that each
 function exists with the step's arguments and that a `Due` returns a bool; `steps()` becomes `view`. The
 selector forms are unchanged.
-
-Breaking: each chain of `network.json` must name an `rpc` alias of `foundry.toml`'s `[rpc_endpoints]`,
-the one RPC configuration, which forge, cast and anvil resolve with `.env`. `R`, the `<CHAIN>_RPC`
-variables and the `<CHAIN>_RPC=$<CHAIN>_RPC` command prefix are gone: commands print each chain's alias.
-A command line's `--rpc-url` must be one of its network's chains. `rehearse` names each fork's loopback
-URL in its copy's `network.json`, the only file that may hold a URL, and `--keep` no longer prints
-variables. A chain in `chains.local` no longer starts as an empty Anvil: it forks its alias.
 
 `rehearse` gives a fork of a chain that `bin/chains.json` lists that chain's code-size limit. It lists
 Robinhood Chain and its testnet, at 98304 bytes.
