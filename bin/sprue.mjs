@@ -161,11 +161,56 @@ function forge(args, env) {
   return { status: r.status ?? 1, text: text.replace(/\n+$/, "") };
 }
 
+// `forge`, but a compile's lines are also copied to stderr while forge runs: forge reports a compile on
+// the stdout that is captured, so a cold build of a large graph would otherwise wait in silence.
+function forgeShowingCompile(args, env) {
+  const dir = mkdtempSync(join(tmpdir(), "sprue-"));
+  const file = join(dir, "out");
+  const fd = openSync(file, "w");
+  let read = 0;
+  let shown = "";
+  // Undecided until forge says whether it compiles; forge compiles before the script logs anything.
+  let showing;
+  // Only whole lines are taken, so a character still being written is never decoded.
+  const follow = () => {
+    const text = readFileSync(file, "utf8");
+    for (let i; showing !== false && (i = text.indexOf("\n", read)) >= 0; read = i + 1) {
+      const line = text.slice(read, i + 1);
+      if (line.startsWith("No files changed")) showing = false;
+      else if (line.startsWith("Compiling ")) showing = true;
+      if (!showing) continue;
+      err(line);
+      shown += line;
+      if (/^(Error: )?Compiler run/.test(line)) showing = false;
+    }
+    return text;
+  };
+  return new Promise((resolve) => {
+    // Tracked so that an interrupt stops it before rehearse releases its lock.
+    const child = (forgeStep = spawn("forge", args, { stdio: ["ignore", fd, fd], env: { ...process.env, ...env } }));
+    const timer = setInterval(follow, 200);
+    let ended = false;
+    const end = (status, error) => {
+      if (ended) return;
+      ended = true;
+      forgeStep = undefined;
+      clearInterval(timer);
+      const text = follow();
+      closeSync(fd);
+      rmSync(dir, { recursive: true, force: true });
+      resolve({ status: status ?? 1, text: text.replace(/\n+$/, ""), shown, error });
+    };
+    child.on("error", (e) => end(1, e));
+    child.on("close", (code) => end(code));
+  });
+}
+
 // The graph script's lines that start with `<tag> `, without the tag.
-function graph(GRAPH, tag, sig, rest = [], env = {}) {
-  const r = forge(["script", GRAPH, "--sig", sig, ...rest], env);
+async function graph(GRAPH, tag, sig, rest = [], env = {}) {
+  const r = await forgeShowingCompile(["script", GRAPH, "--sig", sig, ...rest], env);
+  if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
   if (r.status !== 0) {
-    err(`${r.text}\n`);
+    err(`${r.text.replace(r.shown, "")}\n`);
     throw new Exit(1);
   }
   return r.text.split("\n").flatMap((l) => {
@@ -299,7 +344,7 @@ async function main(argv) {
   const [verb, ...rest] = argv;
   if (verb === "list" || verb === "json") {
     if (rest.length) usageError();
-    for (const l of graph(GRAPH, verb === "list" ? "TARGET" : "GRAPH", verb === "list" ? "list()" : "graph()")) out(`${l}\n`);
+    for (const l of await graph(GRAPH, verb === "list" ? "TARGET" : "GRAPH", verb === "list" ? "list()" : "graph()")) out(`${l}\n`);
     return 0;
   }
   if (verb === "mermaid") {
@@ -552,7 +597,7 @@ async function main(argv) {
   const plan = () =>
     graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
   if (verb === "plan") {
-    for (const l of plan()) out(`${l}\n`);
+    for (const l of await plan()) out(`${l}\n`);
     return 0;
   }
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
@@ -603,7 +648,7 @@ async function main(argv) {
     if (dirtyOk) {
       // A live chain deploys only from a clean commit, so refuse if any chain is live. The kinds come
       // from the `# chain` lines that `plan` prints. Refuse too if no kind is seen.
-      const kinds = plan().flatMap((l) => {
+      const kinds = (await plan()).flatMap((l) => {
         const m = /^# chain [^ ]* [0-9]* (.*)$/.exec(l);
         return m ? [m[1]] : [];
       });
@@ -808,7 +853,7 @@ async function main(argv) {
   const quiet = ["ignore", "ignore", "inherit"];
   let sent = "";
   outer: for (;;) {
-    const text = plan().join("\n").replace(/\n+$/, "");
+    const text = (await plan()).join("\n").replace(/\n+$/, "");
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);

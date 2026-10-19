@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`list`, `json`, `plan` and `run` show forge's compile lines on stderr while the graph script compiles,
+instead of a silent wait: forge reports a compile on the stdout that the runner captures. Standard
+output is unchanged, and a run with nothing to compile prints nothing more.
+
 A unit step that broadcasts checks the node it sends to, in the forge script itself: on a network that
 is not a rehearsal one, a chain that `chains.local` does not list must not be served by Anvil, and on a
 rehearsal network it must be. The runner checked only the node it resolved itself, so a line run by hand,
