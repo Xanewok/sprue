@@ -6,10 +6,10 @@ import {Step} from "sprue/graph/Step.sol";
 import {Source} from "./Source.sol";
 
 contract DeploySource is Unit {
-    function steps() external pure returns (Step[] memory s) {
+    function steps() external view returns (Step[] memory s) {
         s = new Step[](2);
-        s[0] = _step("source.deploy", DeploySource.deploy.selector);
-        s[1] = _step("source.check", DeploySource.check.selector).needs("source.deploy");
+        s[0] = _step("source.deploy", this.deploy);
+        s[1] = _step("source.check", this.check).needs("source.deploy");
     }
 
     function deploy(string calldata network) external returns (string memory) {

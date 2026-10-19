@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 import {Graph} from "../src/graph/Graph.sol";
-import {Registration, Step, Declares} from "../src/graph/Step.sol";
+import {Registration, Step, StepKind, Declares} from "../src/graph/Step.sol";
 
 contract StepFunctions {
     function deploy(string calldata) external {}
@@ -64,6 +64,14 @@ contract StepFunctions {
     function windowEnd(string calldata, uint8) external pure returns (uint256) {
         return 100;
     }
+}
+
+contract TypedSteps {
+    function fund(string calldata) external returns (string memory) {}
+    function fundDue(string calldata) external view returns (bool) {}
+    function notify(string calldata, uint8) external returns (string memory) {}
+    function notifyDue(string calldata, uint8) external pure returns (bool) {}
+    function observed(string calldata) external view returns (bool) {}
 }
 
 contract Counting {
@@ -247,6 +255,26 @@ contract StepBuildersTest is Test, Declares {
         s[1] = _node("production").needs("test");
         vm.expectRevert(abi.encodeWithSelector(Graph.ProductionDependency.selector, "production", "test"));
         new BuilderGraph(unit, s);
+    }
+
+    function test_typedFormsBuildTheSelectorForms() public {
+        TypedSteps t = new TypedSteps();
+        Step memory plain = _step("fixture.fund", t.fund);
+        assertEq(plain.fn, "fund");
+        assertEq(plain.selector, TypedSteps.fund.selector);
+        assertEq(plain.dueSelector, bytes4(0));
+        Step memory due = _step("fixture.fund", t.fund, t.fundDue);
+        assertEq(due.selector, TypedSteps.fund.selector);
+        assertEq(due.dueSelector, TypedSteps.fundDue.selector);
+        Step memory nth = _step("fixture.notify.2", "notify", t.notify, t.notifyDue, 2);
+        assertEq(nth.fn, "notify");
+        assertEq(nth.selector, TypedSteps.notify.selector);
+        assertEq(nth.dueSelector, TypedSteps.notifyDue.selector);
+        assertTrue(nth.hasArg);
+        assertEq(nth.arg, 2);
+        Step memory until = _until("fixture.observed", "observed", t.observed);
+        assertEq(uint8(until.kind), uint8(StepKind.Until));
+        assertEq(until.selector, TypedSteps.observed.selector);
     }
 
     function test_stepSelectorMatchesTheName() public {

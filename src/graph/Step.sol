@@ -152,6 +152,35 @@ abstract contract Declares {
         s.selector = sel;
     }
 
+    /// @dev Typed forms: the compiler checks that `fn` and `due` exist and take the step's arguments,
+    ///      and that `due` returns a bool. Pass `this.<fn>`; `steps()` is then `view`.
+    function _step(string memory id, function(string memory) external returns (string memory) fn)
+        internal
+        pure
+        returns (Step memory)
+    {
+        return _step(id, fn.selector);
+    }
+
+    function _step(
+        string memory id,
+        function(string memory) external returns (string memory) fn,
+        function(string memory) external returns (bool) due
+    ) internal pure returns (Step memory) {
+        return _step(id, fn.selector).due(due.selector);
+    }
+
+    /// @dev An indexed step: `fn` is named, as `id` need not end in it.
+    function _step(
+        string memory id,
+        string memory name,
+        function(string memory, uint8) external returns (string memory) fn,
+        function(string memory, uint8) external returns (bool) due,
+        uint8 arg
+    ) internal pure returns (Step memory) {
+        return _step(id, name, fn.selector).withArg(arg).due(due.selector);
+    }
+
     /// @dev A predicate node: it sends nothing, and `fn` is a view that returns whether the condition
     ///      holds.
     function _until(string memory id, string memory fn, bytes4 sel) internal pure returns (Step memory s) {
@@ -159,5 +188,13 @@ abstract contract Declares {
         s.id = id;
         s.fn = fn;
         s.selector = sel;
+    }
+
+    function _until(string memory id, string memory fn, function(string memory) external returns (bool) predicate)
+        internal
+        pure
+        returns (Step memory)
+    {
+        return _until(id, fn, predicate.selector);
     }
 }
