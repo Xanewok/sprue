@@ -92,8 +92,7 @@ abstract contract Graph is Script {
         // any sender would be simulated from it, and the result would not predict the real run.
         require(msg.sender != DEFAULT_SENDER, "pass --sender <deployer> to the dry run, or --account");
         string memory net = _stage(network);
-        _home = _fork(type(uint256).max);
-        if (_execute(net, target)) console.log(string.concat("reached ", target));
+        if (_executeTarget(net, target)) console.log(string.concat("reached ", target));
     }
 
     /// @notice The commands that reach `target` and what it depends on, in order. Each line is
@@ -119,7 +118,7 @@ abstract contract Graph is Script {
     function plan(string calldata network, string calldata target) external returns (string memory out) {
         string[] memory header = _chainLines(network);
         _home = _fork(type(uint256).max);
-        (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length));
+        (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length), false);
         for (uint256 i; i < header.length; ++i) {
             out = _line(out, header[i]);
         }
@@ -197,12 +196,17 @@ abstract contract Graph is Script {
     }
 
     /// @dev Judges the nodes `target` needs, in list order, and stops after the first node that
-    ///      cannot be judged yet. `passed` marks steps a rehearsal has already simulated.
-    function _walk(string memory network, string memory target, bool[] memory passed)
+    ///      cannot be judged yet. `passed` marks steps a rehearsal has already simulated. `alone`
+    ///      judges `target` only, with its needs counted done and its step due even when done.
+    function _walk(string memory network, string memory target, bool[] memory passed, bool alone)
         internal
         returns (Visit[] memory visits, uint256 count)
     {
         bool[] memory needed = _closure(target);
+        if (alone) {
+            needed = new bool[](_nodes.length);
+            needed[_index(target)] = true;
+        }
         Status[] memory statuses = new Status[](_nodes.length);
         visits = new Visit[](_nodes.length);
         for (uint256 i; i < _nodes.length; ++i) {
@@ -210,9 +214,10 @@ abstract contract Graph is Script {
             Node storage n = _nodes[i];
             Visit memory visit;
             visit.node = i;
-            if (passed[i] || (n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
+            // Alone, a certified step is still sent, so its date is judged too.
+            if (passed[i] || (!alone && n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
                 visit.status = Status.Done;
-            } else if (!_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
+            } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
             } else {
                 if (bytes(n.gate).length != 0) {
@@ -237,7 +242,10 @@ abstract contract Graph is Script {
                 if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
                 else (visit.status, visit.reason) = _status(network, n, passed[i]);
             }
-            if (visit.status != Status.Done && n.certified && !_anyNeeded(n.certifiedBy, needed)) {
+            if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
+                visit.status = Status.Due;
+            }
+            if (visit.status != Status.Done && n.certified && !alone && !_anyNeeded(n.certifiedBy, needed)) {
                 revert(
                     _cannotReach(target, string.concat(n.id, " is done only by ", n.certifiedBy[0], ": target that"))
                 );
@@ -255,18 +263,33 @@ abstract contract Graph is Script {
         return false;
     }
 
-    function _execute(string memory network, string memory target) internal returns (bool reached) {
+    function _executeTarget(string memory network, string memory target) internal returns (bool reached) {
+        return _interpret(network, target, false);
+    }
+
+    /// @dev Runs `id` as `_executeTarget` would, without its needs, and sends its step even when done,
+    ///      so the unit's own checks decide: for tests that run a node out of order on purpose.
+    function _executeNode(string memory network, string memory id) internal returns (bool done) {
+        return _interpret(network, id, true);
+    }
+
+    function _interpret(string memory network, string memory target, bool alone) private returns (bool reached) {
         // A simulated step is not sent, so `_status` may not see its effect. `passed` records the steps
         // already run, so that each runs once.
         bool[] memory passed = new bool[](_nodes.length);
+        bool[] memory driven = new bool[](_nodes.length);
+        _home = _fork(type(uint256).max);
         while (true) {
-            (Visit[] memory visits, uint256 count) = _walk(network, target, passed);
+            (Visit[] memory visits, uint256 count) = _walk(network, target, passed, alone);
             bool advanced;
             bool replan;
             for (uint256 i; i < count; ++i) {
                 Visit memory visit = visits[i];
                 Node storage n = _nodes[visit.node];
-                if (visit.status == Status.Done) continue;
+                if (visit.status == Status.Done) {
+                    driven[visit.node] = false;
+                    continue;
+                }
                 if (visit.status == Status.NotJudged) {
                     if (visit.notBefore != 0) {
                         _warpToDate(network, n);
@@ -276,9 +299,13 @@ abstract contract Graph is Script {
                     break;
                 }
                 if (visit.status == Status.Waiting && bytes(n.until).length != 0) {
-                    // The predicate was judged before its date. Warp to the date and judge again. If there
-                    // was no date to warp to and the condition is unmet, stop.
-                    if (!_warpToDate(network, n) && !_unmetPredicate(visit.node)) return false;
+                    // The predicate was judged before its date. Warp to the date and judge again. With no
+                    // date left, the driver has one try until the predicate is met: a driver that claims
+                    // progress it cannot make would otherwise loop forever.
+                    if (!_warpToDate(network, n)) {
+                        if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
+                        driven[visit.node] = true;
+                    }
                     advanced = true;
                     replan = true;
                     break;
@@ -596,6 +623,8 @@ abstract contract Graph is Script {
         return true;
     }
 
+    /// @dev Called when a predicate is unmet with no date left to wait for, and not again until it is
+    ///      met. Returns whether to judge it again.
     function _unmetPredicate(uint256 nodeIndex) internal virtual returns (bool);
 
     function _broadcasting() internal view virtual returns (bool) {

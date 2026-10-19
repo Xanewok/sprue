@@ -98,6 +98,16 @@ contract Counting {
     function openUp() external {
         open = true;
     }
+
+    uint256 public openUntil;
+
+    function renew() external {
+        openUntil = block.timestamp + 10;
+    }
+
+    function fresh(string calldata) external view returns (bool) {
+        return block.timestamp <= openUntil;
+    }
 }
 
 /// @dev Two chains' clocks on one EVM: selecting a chain parks the selected one's clock and loads
@@ -166,11 +176,15 @@ contract BuilderGraph is Graph {
         _validateGraph();
     }
 
-    function _rpcFlag(string memory, string memory) internal pure override returns (string memory) {
+    function executeNode(string calldata network, string calldata id) external returns (bool) {
+        return _executeNode(network, id);
+    }
+
+    function _rpcFlag(string memory, string memory) internal pure virtual override returns (string memory) {
         return "node";
     }
 
-    function _journalChecked(string memory, string memory) internal pure override returns (bool) {
+    function _journalChecked(string memory, string memory) internal pure virtual override returns (bool) {
         return false;
     }
 
@@ -190,8 +204,37 @@ contract BuilderGraph is Graph {
         return true;
     }
 
-    function _unmetPredicate(uint256) internal pure override returns (bool) {
+    function _unmetPredicate(uint256) internal virtual override returns (bool) {
         return false;
+    }
+}
+
+/// @dev Every certificate checked, and each chain its own RPC.
+contract CheckedGraph is BuilderGraph {
+    constructor(Registration memory u, Step[] memory s) BuilderGraph(u, s) {}
+
+    function _rpcFlag(string memory, string memory chain) internal pure override returns (string memory) {
+        return chain;
+    }
+
+    function _journalChecked(string memory, string memory) internal pure override returns (bool) {
+        return true;
+    }
+}
+
+/// @dev A driver that claims progress and meets only `Counting.fresh`, for 10 seconds per call.
+contract DriverGraph is BuilderGraph {
+    Counting private immutable counting;
+    uint256 public calls;
+
+    constructor(Counting c, Registration memory u, Step[] memory s) BuilderGraph(u, s) {
+        counting = c;
+    }
+
+    function _unmetPredicate(uint256) internal override returns (bool) {
+        ++calls;
+        counting.renew();
+        return true;
     }
 }
 
@@ -467,6 +510,74 @@ contract StepBuildersTest is Test, Declares {
         counting.openUp();
         g.rehearse("anvil", "fixture.check");
         assertEq(counting.deploys(), 1);
+        assertEq(counting.checks(), 1);
+    }
+
+    function test_executeNode_sendsTheStepAloneEvenWhenDone() public {
+        Counting counting = new Counting();
+        Step[] memory s = new Step[](3);
+        s[0] = _step("fixture.deploy", Counting.deploy.selector);
+        s[1] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        s[2] = _step("other.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.check");
+        BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
+
+        assertTrue(g.executeNode("anvil", "other.deploy"));
+        assertTrue(g.executeNode("anvil", "other.deploy"));
+        assertEq(counting.deploys(), 2);
+        assertEq(counting.checks(), 0);
+
+        // Certified by a check that is neither done nor run.
+        assertTrue(g.executeNode("anvil", "fixture.deploy"));
+        assertEq(counting.deploys(), 3);
+    }
+
+    function test_executeNode_givesTheDriverOneTry() public {
+        Counting counting = new Counting();
+        Step[] memory s = new Step[](2);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector);
+        s[1] = _until("fixture.open", "observed", Counting.observed.selector);
+        DriverGraph g = new DriverGraph(counting, Registration(address(counting), unit.script), s);
+
+        assertTrue(g.executeNode("anvil", "fixture.fresh"));
+        assertEq(g.calls(), 1);
+        assertFalse(g.executeNode("anvil", "fixture.open"));
+        assertEq(g.calls(), 2);
+    }
+
+    function test_executeNode_judgesTheDateOfACertifiedStep() public {
+        Counting counting = new Counting();
+        Step[] memory s = new Step[](2);
+        s[0] = _step("fixture.deploy", Counting.deploy.selector).on("other").notBefore("fixture.time");
+        s[1] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        CheckedGraph g = new CheckedGraph(Registration(address(counting), unit.script), s);
+
+        vm.expectRevert(
+            bytes("fixture.deploy has an input date but sends on other: use a gate view, which selects that chain")
+        );
+        g.executeNode("anvil", "fixture.deploy");
+    }
+
+    function test_executeNode_readsAnInputDateOnTheChainItStartsOn() public {
+        TwoClocks clocks = new TwoClocks();
+        vm.warp(500);
+        clocks.fork(1);
+        vm.warp(50);
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.check", TwoClocks.check.selector).notBefore("fixture.openAt");
+        new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s)
+            .executeNode("anvil", "fixture.check");
+        assertEq(clocks.fork(type(uint256).max), 1);
+        assertEq(block.timestamp, 100);
+    }
+
+    /// @notice A predicate met, then unmet after a later step's date: the driver tries again.
+    function test_rehearse_drivesAPredicateAgainAfterItWasMet() public {
+        Counting counting = new Counting();
+        Step[] memory s = new Step[](3);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector);
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).needs("fixture.fresh").notBefore("fixture.time");
+        s[2] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        new DriverGraph(counting, Registration(address(counting), unit.script), s).rehearse("anvil", "fixture.check");
         assertEq(counting.checks(), 1);
     }
 
