@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Breaking: `Graph._execute` is `_executeTarget`. The new `_executeNode(network, id)` runs one node as
+`_executeTarget` would, without its needs, and sends its step even when it is done, so the unit's own
+checks decide. Tests use it to run a node out of order on purpose. Both call `_unmetPredicate` once per
+predicate until it is met: a driver that returned true without meeting it looped forever. Both read input
+dates on the chain selected when they start, as `rehearse` did; a direct call used a stale chain.
+
 `list`, `json`, `plan` and `run` show forge's compile lines on stderr while the graph script compiles,
 instead of a silent wait: forge reports a compile on the stdout that the runner captures. Standard
 output is unchanged, and a run with nothing to compile prints nothing more.
