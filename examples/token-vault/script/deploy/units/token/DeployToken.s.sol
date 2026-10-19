@@ -8,10 +8,10 @@ import {Token} from "./Token.sol";
 contract DeployToken is Unit {
     uint256 internal constant SUPPLY = 1000;
 
-    function steps() external pure returns (Step[] memory s) {
+    function steps() external view returns (Step[] memory s) {
         s = new Step[](2);
-        s[0] = _step("token.deploy", DeployToken.deploy.selector);
-        s[1] = _step("token.check", DeployToken.check.selector).needs("token.deploy");
+        s[0] = _step("token.deploy", this.deploy);
+        s[1] = _step("token.check", this.check).needs("token.deploy");
     }
 
     function deploy(string calldata network) external returns (string memory) {

@@ -78,7 +78,9 @@ Below, `sprue` means either. It needs Node 18 or later, `git`, `cast` and `forge
    [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) is a
    template. The directory, `_unit()` and every step id's prefix must be the same name. A deployed
    contract `<Name>` sits alone in `<Name>.sol`. Every step needs a done rule: a `<fn>Due` view
-   (`.due(...)`), or a `check` step of the same unit that reaches it through `.needs(...)`.
+   (`_step(id, this.<fn>, this.<fn>Due)`), or a `check` step of the same unit that reaches it through
+   `.needs(...)`. The typed forms let the compiler check each function and its `Due`; the selector forms
+   (`_step(id, X.fn.selector).due(...)`) stay for other signatures.
 4. Register the units in the graph script, whose contract is named like its file:
 
    ```solidity

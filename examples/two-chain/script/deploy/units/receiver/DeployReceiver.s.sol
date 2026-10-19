@@ -8,12 +8,10 @@ import {Receiver} from "./Receiver.sol";
 /// @dev The receiver contract already exists on its chain: `receiver.input.json` names it. The unit opens
 ///      its windows 0, 1, 2 in order, each at `openAt` plus a day per index on the receiver's clock.
 contract DeployReceiver is Unit {
-    function steps() external pure returns (Step[] memory s) {
+    function steps() external view returns (Step[] memory s) {
         s = new Step[](3);
         for (uint8 i; i < 3; ++i) {
-            s[i] = _step(string.concat("receiver.notify.", vm.toString(i)), "notify", DeployReceiver.notify.selector)
-                .withArg(i)
-                .due(DeployReceiver.notifyDue.selector)
+            s[i] = _step(string.concat("receiver.notify.", vm.toString(i)), "notify", this.notify, this.notifyDue, i)
                 .gateView("windowStart", DeployReceiver.windowStart.selector)
                 .on("receiver")
                 .reads("source")

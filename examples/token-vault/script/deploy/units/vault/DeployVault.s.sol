@@ -8,15 +8,11 @@ import {Vault} from "./Vault.sol";
 
 /// @dev The vault is funded once its date (`vault.input.json`'s `openAt`) has passed.
 contract DeployVault is Unit {
-    function steps() external pure returns (Step[] memory s) {
+    function steps() external view returns (Step[] memory s) {
         s = new Step[](3);
-        s[0] =
-            _step("vault.deploy", DeployVault.deploy.selector).needs("token.check").due(DeployVault.deployDue.selector);
-        s[1] = _step("vault.fund", DeployVault.fund.selector)
-            .needs("vault.deploy")
-            .notBefore("vault.openAt")
-            .due(DeployVault.fundDue.selector);
-        s[2] = _step("vault.check", DeployVault.check.selector).needs("vault.fund");
+        s[0] = _step("vault.deploy", this.deploy, this.deployDue).needs("token.check");
+        s[1] = _step("vault.fund", this.fund, this.fundDue).needs("vault.deploy").notBefore("vault.openAt");
+        s[2] = _step("vault.check", this.check).needs("vault.fund");
     }
 
     function deploy(string calldata network) external returns (string memory) {
