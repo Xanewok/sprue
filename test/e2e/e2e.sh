@@ -493,11 +493,13 @@ scenario_attended() {
 
   rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
   [ "$rc" = 6 ] || die "attended: an answer of no exited $rc, not 6"
-  grep -aq 'CREATE Token' <<<"$out" || die "attended: the preview does not show the CREATE"
+  grep -aqE 'chain 1 nonce [0-9a-fx]+: CREATE Token 0x[0-9a-fA-F]{40} value 0x0' <<<"$out" || die "attended: the preview does not show the CREATE's chain, nonce, address and value: ${out: -600}"
+  grep -aq 'Estimated amount required' <<<"$out" || die "attended: the preview does not show the cost"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
   # Every step is asked, the check too.
   out=$(tty yes "${run[@]}" 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
+  grep -aq 'no transactions in the dry run' <<<"$out" || die "attended: the check's empty dry run was not shown as such"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
   # The fork keeps chain id 1, so records in broadcast/ would read as that chain's.
   # Nor in cache/, whose snapshot a live --resume would publish as the real chain's records.
