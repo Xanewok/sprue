@@ -496,7 +496,8 @@ scenario_attended() {
   grep -aq 'CREATE Token' <<<"$out" || die "attended: the preview does not show the CREATE"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
   # Every step is asked, the check too.
-  out=$(tty yes "${run[@]}" 2>&1) || die "attended: yes failed: ${out: -600}"
+  # Without DEPLOYER the run sends as its signer.
+  out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
   # The fork keeps chain id 1, so records in broadcast/ would read as that chain's.
