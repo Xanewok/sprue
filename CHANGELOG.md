@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+A unit step that broadcasts checks the node it sends to, in the forge script itself: on a network that
+is not a rehearsal one, a chain that `chains.local` does not list must not be served by Anvil, and on a
+rehearsal network it must be. The runner checked only the node it resolved itself, so a line run by hand,
+or a `FOUNDRY_ETH_RPC_URL` that forge takes over `--rpc-url`, escaped the check. `forge script --resume`
+sends its cached transactions without this check.
+
 `run` refuses a line when `FOUNDRY_ETH_RPC_URL`, `FOUNDRY_SENDER` or `FOUNDRY_RPC_ENDPOINTS` (or a
 `DAPP_` or `DAPP_TEST_` form, in any case) is set in the environment or `.env`, whatever the value: forge
 and cast take these over the line's `--rpc-url` and `--sender`, or over the aliases they name, so the line

@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W.bin" "$W.remote" "$W.pty.py"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py"
 }
 trap cleanup EXIT
 
@@ -26,6 +26,17 @@ start_anvil() { # start_anvil <port> <chain id>
   anvil --port "$1" --chain-id "$2" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
   for _ in $(seq 1 100); do cast chain-id --rpc-url "http://127.0.0.1:$1" >/dev/null 2>&1 && return; sleep 0.1; done
   die "no anvil at port $1"
+}
+# live_node <port> <chain id>: an Anvil behind a proxy at <port> that answers web3_clientVersion as Geth.
+# The units ask the node in process, so a cast stub would not pass for a live node.
+live_node() {
+  local log=$W.node-$1.log upstream=""
+  anvil --port 0 --chain-id "$2" >"$log" 2>&1 & PIDS="$PIDS $!"
+  for _ in $(seq 1 100); do upstream=$(sed -n 's/^Listening on \(.*\)$/http:\/\/\1/p' "$log"); [ -n "$upstream" ] && break; sleep 0.1; done
+  [ -n "$upstream" ] || die "no anvil for port $1"
+  python3 "$HERE/geth.py" "$1" "$upstream" & PIDS="$PIDS $!"
+  for _ in $(seq 1 100); do [ "$(cast rpc web3_clientVersion --rpc-url "http://127.0.0.1:$1" 2>/dev/null)" = '"Geth/stub"' ] && return; sleep 0.1; done
+  die "no live node at port $1"
 }
 
 # Each test port's foundry.toml alias, which a network names by its chain id.
@@ -321,6 +332,11 @@ scenario_two_chain() {
   out=$(forge script script/deploy/units/receiver/DeployReceiver.s.sol:DeployReceiver --sig 'notify(string,uint8)' \
     rehearsal-two 0 --sender "$OPS" 2>&1) && die "two-chain: a rehearsal dry run ran without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "two-chain: a dry run without the prefix: ${out: -400}"
+  # With the receiver's chain not local, its Anvil is refused where the step selects that chain's fork.
+  jq '.chains.local = [31337]' sprue.json >sprue.json.new && mv sprue.json.new sprue.json
+  out=$(forge script script/deploy/units/receiver/DeployReceiver.s.sol:DeployReceiver --sig 'notify(string,uint8)' \
+    local 0 --sender "$OPS" --unlocked --broadcast 2>&1) && die "two-chain: a step sent through an Anvil on a chain not local"
+  grep -q 'chain 31338 is served by Anvil, a development node' <<<"$out" || die "two-chain: the selected fork's node was not refused: ${out: -400}"
   cd "$W"; rm -rf "$d"
   echo "ok  two-chain: the runner sets the receiver chain's clock for each window's date, and not the source's"
 }
@@ -471,6 +487,11 @@ scenario_attended() {
   refused 'no terminal' detached "${run[@]}"
   CI=1 refused 'CI is set' tty no "${run[@]}"
   refused 'development node' tty no G run livenet token.check --account "$account"
+  # A line run by hand skips the runner's checks; the unit asks the node that forge sends to.
+  out=$(forge script script/deploy/units/token/DeployToken.s.sol --sig 'deploy(string)' livenet --rpc-url live --sender "$OPS" \
+    --unlocked --broadcast 2>&1) \
+    && die "attended: a line run by hand ran on an Anvil posing as a live chain"
+  grep -q 'is served by Anvil, a development node' <<<"$out" || die "attended: a line run by hand was not refused in process: ${out: -400}"
   # Rehearsal records are git-ignored, so an attended rehearsal must use development nodes.
   geth_stub "$W.bin"
   PATH=$W.bin:$PATH refused 'is not a development node' tty no "${run[@]}"
@@ -556,14 +577,19 @@ scenario_tag() {
   command -v python3 >/dev/null || { echo "skip tag: it needs python3"; return; }
   local tag=deploy/prod/token out first commit prod=http://127.0.0.1:$((PORT + 5))
   # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
-  start_anvil $((PORT + 5)) 10
+  live_node $((PORT + 5)) 10
   echo 'deployments/rehearsal*/' >>.gitignore
   network prod 10; git add -A; git commit -qm prod
+  # A rehearsal network's sends must reach Anvil, here one that answers as Geth.
+  network rehearsal-prod 10
+  out=$(FOUNDRY_BROADCAST=deployments/rehearsal-prod/broadcast FOUNDRY_CACHE_PATH=deployments/rehearsal-prod/cache \
+    forge script script/deploy/units/token/DeployToken.s.sol --sig 'deploy(string)' rehearsal-prod --rpc-url prod \
+    --sender "$OPS" --unlocked --broadcast 2>&1) && die "tag: a rehearsal sent to a live node"
+  grep -q 'chain 10 is not served by Anvil, which a rehearsal network requires' <<<"$out" || die "tag: a rehearsal's live node was not refused: ${out: -400}"
   git init -q --bare "$W.remote"; git remote add origin "$W.remote"
   # The push names one tag, whatever the configuration follows.
   git config push.followTags true; git tag -a -m other unrelated
-  geth_stub "$W.bin"
-  local run=(env PATH="$W.bin:$PATH" G run prod token.check --account e2e)
+  local run=(G run prod token.check --account e2e)
   out=$(tty yes,yes,yes,yes "${run[@]}" 2>&1) || die "tag: the run failed: $(tail -c 600 <<<"$out")"
   [ "$(git cat-file -t "$tag")" = tag ] || die "tag: no annotated tag $tag: $(tail -c 600 <<<"$out")"
   [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse "$(jq -r .tokenCommit deployments/prod/token.json)^{commit}")" ] || die "tag: not at the journal's commit"
@@ -614,11 +640,11 @@ scenario_tag() {
   grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered: $(tail -c 600 <<<"$out")"
   ! git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: a dirty journal's tag was pushed"
   # A unit certified on a test chain gets no offer, though its network also names a live chain.
-  start_anvil $((PORT + 6)) 11155111
+  live_node $((PORT + 6)) 11155111
   network stage 11155111
   echo '{"chains":{"l2":{"id":11155111,"rpc":"stage"},"eth":{"id":10,"rpc":"prod"}}}' >deployments/stage/network.json
   git add -A; git commit -qm stage
-  out=$(tty yes,yes,yes,yes,yes,yes env PATH="$W.bin:$PATH" G run stage token.check --account e2e 2>&1) \
+  out=$(tty yes,yes,yes,yes,yes,yes G run stage token.check --account e2e 2>&1) \
     || die "tag: the test-chain run failed: $(tail -c 600 <<<"$out")"
   grep -q '# chain eth 10 live' <<<"$out" || die "tag: the stage network names no live chain: $(tail -c 600 <<<"$out")"
   jq -e '.checked' deployments/stage/token.json >/dev/null || die "tag: the test-chain run certified nothing"

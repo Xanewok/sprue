@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {Script, console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
+import {chainId, chainKind, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
 import {cheats} from "./DeployChecks.sol";
 
 /// @dev The unit's own parameters, `<root>/<network>/<unit>.input.json`.
@@ -111,6 +111,7 @@ abstract contract Journal is Script {
             block.chainid == chainId(file, _defaultChain(file)),
             string.concat("the RPC's chain is not ", network, "'s default chain")
         );
+        _requireNode();
         journal = _journal();
         string memory stamp = _stampKey(file);
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
@@ -129,6 +130,22 @@ abstract contract Journal is Script {
                 "forge would keep this run's ", label, " in ", actual, ", not ", expected, ": run it as plan prints"
             )
         );
+    }
+
+    /// @dev The node this forge script sends to, however forge resolved it (a `FOUNDRY_*` variable beats
+    ///      `--rpc-url`), is Anvil exactly when the network is a rehearsal one, unless the chain is local.
+    ///      The runner checks the node it resolves; this checks the one the sends reach. Only a broadcast
+    ///      sends: a dry run or a simulated rehearsal on a real node stays legitimate. `--resume` sends
+    ///      the cached transactions without this check.
+    function _requireNode() internal {
+        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) return;
+        if (keccak256(bytes(chainKind(block.chainid))) == keccak256("local")) return;
+        bool anvil = vm.indexOf(abi.decode(vm.rpc("web3_clientVersion", "[]"), (string)), "anvil/") == 0;
+        bool rehearsal = isRehearsalNetwork(_networkName());
+        string memory why = rehearsal
+            ? " is not served by Anvil, which a rehearsal network requires"
+            : " is served by Anvil, a development node: rehearse on a rehearsal network";
+        require(anvil == rehearsal, string.concat("chain ", vm.toString(block.chainid), why));
     }
 
     /// @dev The journal's chain stamp is `<default chain>ChainId`, the key `_selectChain` checks for that chain.
