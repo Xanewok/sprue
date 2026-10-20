@@ -202,6 +202,10 @@ abstract contract Deployment is ForgeBroadcasts {
             return false;
         }
         try VmRpcJson(address(vm)).rpcJson("eth_getTransactionByHash", hash) returns (string memory sent) {
+            // A call carries a `to`; a CREATE's is null.
+            try vm.parseJsonAddress(sent, ".to") returns (address) {
+                return false;
+            } catch {}
             return _has(sent, ".from") && _has(sent, ".nonce") && _has(sent, ".input")
                 && vm.computeCreateAddress(_addr(sent, ".from"), _uint(sent, ".nonce")) == addr
                 && keccak256(vm.parseJsonBytes(sent, ".input")) == initcodeHash;
