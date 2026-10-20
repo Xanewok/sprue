@@ -230,6 +230,13 @@ scenario_failure() {
     --rpc-url local --sender "$OPS" 2>&1) && die "failure: a dry run built elsewhere ran"
   grep -q "forge would keep this run.s build in elsewhere, not out" <<<"$out" || die "failure: a dry run built elsewhere: ${out: -400}"
   [ "$(nonce)" = "$n0" ] && [ ! -e deployments/elsewhere/token.json ] || die "failure: a run built elsewhere sent"
+  # Another spelling of out/ is out/; an absolute one through a symbolic link is not seen as one.
+  fresh "$RPC"; network spelled 31337
+  for o in ./out out/ "$(pwd -P)/out"; do
+    out=$(FOUNDRY_OUT=$o forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'deploy(string)' spelled \
+      --rpc-url local --sender "$OPS" 2>&1) || die "failure: a dry run with FOUNDRY_OUT=$o was refused: ${out: -400}"
+  done
+  exits 0 env FOUNDRY_OUT=out/ G run spelled token.check
   git checkout -q "$src"; rm -rf elsewhere
   echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }

@@ -9,7 +9,7 @@ import {
   statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, normalize } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -1021,7 +1021,7 @@ async function main(argv) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }
         // The units read each artifact and its metadata from out/: a build elsewhere would journal a stale one.
-        if (typeof config.out !== "string" || normalize(config.out) !== "out") {
+        if (typeof config.out !== "string" || relative(root, config.out) !== "out") {
           fail(2, `refusing: forge would build into ${config.out}, not out, where the units read artifacts; check foundry.toml, FOUNDRY_PROFILE and FOUNDRY_OUT: ${line}`);
         }
         if (cacheDir && config.cache_path !== cacheDir) {

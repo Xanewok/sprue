@@ -16,7 +16,8 @@ name. forge puts it in place of the node's chain id, and the units refused that 
 not <network>'s default chain", which named no cause.
 
 Fixed: `run` refuses a send whose build forge would write elsewhere than `out` (`FOUNDRY_OUT`, `.env`, a
-profile's `out`), and a unit step refuses `FOUNDRY_OUT` too. The library reads artifacts and their
+profile's `out`), and a unit step refuses `FOUNDRY_OUT` too; `./out`, `out/` and the absolute path are
+`out`. The library reads artifacts and their
 metadata from `out/`, so such a run journaled the metadata of an earlier build.
 
 Fixed: an attended run refuses a send when a file in the network's directory, such as a journal, changed

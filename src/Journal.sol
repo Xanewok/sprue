@@ -93,7 +93,11 @@ abstract contract Journal is Script {
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun)) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
             // The library reads each artifact and its metadata from out/.
-            _requireOutput("build", "FOUNDRY_OUT", "out", "out");
+            string memory built = vm.envOr("FOUNDRY_OUT", string("out"));
+            require(
+                _isOut(built),
+                string.concat("forge would keep this run's build in ", built, ", not out: run it as plan prints")
+            );
             if (_rehearsal()) {
                 _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
             }
@@ -117,6 +121,17 @@ abstract contract Journal is Script {
         journal = _journal();
         string memory stamp = _stampKey(file);
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
+    }
+
+    /// @dev `out` however forge spells it: forge keeps a path as given.
+    function _isOut(string memory path) private view returns (bool) {
+        string memory root = vm.projectRoot();
+        string[6] memory spellings =
+            ["out", "./out", "out/", "./out/", string.concat(root, "/out"), string.concat(root, "/out/")];
+        for (uint256 i; i < spellings.length; ++i) {
+            if (keccak256(bytes(path)) == keccak256(bytes(spellings[i]))) return true;
+        }
+        return false;
     }
 
     /// @dev Reads only the environment, which cannot see `foundry.toml`: the runner checks
