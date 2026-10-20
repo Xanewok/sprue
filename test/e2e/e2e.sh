@@ -162,6 +162,8 @@ scenario_refuses() {
   # Set to forge's default sender, it shows no difference in forge config, yet still beats --sender.
   FOUNDRY_SENDER=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take FOUNDRY_SENDER (" G run refuse vault.check
   dapp_test_sender=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take dapp_test_sender (" G run refuse vault.check
+  # It replaces the node's chain id in the simulation, where the units refuse it without naming it.
+  FOUNDRY_CHAIN_ID=31337 refused "forge would take FOUNDRY_CHAIN_ID, chain_id (" G run refuse vault.check
   echo "export FOUNDRY_SENDER=$OPS" >.env
   refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
   # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.

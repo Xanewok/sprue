@@ -191,16 +191,18 @@ const clientVersion = (rpc) => exec("cast", ["rpc", "web3_clientVersion", "--rpc
 const isAnvil = (v) => v.status === 0 && v.out.replaceAll('"', "").startsWith("anvil/");
 const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
 // forge and cast take a resolved eth_rpc_url or sender over a line's --rpc-url and --sender (a FOUNDRY_*
-// variable, also from .env, beats the flag), so the line shown would not be the one that runs. A variable
+// variable, also from .env, beats the flag), so the line shown would not be the one that runs; a chain_id
+// replaces the node's in the simulation, where the units refuse it without naming it. A variable
 // set to forge's default sender overrides too, though config shows no difference, so names count. forge
 // reads each prefix in any case.
-const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints)$/i;
+const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints|chain_id)$/i;
 const overriding = (config, env) => {
   const dotenv = isFile(".env") ? readFileSync(".env", "utf8") : "";
   const names = [...Object.keys(env), ...[...dotenv.matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1])];
   return [
     ...new Set(names.filter((v) => OVERRIDE.test(v))),
     ...(config.eth_rpc_url != null ? ["eth_rpc_url"] : []),
+    ...(config.chain_id != null ? ["chain_id"] : []),
     ...(config.sender != null && String(config.sender).toLowerCase() !== "0x1804c8ab1f12e6bbf3894d4083f33e07309d1f38" ? ["sender"] : []),
   ];
 };
