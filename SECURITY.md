@@ -59,6 +59,9 @@ end-to-end scenario for each invariant.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
   reads the role through `_checked` re-reads its certified code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.
+- An RPC that answers from a node behind the one that took the last send stops the run at the step
+  that cannot see it yet ("has no code yet", or exit 5); a rerun once it does goes on, and forge's nonce
+  check refuses a send simulated on the older state.
 - A failing RPC stops the runner, but for the check of a reverted CREATE, which passes when the RPC
   cannot show the transaction. A receipt that cannot be read while a step journals its deployment
   is left out of the journal, and the step goes on.

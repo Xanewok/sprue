@@ -97,8 +97,18 @@ abstract contract Deployment is ForgeBroadcasts {
         string memory hashKey = string.concat(".", role, "CodeHash");
         require(_has(journal, hashKey), string.concat(_unit(), ".json records no ", role, "CodeHash"));
         addr = _addr(journal, string.concat(".", role));
+        // A node that lags behind the one that took the send shows no code yet, which is no other code.
         require(
-            addr.code.length != 0 && addr.codehash == vm.parseJsonBytes32(journal, hashKey),
+            addr.code.length != 0,
+            string.concat(
+                role,
+                " at ",
+                vm.toString(addr),
+                " has no code yet: run again once the RPC shows its deployment; a person must resolve one the chain lost"
+            )
+        );
+        require(
+            addr.codehash == vm.parseJsonBytes32(journal, hashKey),
             string.concat(role, "'s code differs from ", _unit(), ".json")
         );
     }
