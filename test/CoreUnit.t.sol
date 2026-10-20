@@ -757,12 +757,19 @@ contract CoreUnitTest is Test {
         string memory path = string.concat(dir, "/toy.json");
         string memory checked = vm.readFile(path);
 
+        // A wrong value on each side of the right one, so no ordering test passes for equality.
         vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".checked.toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json's check"));
+        unit.checkedToy(network);
+        vm.writeJson(vm.toString(bytes32(type(uint256).max)), path, ".checked.toyCodeHash");
         vm.expectRevert(bytes("toy's code differs from toy.json's check"));
         unit.checkedToy(network);
 
         vm.writeFile(path, checked);
         vm.writeJson("1", path, ".checked.mainChainId");
+        vm.expectRevert(bytes("toy.json was checked on another chain"));
+        unit.checkedToy(network);
+        vm.writeJson(vm.toString(block.chainid + 1), path, ".checked.mainChainId");
         vm.expectRevert(bytes("toy.json was checked on another chain"));
         unit.checkedToy(network);
 
