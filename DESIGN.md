@@ -1,6 +1,6 @@
 # Design
 
-What sprue assumes, what it guarantees, and the decisions behind it. The README says how to use it; the
+What sprue assumes, what it guarantees, and the decisions behind it. [GUIDE.md](GUIDE.md) says how to use it; the
 [ROADMAP](ROADMAP.md) says what is planned. Decision numbers are stable: cite them, never renumber.
 
 ## Why it has this shape
