@@ -38,13 +38,14 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
    `sprue list` prints the targets, the nodes nothing depends on, and `sprue mermaid [target]` draws
    the saved graph.
 6. Plan with `sprue plan <network> <target>`, which reads the default chain's `rpc` and sends nothing.
-7. Run with `sprue run <network> <target>`. `DEPLOYER` sends the steps that name no sender. On a network
-   whose chains are all in `chains.local`, the run is unattended and needs `DEPLOYER` set; it sends
-   unlocked on Anvil and signs with `KEY` (Anvil's dev key if unset) on another node. On any other
-   network a person runs it at a terminal, with no `CI` variable, from a clean git checkout, signing
-   with exactly one of `--account <name>`, `--ledger` or `--trezor`. There `DEPLOYER` defaults to the
-   signer's address, a step that another account sends is refused, and each step is sent only after
-   `yes` is typed at its dry run.
+7. Run with `sprue run <network> <target>`. `DEPLOYER` sends the steps that name no sender, and defaults
+   to the run's own sender. On a network whose chains are all in `chains.local`, the run is unattended.
+   On another node than Anvil it signs with `KEY` (Anvil's dev key if unset), whose address is the
+   default. Anvil sends unlocked, so there the default is `network.json`'s pinned `deployer`, else the
+   address of `KEY` or the dev key. On any other network a person runs it at a terminal, with no `CI`
+   variable, from a clean git checkout, signing with exactly one of `--account <name>`, `--ledger` or
+   `--trezor`. There `DEPLOYER` defaults to the signer's address, a step that another account sends is
+   refused, and each step is sent only after `yes` is typed at its dry run.
 8. Once the run stops, commit each step's journal, metadata and `broadcast/` records; each step prints
    its `git add`. An attended run refuses a commit made while it waits for `yes`. `recover` reads the
    records, so never git-ignore a public chain's.

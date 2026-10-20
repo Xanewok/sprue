@@ -65,7 +65,6 @@ git clone https://github.com/Xanewok/sprue && cd sprue
 cp -R examples/token-vault ../my-deploy && cd ../my-deploy
 git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.3
 anvil &                                   # chain 31337 on :8545
-export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
 node lib/sprue/bin/sprue.mjs run local vault.check    # the token's two steps, then the vault's three
 ```

@@ -34,7 +34,7 @@ Flags may appear anywhere after the command.
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
-                            sends what plan prints and plans again; needs DEPLOYER; attended, it defaults to the signer
+                            sends what plan prints and plans again; DEPLOYER defaults to the run's signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
                             runs target on Anvil forks of network's chains, which it starts, in a fresh copy
                             <paths.rehearsal>-<network> of network's files; impersonates each step's sender
@@ -587,7 +587,7 @@ async function main(argv) {
     if (stopOnly) return 0;
     network = name;
   }
-  const { chainMap, chains, home } = chainsOf(network);
+  const { net, chainMap, chains, home } = chainsOf(network);
   // The chain the plan reads, and whose clock a date line without `on` names.
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
@@ -601,10 +601,10 @@ async function main(argv) {
     return 0;
   }
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
-  // Before the signer is unlocked. Without DEPLOYER an attended run sends as its signer, as forge sends as
-  // its wallet.
+  // Before the signer is unlocked. Without DEPLOYER a run sends as its own sender: an attended run's
+  // signer, as forge sends as its wallet, or a local run's key (below). A rehearsal has no key.
   const DEPLOYER = process.env.DEPLOYER ?? "";
-  if (!DEPLOYER && !attended) fail(2, "set DEPLOYER to the sender of steps without .by");
+  if (!DEPLOYER && rehearsing) fail(2, "set DEPLOYER to the sender of steps without .by");
   if (DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(DEPLOYER)) fail(2, "DEPLOYER is not a 0x address");
   // git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
   // must not hide an untracked file or a dirty submodule, and a failing git is a refusal, never an empty
@@ -627,6 +627,11 @@ async function main(argv) {
     anvil = isAnvil(clientVersion(planRpc));
     signer = anvil ? ["--unlocked"] : ["--private-key", process.env.KEY || DEV_KEY];
     if (wait && anvil) fail(2, "--wait has no use on Anvil: it moves the clock itself");
+    // Off Anvil only the signing key can send. Anvil signs for any address, so the pinned deployer.
+    process.env.DEPLOYER ||=
+      anvil && typeof net.deployer === "string"
+        ? net.deployer
+        : must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
   }
   // Each endpoint must serve the chain that network.json names. With FOUNDRY_CHAIN_ID set, forge's own
   // chain check reads the variable and not the node, so the preview would show the network's chain for

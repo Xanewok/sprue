@@ -211,12 +211,14 @@ scenario_rerun() {
   echo "ok  rerun a finished target changes no block, nonce or journal"
 }
 
-# The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
-# and after that command a rerun reaches done.
+# The example's own network, as its README runs it: without DEPLOYER the run sends as Anvil's dev key,
+# a lost journal is refused with a `recover` command, and after that command a rerun reaches done.
 scenario_recover() {
   fresh "$RPC"; git clean -fdXq deployments/local
   local out cmd
-  G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  env -u DEPLOYER G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  [ "$(jq -r .tokenDeployer deployments/local/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "recover: without DEPLOYER the run did not send as Anvil's dev key"
   rm deployments/local/token.json
   if out=$(G run local vault.check 2>&1); then die "recover: a run went on without its journal"; fi
   cmd=$(grep -o "forge script [^ ]* --sig 'recover(string)' .*" <<<"$out" | head -1)
@@ -234,8 +236,10 @@ scenario_wait() {
   fresh "$GETH"; network wait 412346 "$(($(now "$GETH") + 3600))"
   geth_stub
   export OLD_PATH=$PATH
-  PATH="$PWD/stub:$PATH" exits 4 G run wait vault.check
+  PATH="$PWD/stub:$PATH" exits 4 env -u DEPLOYER G run wait vault.check
   [ -n "$(jq -r '.vault // empty' deployments/wait/vault.json)" ] || die "wait: the work before the date was not done"
+  [ "$(jq -r .vaultDeployer deployments/wait/vault.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "wait: without DEPLOYER a run off Anvil did not send as its signing key"
   local at; at=$(jq .openAt deployments/wait/vault.input.json)
   (sleep 3; cast rpc evm_setNextBlockTimestamp "$at" --rpc-url "$GETH" >/dev/null; cast rpc evm_mine --rpc-url "$GETH" >/dev/null) &
   local bumper=$!
