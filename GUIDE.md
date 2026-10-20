@@ -110,8 +110,9 @@ top-level `"deployer": "0x..."` pins the deploy key.
 
 Before each send, `run` refuses what would make forge run a line otherwise than printed: a
 `foundry.toml` setting or inherited variable that moves forge's records; `FOUNDRY_ETH_RPC_URL`,
-`FOUNDRY_SENDER`, `FOUNDRY_RPC_ENDPOINTS` or `FOUNDRY_CHAIN_ID` (or a `DAPP_` or `DAPP_TEST_` form) in the
-environment or `.env`; an `eth_rpc_url`, a `chain_id` or a non-default `sender` in `foundry.toml`; and a build directory other than
+`FOUNDRY_SENDER` or `FOUNDRY_RPC_ENDPOINTS` (or a `DAPP_` or `DAPP_TEST_` form) in the environment or
+`.env`; an `eth_rpc_url` or a non-default `sender` in `foundry.toml`; a `chain_id`, from any of them, other
+than the line's chain's; and a build directory other than
 `out`, from `foundry.toml`, its profiles, `FOUNDRY_OUT` or `.env`, since the units read each artifact and
 its metadata there.
 

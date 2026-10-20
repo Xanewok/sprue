@@ -163,7 +163,7 @@ scenario_refuses() {
   FOUNDRY_SENDER=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take FOUNDRY_SENDER (" G run refuse vault.check
   dapp_test_sender=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take dapp_test_sender (" G run refuse vault.check
   # It replaces the node's chain id in the simulation, where the units refuse it without naming it.
-  FOUNDRY_CHAIN_ID=31337 refused "forge would take FOUNDRY_CHAIN_ID, chain_id (" G run refuse vault.check
+  FOUNDRY_CHAIN_ID=1 refused "forge would take chain_id mainnet (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain 31337" G run refuse vault.check
   echo "export FOUNDRY_SENDER=$OPS" >.env
   refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
   # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.
@@ -260,7 +260,8 @@ scenario_rerun() {
 scenario_recover() {
   fresh "$RPC"; git clean -fdXq deployments/local
   local out cmd
-  env -u DEPLOYER G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  # A chain_id that names the node's chain, as forge names it, is no override.
+  env -u DEPLOYER FOUNDRY_CHAIN_ID=31337 G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
   [ "$(jq -r .tokenDeployer deployments/local/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
     || die "recover: without DEPLOYER the run did not send as Anvil's dev key"
   rm deployments/local/token.json

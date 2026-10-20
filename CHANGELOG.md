@@ -11,9 +11,9 @@ Fixed: a deploy step refuses to send again a journaled CREATE that the chain rev
 simulation passed, as on a chain without PUSH0 or with other gas rules, and names the fix: correct the build, then
 list the address in the journal's `retired`. Before, every rerun sent it again and spent a nonce and gas.
 
-`run` and `rehearse` refuse `FOUNDRY_CHAIN_ID` (or a `DAPP_` form) and a `chain_id` in `foundry.toml` by
-name. forge puts it in place of the node's chain id, and the units refused that with "the RPC's chain is
-not <network>'s default chain", which named no cause.
+`run` and `rehearse` refuse, before a send, a `chain_id` (`FOUNDRY_CHAIN_ID`, `.env` or `foundry.toml`)
+other than the line's chain's, by name. forge puts it in place of the node's chain id, and the units
+refused that with "the RPC's chain is not <network>'s default chain", which named no cause.
 
 Fixed: `run` refuses a send whose build forge would write elsewhere than `out` (`FOUNDRY_OUT`, `.env`, a
 profile's `out`), and a unit step refuses `FOUNDRY_OUT` too; `./out`, `out/` and the absolute path are

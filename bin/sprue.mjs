@@ -191,18 +191,16 @@ const clientVersion = (rpc) => exec("cast", ["rpc", "web3_clientVersion", "--rpc
 const isAnvil = (v) => v.status === 0 && v.out.replaceAll('"', "").startsWith("anvil/");
 const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
 // forge and cast take a resolved eth_rpc_url or sender over a line's --rpc-url and --sender (a FOUNDRY_*
-// variable, also from .env, beats the flag), so the line shown would not be the one that runs; a chain_id
-// replaces the node's in the simulation, where the units refuse it without naming it. A variable
+// variable, also from .env, beats the flag), so the line shown would not be the one that runs. A variable
 // set to forge's default sender overrides too, though config shows no difference, so names count. forge
 // reads each prefix in any case.
-const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints|chain_id)$/i;
+const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints)$/i;
 const overriding = (config, env) => {
   const dotenv = isFile(".env") ? readFileSync(".env", "utf8") : "";
   const names = [...Object.keys(env), ...[...dotenv.matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1])];
   return [
     ...new Set(names.filter((v) => OVERRIDE.test(v))),
     ...(config.eth_rpc_url != null ? ["eth_rpc_url"] : []),
-    ...(config.chain_id != null ? ["chain_id"] : []),
     ...(config.sender != null && String(config.sender).toLowerCase() !== "0x1804c8ab1f12e6bbf3894d4083f33e07309d1f38" ? ["sender"] : []),
   ];
 };
@@ -1017,6 +1015,15 @@ async function main(argv) {
         if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
         const over = overriding(config, process.env);
         if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
+        // forge puts it in place of the node's chain id, which the units then refuse without naming it. forge
+        // config names a chain it knows, so the node's id is named the same way to compare.
+        const id = String(Object.values(chainMap).find((c) => c.rpc === (rpc ?? planRpc)).id);
+        const named = (v) => {
+          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...cmd.env, FOUNDRY_CHAIN_ID: v } }).stdout).chain_id); } catch {}
+        };
+        if (config.chain_id != null && String(config.chain_id) !== id && String(config.chain_id) !== named(id)) {
+          fail(2, `refusing: forge would take chain_id ${config.chain_id} (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain ${id}: unset it: ${line}`);
+        }
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }
