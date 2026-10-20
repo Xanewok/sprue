@@ -24,7 +24,7 @@ The `Receiver` is deployed outside the graph, and the second-chain step only cal
 Copy this directory out of the sprue checkout, then:
 
 ```sh
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.3
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
 anvil --port 8545 --chain-id 31337 &
 anvil --port 8546 --chain-id 31338 &
 export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266

@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.1.4
+
+Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
+`network.json`'s pinned `deployer` unless `--unsafe-unexpected-deployer` is passed, and refuse that flag
+on a network with no pin, where it had no effect. Before, a mismatch was refused only at the first CREATE,
+after earlier steps may have sent.
+
+`run` and `rehearse` default `DEPLOYER` to the pinned `deployer`. Without a pin, `run` sends as its own
+signer: an attended run's wallet, an unattended run's `KEY`, else Anvil's dev key, so a local run no
+longer needs `DEPLOYER`. `rehearse` still needs `DEPLOYER` or a pin. `run` refuses at the start a
+deployer it cannot sign as, and both print `deployer <address>, from <source>` on standard output. With
+`--unsafe-unexpected-deployer` the pin's steps send as `DEPLOYER`, or as the run's signer when the run
+cannot sign as the pin; a `DEPLOYER` that a person set is never replaced.
 
 `_recordAbsent(obj, role, at)` records in a certificate that `role` has no code at `at`, and
 `_checkedOptional(unit, role)` reads a role that may be absent: `(true, addr)` as `_checked` reads it, or
@@ -9,11 +21,7 @@ so a dependent never builds on a stale absence. `_checked` refuses an absent rol
 
 Fixed: a certificate no longer carries keys that an earlier check wrote in the same forge run.
 
-`run` and `rehearse` default `DEPLOYER` to `network.json`'s pinned `deployer`, else `run` sends as its own
-signer: an unattended run's `KEY`, else Anvil's dev key, as an attended run's wallet. `run` prints the
-deployer and refuses at the start a deployer it cannot sign as, or a `DEPLOYER` that differs from the
-pin. `--unsafe-unexpected-deployer` lets the pin's steps send as `DEPLOYER`, or as the signer when the run
-cannot sign as the pin, and is refused on a network with no pin.
+The reference moved from `README.md` to `GUIDE.md`; a link to a README section needs the new file.
 
 ## 0.1.3
 

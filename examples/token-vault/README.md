@@ -19,9 +19,8 @@ script/deploy/graph.generated.json      saved `sprue json`; regenerate it after 
 Copy this directory out of the sprue checkout, then:
 
 ```sh
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.3
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
 anvil &                                  # chain 31337 on :8545
-export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 G="node lib/sprue/bin/sprue.mjs"
 $G plan local vault.check                # the next commands; sends nothing
 $G run local vault.check                 # deploys, checks, funds, checks
