@@ -32,7 +32,7 @@ esac
 STUB
 cat >bin/cast <<'STUB'
 #!/bin/sh
-case $1 in rpc) echo '"anvil/v1"' ;; chain-id) echo 31337 ;; esac
+case "$1 $2" in "rpc eth_accounts") echo "[\"$DEPLOYER\"]" ;; rpc*) echo '"anvil/v1"' ;; chain-id*) echo 31337 ;; esac
 STUB
 chmod +x bin/forge bin/cast
 export PATH=$W/bin:$PATH PLAN_FILE=$W/plan CALLS=$W/calls DEPLOYER=0x1111111111111111111111111111111111111111 MARK=$W/MARK
@@ -111,7 +111,7 @@ for other in mainnet http://127.0.0.1:1; do
 done
 # $DEPLOYER is one argument because run refuses any value but an address.
 total=$((total + 1))
-if DEPLOYER="$DEPLOYER --ffi" run_line "$(grep -m1 -F '$DEPLOYER' "$CORPUS")" || [ -e MARK ] || ! grep -q 'DEPLOYER is not a 0x address' out; then
+if DEPLOYER="$DEPLOYER --ffi" run_line "$(grep -m1 -F '$DEPLOYER' "$CORPUS")" || [ -e MARK ] || ! grep -q 'DEPLOYER names the deployer .*, which is not a 0x address' out; then
   fail=$((fail + 1)); echo "FAIL DEPLOYER holding a flag: $(<out) $(<calls)" >&2
 fi
 # Plan lines carry the paths unquoted, so a path that a shell would act on is refused.

@@ -98,7 +98,7 @@ if pid == 0:
 sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))' "$@"; }
 nonce() { cast nonce "$OPS" --rpc-url "${1:-$RPC}"; }
 now() { cast block latest -f timestamp --rpc-url "${1:-$RPC}"; }
-all_done() { ! grep -Eqv '^# (done|chain) ' <<<"$2" || die "$1 left a node not done: $2"; }
+all_done() { ! grep -Eqv '^(# (done|chain) |deployer )' <<<"$2" || die "$1 left a node not done: $2"; }
 # network <name> <chain id> [openAt]: a fresh network of one chain.
 network() {
   rm -rf "deployments/$1"; mkdir -p "deployments/$1"
@@ -180,12 +180,28 @@ geth_stub() {
 # A failed step ends with forge's last Error: line, after the output that buries it.
 scenario_failure() {
   fresh "$RPC"; network pinned 31337
-  echo '{"chains":{"l2":{"id":31337,"rpc":"local"}},"deployer":"0x000000000000000000000000000000000000dEaD"}' >deployments/pinned/network.json
-  local out rc=0
-  out=$(G run pinned token.check 2>&1) || rc=$?
+  local dead=0x000000000000000000000000000000000000dEaD out rc=0 n0
+  echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"local\"}},\"deployer\":\"$dead\"}" >deployments/pinned/network.json
+  # The pin is the default deployer, and one that the run cannot sign as is refused before any send.
+  n0=$(nonce)
+  refused "DEPLOYER is $OPS, and pinned's network.json pins the deployer $dead" G run pinned token.check
+  refused "pins the deployer $dead, and Anvil signs only for its unlocked accounts" env -u DEPLOYER G run pinned token.check
+  network nopin 31337
+  refused "unexpected-deployer has no use: nopin's network.json pins no deployer" G run --unsafe-unexpected-deployer nopin token.check
+  [ "$(nonce)" = "$n0" ] || die "failure: a refused deployer sent"
+  # An unlocked deployer without funds: forge's own failure.
+  cast rpc anvil_impersonateAccount "$dead" --rpc-url "$RPC" >/dev/null
+  out=$(env -u DEPLOYER G run pinned token.check 2>&1) || rc=$?
+  cast rpc anvil_stopImpersonatingAccount "$dead" --rpc-url "$RPC" >/dev/null
+  grep -q "^deployer $dead, from network.json$" <<<"$out" || die "failure: the run did not print the pinned deployer: ${out: -400}"
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
+  fresh "$RPC"; rm -f deployments/pinned/token.json
+  out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1) || die "failure: the unsafe run failed: ${out: -400}"
+  grep -qi "^deployer $OPS, from the signer (--unsafe-unexpected-deployer)$" <<<"$out" || die "failure: the unsafe run did not print its deployer: $(grep -v "^ " <<<"$out" | head -20)"
+  [ "$(jq -r .tokenDeployer deployments/pinned/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "failure: --unsafe-unexpected-deployer did not send the pin's steps as the signer"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml.
   network elsewhere 31337; local n0; n0=$(nonce)
@@ -194,7 +210,7 @@ scenario_failure() {
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
   [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
-  echo "ok  a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
+  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -508,7 +524,7 @@ scenario_attended() {
   refused 'not clean' tty no "${run[@]}"
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
-  DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'not the signer' tty no "${run[@]}"
+  DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
   # Nothing above sent.
   n0=$(nonce "$LIVE")
   [ "$n0" = 0 ] || die "attended: a refusal sent"

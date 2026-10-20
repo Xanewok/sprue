@@ -9,8 +9,11 @@ so a dependent never builds on a stale absence. `_checked` refuses an absent rol
 
 Fixed: a certificate no longer carries keys that an earlier check wrote in the same forge run.
 
-An unattended `run` without `DEPLOYER` sends as its own key, as an attended one sends as its signer:
-the address of `KEY`, else of Anvil's dev key. `rehearse` still needs `DEPLOYER` or a pinned `deployer`.
+Every command defaults `DEPLOYER` to `network.json`'s pinned `deployer`, else, in `run`, to the run's
+own signer: an unattended run's `KEY`, else Anvil's dev key, as an attended run's wallet. `run` prints
+the deployer and refuses at the start a deployer it cannot sign as, or a `DEPLOYER` that differs from the
+pin; `--unsafe-unexpected-deployer` sends the pin's steps as `DEPLOYER`, else the signer, and is refused
+on a network with no pin.
 
 ## 0.1.3
 

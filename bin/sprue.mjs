@@ -34,7 +34,7 @@ Flags may appear anywhere after the command.
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
-                            sends what plan prints and plans again; DEPLOYER defaults to the run's signer
+                            sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
                             runs target on Anvil forks of network's chains, which it starts, in a fresh copy
                             <paths.rehearsal>-<network> of network's files; impersonates each step's sender
@@ -52,8 +52,8 @@ transaction and the sender's nonces, the git HEAD and status (but for the journa
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
 
---unsafe-unexpected-deployer lets a deploy step send with a key other than network.json's \`deployer\`
-(it exports UNSAFE_UNEXPECTED_DEPLOYER=1 for this run; forge takes only the variable).
+--unsafe-unexpected-deployer sends the steps of network.json's \`deployer\` with another key: DEPLOYER,
+else the signer (it exports UNSAFE_UNEXPECTED_DEPLOYER=1 for this run; forge takes only the variable).
 
 Every chain of network.json names its rpc: an alias of foundry.toml's [rpc_endpoints], which forge and
 cast resolve, with .env.
@@ -575,7 +575,6 @@ async function main(argv) {
         }
       }
     }
-    if (!process.env.DEPLOYER && typeof net.deployer === "string") process.env.DEPLOYER = net.deployer;
     const dirty = exec("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
     if (dirty.status !== 0 || dirty.out) process.env.DEPLOY_TREE_DIRTY = "1";
     out(`senders are impersonated; no key signs\n`);
@@ -587,7 +586,7 @@ async function main(argv) {
     if (stopOnly) return 0;
     network = name;
   }
-  const { chainMap, chains, home } = chainsOf(network);
+  const { net, chainMap, chains, home } = chainsOf(network);
   // The chain the plan reads, and whose clock a date line without `on` names.
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
@@ -601,11 +600,29 @@ async function main(argv) {
     return 0;
   }
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
-  // Before the signer is unlocked. Without DEPLOYER a run sends as its own sender: an attended run's
-  // signer, as forge sends as its wallet, or a local run's key (below). A rehearsal has no key.
-  const DEPLOYER = process.env.DEPLOYER ?? "";
-  if (!DEPLOYER && rehearsing) fail(2, "set DEPLOYER to the sender of steps without .by");
-  if (DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(DEPLOYER)) fail(2, "DEPLOYER is not a 0x address");
+  // The sender of steps without .by: DEPLOYER, else the pinned deployer, else the run's own signer
+  // (below). A rehearsal has no signer.
+  const pin = typeof net.deployer === "string" ? net.deployer : "";
+  const unsafeDeployer = process.env.UNSAFE_UNEXPECTED_DEPLOYER === "1";
+  const same = (a, b) => a.toLowerCase() === b.toLowerCase();
+  const from = process.env.DEPLOYER ? "DEPLOYER" : pin ? "network.json" : "";
+  process.env.DEPLOYER ||= pin;
+  if (!process.env.DEPLOYER && rehearsing) fail(2, "set DEPLOYER, or network.json's deployer, to the sender of steps without .by");
+  if (process.env.DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(process.env.DEPLOYER)) fail(2, `${from} names the deployer ${process.env.DEPLOYER}, which is not a 0x address`);
+  if (unsafeDeployer && !pin) fail(2, `--unsafe-unexpected-deployer has no use: ${network}'s network.json pins no deployer`);
+  if (pin && !same(process.env.DEPLOYER, pin) && !unsafeDeployer) {
+    fail(2, `refusing: DEPLOYER is ${process.env.DEPLOYER}, and ${network}'s network.json pins the deployer ${pin}; unset DEPLOYER, or pass --unsafe-unexpected-deployer`);
+  }
+  if (rehearsing) out(`deployer ${process.env.DEPLOYER}, from ${from}\n`);
+  // A sender the run cannot sign for is refused before any send, not at its step's turn. With
+  // --unsafe-unexpected-deployer the pinned deployer's steps go to the run's own signer.
+  const settleDeployer = (own, canSign, why) => {
+    const d = process.env.DEPLOYER || own;
+    if (canSign(d)) process.env.DEPLOYER = d;
+    else if (unsafeDeployer && same(d, pin)) process.env.DEPLOYER = own;
+    else fail(2, `refusing: ${from === "DEPLOYER" ? "DEPLOYER is" : `${network}'s network.json pins the deployer`} ${d}, and ${why}; sign as it${pin ? `, or pass --unsafe-unexpected-deployer to send as ${own}` : ""}`);
+    out(`deployer ${process.env.DEPLOYER}, from ${process.env.DEPLOYER === d ? from || "the signer" : "the signer (--unsafe-unexpected-deployer)"}\n`);
+  };
   // git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
   // must not hide an untracked file or a dirty submodule, and a failing git is a refusal, never an empty
   // status.
@@ -627,8 +644,6 @@ async function main(argv) {
     anvil = isAnvil(clientVersion(planRpc));
     signer = anvil ? ["--unlocked"] : ["--private-key", process.env.KEY || DEV_KEY];
     if (wait && anvil) fail(2, "--wait has no use on Anvil: it moves the clock itself");
-    // Off Anvil only the signing key can send; Anvil's --unlocked signs only for its own accounts.
-    process.env.DEPLOYER ||= must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
   }
   // Each endpoint must serve the chain that network.json names. With FOUNDRY_CHAIN_ID set, forge's own
   // chain check reads the variable and not the node, so the preview would show the network's chain for
@@ -637,6 +652,13 @@ async function main(argv) {
   for (const { rpc, id } of Object.values(chainMap)) {
     const got = chainId(rpc);
     if (got !== String(id)) fail(2, `refusing ${network}: ${rpc} is chain ${got}, network.json says ${id}`);
+  }
+  if (!rehearsing && !attended) {
+    const key = must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
+    // Anvil's --unlocked signs only for the accounts each node lists, impersonated ones included.
+    const unlocked = (rpc) => JSON.parse(must("cast", ["rpc", "eth_accounts", "--rpc-url", rpc])).map((a) => a.toLowerCase());
+    if (anvil) settleDeployer(key, (d) => endpoints.every((rpc) => unlocked(rpc).includes(d.toLowerCase())), "Anvil signs only for its unlocked accounts");
+    else settleDeployer(key, (d) => same(d, key), `this run signs only as ${key}, the address of ${process.env.KEY ? "KEY" : "Anvil's dev key (KEY is unset)"}`);
   }
   let me = "";
   const live = new Set();
@@ -676,7 +698,7 @@ async function main(argv) {
     signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
     out(`signer ${me}\n`);
-    process.env.DEPLOYER ||= me;
+    settleDeployer(me, (d) => same(d, me), `this run signs only as ${me}`);
   }
 
   // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any.
