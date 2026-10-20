@@ -374,6 +374,7 @@ scenario_rehearse() {
   # Inherited, a keystore name that forge would fail to find, and an eth_rpc_url that forge would send to
   # over --rpc-url, are dropped.
   out=$(ETH_KEYSTORE_ACCOUNT=nosuch FOUNDRY_ETH_RPC_URL=$LIVE "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
+  grep -q "^deployer $dead, from DEPLOYER$" <<<"$out" || die "rehearse: the deployer and its source were not printed"
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
   [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
   jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
