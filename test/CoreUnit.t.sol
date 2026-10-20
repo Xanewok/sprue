@@ -813,11 +813,18 @@ contract CoreUnitTest is Test {
     function test_checkedOptional_readsARecordedAbsence_untilCodeAppearsAtItsAddress() public {
         _network("optional-absent", FREE, "");
         address at = makeAddr("absent toy");
-        unit.checkAbsent(network, at);
+        address spare = makeAddr("spare");
+        unit.checkAbsent(network, at, spare);
 
         (bool present, address addr) = unit.checkedOptionalToy(network);
         assertFalse(present);
         assertEq(addr, address(0));
+        (present,) = unit.checkedOptional(network, "spare");
+        assertFalse(present);
+        vm.etch(spare, hex"00");
+        vm.expectRevert(bytes("spare has code since toy.json recorded it absent: a person must resolve it"));
+        unit.checkedOptional(network, "spare");
+        vm.etch(spare, "");
         vm.expectRevert(bytes("toy has no code"));
         unit.checkedToy(network);
 
@@ -825,7 +832,7 @@ contract CoreUnitTest is Test {
         vm.expectRevert(bytes("toy has code since toy.json recorded it absent: a person must resolve it"));
         unit.checkedOptionalToy(network);
         vm.expectRevert(bytes("toy has code: certify it instead"));
-        unit.checkAbsent(network, at);
+        unit.checkAbsent(network, at, spare);
 
         vm.etch(at, "");
         vm.writeJson("1", string.concat(dir, "/toy.json"), ".checked.mainChainId");
@@ -837,12 +844,12 @@ contract CoreUnitTest is Test {
     function test_certificate_keepsNoKeyOfAnEarlierCheckInTheSameRun() public {
         _network("certificate-fresh", FREE, "");
         unit.deploy(network);
-        unit.checkAbsent(network, makeAddr("absent toy"));
+        unit.checkAbsent(network, makeAddr("absent toy"), makeAddr("spare"));
         unit.check(network);
         (bool present,) = unit.checkedOptionalToy(network);
         assertTrue(present, "the certificate kept toyAbsent");
 
-        unit.checkAbsent(network, makeAddr("absent toy"));
+        unit.checkAbsent(network, makeAddr("absent toy"), makeAddr("spare"));
         assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".checked.toyCodeHash"));
     }
 
