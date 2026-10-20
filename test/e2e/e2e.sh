@@ -705,16 +705,10 @@ scenario_mermaid() {
 
 setup
 cd "$W"
-scenario_mermaid
-scenario_refuses
-scenario_grammar
-scenario_failure
-scenario_rerun
-scenario_recover
-scenario_wait
-scenario_kill
-scenario_two_chain
-scenario_rehearse
-scenario_attended
-scenario_tag
+# E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
+# set -e holds inside each.
+for s in mermaid refuses grammar failure rerun recover wait kill two_chain rehearse attended tag; do
+  if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
+  "scenario_$s"
+done
 echo "PASS e2e"
