@@ -11,6 +11,10 @@ Fixed: a deploy step refuses to send again a CREATE that the chain reverted thou
 passed, as on a chain without PUSH0 or with other gas rules, and names the fix: correct the build, then
 list the address in the journal's `retired`. Before, every rerun sent it again and spent a nonce and gas.
 
+Fixed: `run` refuses a send whose build forge would write elsewhere than `out` (`FOUNDRY_OUT`, `.env`, a
+profile's `out`), and a unit step refuses `FOUNDRY_OUT` too. The library reads artifacts and their
+metadata from `out/`, so such a run journaled the metadata of an earlier build.
+
 Fixed: an attended run refuses a send when a file in the network's directory, such as a journal, changed
 while the question waited. git status showed no change for a journal already modified or ignored, so the
 send could read another journal than its dry run.

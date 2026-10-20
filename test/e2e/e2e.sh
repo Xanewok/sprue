@@ -215,7 +215,21 @@ scenario_failure() {
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
   [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
-  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
+  # The units read artifacts and their metadata from out/, so a build elsewhere would journal a stale one,
+  # here from before an edit of the token's source.
+  local src=script/deploy/units/token/Token.sol
+  echo '// edited' >>"$src"
+  refused 'forge would build into elsewhere, not out' env FOUNDRY_OUT=elsewhere G run elsewhere token.check
+  echo "FOUNDRY_OUT=elsewhere" >.env; refused 'forge would build into elsewhere, not out' G run elsewhere token.check; rm .env
+  cp foundry.toml foundry.toml.ok; printf '[profile.other]\nout = "elsewhere"\n' >>foundry.toml
+  refused 'forge would build into elsewhere, not out' env FOUNDRY_PROFILE=other G run elsewhere token.check
+  mv foundry.toml.ok foundry.toml
+  out=$(FOUNDRY_OUT=elsewhere forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'deploy(string)' elsewhere \
+    --rpc-url local --sender "$OPS" 2>&1) && die "failure: a dry run built elsewhere ran"
+  grep -q "forge would keep this run.s build in elsewhere, not out" <<<"$out" || die "failure: a dry run built elsewhere: ${out: -400}"
+  [ "$(nonce)" = "$n0" ] && [ ! -e deployments/elsewhere/token.json ] || die "failure: a run built elsewhere sent"
+  git checkout -q "$src"; rm -rf elsewhere
+  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches

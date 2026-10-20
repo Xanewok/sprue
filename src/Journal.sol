@@ -92,6 +92,8 @@ abstract contract Journal is Script {
         // saved, and no caller tells a probe from a step that broadcasts.
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun)) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
+            // The library reads each artifact and its metadata from out/.
+            _requireOutput("build", "FOUNDRY_OUT", "out", "out");
             if (_rehearsal()) {
                 _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
             }
