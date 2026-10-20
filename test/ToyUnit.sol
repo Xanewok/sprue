@@ -155,6 +155,18 @@ contract ToyUnit is ToyJournal {
         return _checked("toy", "toy");
     }
 
+    function checkedOptionalToy(string calldata network) external returns (bool, address) {
+        _use(network);
+        return _checkedOptional("toy", "toy");
+    }
+
+    /// @dev A check that finds no toy at `at` and records it absent.
+    function checkAbsent(string calldata network, address at) external returns (string memory) {
+        _use(network);
+        _certify(_recordAbsent(_beginChecked("toy", at), "toy", at));
+        return _done(false);
+    }
+
     function _createdIn(bytes32 hash, address, bool) internal view override returns (uint256) {
         return hash == confirmed ? 5 : 0;
     }

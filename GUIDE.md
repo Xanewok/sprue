@@ -63,7 +63,9 @@ that it deploys is declared in the project's only file named `<Name>.sol`. The t
 let the compiler check each function and its `Due` view. The selector forms, such as
 `_step(id, X.fn.selector)`, remain for other signatures, and [`src/graph/Step.sol`](src/graph/Step.sol)
 holds the other builders. A unit pins every contract it reads but does not deploy, by code hash or by
-behaviour, in its own checks.
+behaviour, in its own checks. Where such a contract may not exist on a chain, the check records it
+absent at its expected address with `_recordAbsent`, and a dependent reads it with `_checkedOptional`,
+which refuses once code appears there.
 
 ## Rehearse
 

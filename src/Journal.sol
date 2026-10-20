@@ -288,8 +288,39 @@ abstract contract Journal is Script {
     ///      through this and not from another unit's uncertified keys. The certificate's chain is
     ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
     function _checked(string memory unit, string memory role) internal view returns (address addr) {
+        return _checkedRole(_checkedRecord(unit, role), unit, role);
+    }
+
+    /// @dev `_checked` for a role that may not exist on this chain: `(false, address(0))` where the
+    ///      check recorded the role absent with `_recordAbsent`, while its address still has no code.
+    ///      Code there since the check reverts, so a dependent never builds on a stale absence.
+    function _checkedOptional(string memory unit, string memory role)
+        internal
+        view
+        returns (bool present, address addr)
+    {
+        string memory record = _checkedRecord(unit, role);
+        string memory absent = string.concat(".checked.", role, "Absent");
+        if (!_has(record, absent) || !vm.parseJsonBool(record, absent)) {
+            return (true, _checkedRole(record, unit, role));
+        }
+        require(
+            _addr(record, string.concat(".checked.", role)).code.length == 0,
+            string.concat(role, " has code since ", unit, ".json recorded it absent: a person must resolve it")
+        );
+    }
+
+    /// @dev Adds to the certificate `obj` that `role` is absent: `at`, where it would be, has no code.
+    ///      Returns the object's JSON so far. `_checked` refuses the role; `_checkedOptional` reads it.
+    function _recordAbsent(string memory obj, string memory role, address at) internal returns (string memory) {
+        require(at.code.length == 0, string.concat(role, " has code: certify it instead"));
+        vm.serializeAddress(obj, role, at);
+        return vm.serializeBool(obj, string.concat(role, "Absent"), true);
+    }
+
+    function _checkedRecord(string memory unit, string memory role) private view returns (string memory record) {
         string memory path = string.concat(_dir(), "/", unit, ".json");
-        string memory record = vm.exists(path) ? vm.readFile(path) : "{}";
+        record = vm.exists(path) ? vm.readFile(path) : "{}";
         require(_has(record, ".checked"), string.concat(unit, ".json is unchecked: run its check step"));
         string memory chainKey = string.concat(".checked.", role, "ChainId");
         require(
@@ -297,6 +328,13 @@ abstract contract Journal is Script {
                 == block.chainid,
             string.concat(unit, ".json was checked on another chain")
         );
+    }
+
+    function _checkedRole(string memory record, string memory unit, string memory role)
+        private
+        view
+        returns (address addr)
+    {
         addr = _addr(record, string.concat(".checked.", role));
         require(addr.code.length != 0, string.concat(role, " has no code"));
         require(
@@ -317,8 +355,11 @@ abstract contract Journal is Script {
 
     /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
     ///      id and the role's address. The caller adds its own keys and ends with `_certify`.
+    ///      Forge keeps a serialized object for the whole run, so it starts empty: no key of an
+    ///      earlier check in the same run survives into this certificate.
     function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
         obj = string.concat(role, "-checked");
+        vm.serializeJson(obj, "{}");
         vm.serializeUint(obj, "evmBlock", block.number);
         vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
         vm.serializeAddress(obj, role, addr);
