@@ -165,6 +165,7 @@ scenario_refuses() {
   dapp_test_sender=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take dapp_test_sender (" G run refuse vault.check
   # It replaces the node's chain id in the simulation, where the units refuse it without naming it.
   FOUNDRY_CHAIN_ID=1 refused "forge would take chain_id mainnet (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain 31337" G run refuse vault.check
+  foundry_chain_id=1 refused "forge would take chain_id mainnet" G run refuse vault.check
   echo "export FOUNDRY_SENDER=$OPS" >.env
   refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
   # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.

@@ -1016,12 +1016,14 @@ async function main(argv) {
         const over = overriding(config, process.env);
         if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
         // forge puts it in place of the node's chain id, which the units then refuse without naming it. forge
-        // config names a chain it knows, so the node's id is named the same way to compare.
-        const id = String(Object.values(chainMap).find((c) => c.rpc === (rpc ?? planRpc)).id);
+        // config names a chain it knows, so the node's id is named the same way to compare, with every
+        // spelling of the variable replaced. A step that makes its own forks reads chains the line does not name.
+        const id = rpc && String(Object.values(chainMap).find((c) => c.rpc === rpc).id);
         const named = (v) => {
-          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, ...cmd.env, FOUNDRY_CHAIN_ID: v } }).stdout).chain_id); } catch {}
+          const env = Object.fromEntries(Object.entries({ ...process.env, ...cmd.env }).filter(([k]) => !/^(foundry|dapp|dapp_test)_chain_id$/i.test(k)));
+          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...env, FOUNDRY_CHAIN_ID: v } }).stdout).chain_id); } catch {}
         };
-        if (config.chain_id != null && String(config.chain_id) !== id && String(config.chain_id) !== named(id)) {
+        if (rpc && config.chain_id != null && String(config.chain_id) !== id && String(config.chain_id) !== named(id)) {
           fail(2, `refusing: forge would take chain_id ${config.chain_id} (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain ${id}: unset it: ${line}`);
         }
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
