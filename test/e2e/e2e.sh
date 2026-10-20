@@ -363,7 +363,6 @@ scenario_concurrent() {
   [ "$rc" = 130 ] || die "concurrent: a signal exited $rc, not 130: $(tail -c 600 "$W.a")"
   ! kill -0 "$step" 2>/dev/null || die "concurrent: the runner exited before its step"
   cast rpc evm_mine --rpc-url "$RPC" >/dev/null; cast rpc evm_setAutomine true --rpc-url "$RPC" >/dev/null
-  rm -f cache/DeployToken.s.sol/31337/*.recovery.pending
   out=$(G run conc token.check 2>&1) || die "concurrent: the run after a signal failed: $(tail -c 600 <<<"$out")"
   [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a signal, not 1"
 
@@ -481,7 +480,11 @@ scenario_two_chain() {
   out=$(G rehearse local receiver.notify.2 2>&1) || die "two-chain: rehearse failed: $(tail -c 600 <<<"$out")"
   [ "$(grep -c '^fork ' <<<"$out")" = 2 ] || die "two-chain: rehearse did not fork both chains: $(tail -c 600 <<<"$out")"
   [ "$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")" = "$b0" ] || die "two-chain: rehearse mined on a real node"
-  exits 0 G run local receiver.notify.2
+  # The notify steps make their own forks, so their lines name no --rpc-url, and forge would read an
+  # inherited ETH_RPC_URL for the script's own context: here a node of another chain, which gets nothing.
+  local l0; l0="$(cast block-number --rpc-url "$LIVE") $(nonce "$LIVE")"
+  ETH_RPC_URL=$LIVE exits 0 G run local receiver.notify.2
+  [ "$(cast block-number --rpc-url "$LIVE") $(nonce "$LIVE")" = "$l0" ] || die "two-chain: a step sent to ETH_RPC_URL"
   for w in 0 1 2; do
     [ "$(opened $w)" = "$(jq -r .checked.source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
   done
