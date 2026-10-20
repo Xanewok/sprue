@@ -23,4 +23,5 @@ while True:
                 if os.environ.get("PTY_HOOK"):
                     subprocess.run(os.environ["PTY_HOOK"], shell=True, check=True, stdout=subprocess.DEVNULL)
             os.write(fd, b"\x03" if reply == "^C" else reply.encode() + b"\n"); seen = b""
-sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))
+code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+sys.exit(128 - code if code < 0 else code)

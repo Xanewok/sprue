@@ -50,8 +50,9 @@ transaction and the sender's nonces, the git HEAD and status (but for the journa
 .env and ~/.foundry/foundry.toml unchanged since before the dry run, and the network's files since after
 it. Nothing skips the question.
 
-One run or rehearse of a network runs at a time; the next refuses while it runs and takes over the lock of
-one that has exited. A signal waits for the running step to exit.
+One run of a network runs at a time, a rehearse's run of its copy included: the next refuses while it or
+its step runs, and takes over the lock of a run that has exited. A signal waits for the running step to
+exit.
 
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
@@ -125,8 +126,9 @@ const alive = (pid) => {
     return e.code === "EPERM";
   }
 };
-// Exclusive, naming its holder's pid, and released at exit. A lock whose holder has exited is taken over
-// under a second exclusive file, so two runs never both take it.
+// Exclusive, naming its holder's pid and, while one runs, its step's, and released at exit. A lock whose
+// pids have all exited is taken over under a second exclusive file, so two runs never both take it.
+// Returns the setter of the step's pid.
 function lock(file, what) {
   const mine = `${file}.${process.pid}`;
   const held = () => {
@@ -143,8 +145,8 @@ function lock(file, what) {
       }
       const got = held();
       if (got === undefined) continue;
-      const pid = Number(got);
-      if (pid > 0 && alive(pid)) fail(2, `refusing: ${what} is running, as pid ${pid}; wait for it to end`);
+      const pid = got.split(" ").map(Number).find((p) => p > 0 && alive(p));
+      if (pid) fail(2, `refusing: ${what} is running, as pid ${pid}; wait for it to end`);
       try {
         linkSync(mine, `${file}.takeover`);
       } catch (e) {
@@ -164,8 +166,12 @@ function lock(file, what) {
     rmSync(mine, { force: true });
   }
   process.on("exit", () => {
-    if (held() === String(process.pid)) rmSync(file, { force: true });
+    if (held()?.split(" ")[0] === String(process.pid)) rmSync(file, { force: true });
   });
+  return (step) => {
+    writeFileSync(mine, step ? `${process.pid} ${step}` : String(process.pid));
+    renameSync(mine, file);
+  };
 }
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
@@ -471,6 +477,13 @@ async function main(argv) {
     return { net, chainMap, chains, home };
   }
 
+  // Two runs of one network would interleave their writes to its journals and forge's records, and fail on
+  // each other's nonces. The lock is kept in the git directory, outside the tree that git status reads.
+  const lockNetwork = (name) => {
+    const gitDir = must("git", ["rev-parse", "--absolute-git-dir"], "refusing: git rev-parse --absolute-git-dir failed");
+    stepLock = lock(join(gitDir, `sprue-run-${createHash("sha256").update(join(root, DEPLOYMENTS, name)).digest("hex").slice(0, 16)}.lock`), `a run of ${name}`);
+  };
+
   // The copy's chains name only the Anvil forks it starts, so forge never sees a real endpoint and holds
   // no key. Reusing an earlier rehearsal would need proof that its forks and inputs still match: it starts over.
   async function rehearse(source) {
@@ -499,6 +512,8 @@ async function main(argv) {
       fail(2, `refusing: ${lock} names pid ${pid}, which has exited; remove it if no rehearse of ${source} runs`);
     }
     atExit = () => rmSync(lock, { force: true });
+    // Before it stops a kept fork or replaces a file: a run of the copy may be using them.
+    lockNetwork(name);
     for (const sig of ["SIGINT", "SIGTERM"]) {
       process.on(sig, () => {
         const done = () => {
@@ -646,10 +661,7 @@ async function main(argv) {
     for (const l of await plan()) out(`${l}\n`);
     return 0;
   }
-  // Two runs of one network would interleave their writes to its journals and forge's records, and fail on
-  // each other's nonces. The lock is kept in the git directory, outside the tree that git status reads.
-  const gitDir = must("git", ["rev-parse", "--absolute-git-dir"], "refusing: git rev-parse --absolute-git-dir failed");
-  lock(join(gitDir, `sprue-run-${createHash("sha256").update(join(root, DEPLOYMENTS, network)).digest("hex").slice(0, 16)}.lock`), `a run of ${network}`);
+  if (!rehearsing) lockNetwork(network);
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
   // The sender of steps without .by: DEPLOYER, else the pinned deployer, else the run's own signer
   // (below). A rehearsal has no signer.
@@ -795,6 +807,8 @@ async function main(argv) {
     const { code, log } = await new Promise((resolve) => {
       const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
       forgeStep = child;
+      // A step that outlives a killed runner still holds the lock.
+      stepLock(child.pid);
       // A signal stops the step and waits for it, since it writes its journal until it exits, and the lock
       // is released only then. Only while it runs: a handler would hold Ctrl-C at the question until Enter.
       // rehearse has its own.
@@ -805,6 +819,7 @@ async function main(argv) {
       const signals = rehearsing ? [] : ["SIGINT", "SIGTERM", "SIGHUP"];
       for (const sig of signals) process.on(sig, stopStep);
       child.on("exit", () => {
+        stepLock();
         for (const sig of signals) process.off(sig, stopStep);
       });
       let log = "";
@@ -1018,6 +1033,7 @@ async function main(argv) {
 // What a rehearse leaves when it ends, however it ends, and the step a signal waits for.
 let atExit = () => {};
 let forgeStep;
+let stepLock = () => {};
 
 const argv = process.argv.slice(2);
 if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {

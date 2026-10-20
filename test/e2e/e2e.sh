@@ -352,6 +352,34 @@ scenario_concurrent() {
   out=$(G run conc token.check 2>&1) || die "concurrent: the run after a signal failed: $(tail -c 600 <<<"$out")"
   [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a signal, not 1"
 
+  # A step whose runner was killed alone holds the lock until it exits.
+  fresh "$RPC"; network conc 31337; n0=$(nonce)
+  cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
+  G run conc token.check >"$W.a" 2>&1 & a=$!
+  held
+  step=$(ps -eo pid=,args= | awk '/forge script .* conc .*--broadcast/ && !/awk/ && !p {p = $1} END {if (p) print p}')
+  kill -9 "$a"; wait "$a" 2>/dev/null || true
+  refused "a run of conc is running, as pid $step" G run conc token.check
+  cast rpc evm_mine --rpc-url "$RPC" >/dev/null; cast rpc evm_setAutomine true --rpc-url "$RPC" >/dev/null
+  for _ in $(seq 1 300); do kill -0 "$step" 2>/dev/null || break; sleep 0.1; done
+  out=$(G run conc token.check 2>&1) || die "concurrent: the run after its step exited failed: $(tail -c 600 <<<"$out")"
+  [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a killed runner, not 1"
+
+  # rehearse refuses before it touches a copy that a run is using.
+  local fork
+  network rl 31337
+  G rehearse --keep rl token.check >/dev/null 2>>log || die "concurrent: rehearse failed"
+  fork=$(jq -r .chains.l2.rpc deployments/rehearsal-rl/network.json)
+  cast rpc evm_setAutomine false --rpc-url "$fork" >/dev/null
+  G run rehearsal-rl vault.check >"$W.a" 2>&1 & a=$!
+  for _ in $(seq 1 600); do [ "$(cast rpc txpool_status --rpc-url "$fork" | jq -r .pending)" != 0x0 ] && break; sleep 0.1; done
+  refused "a run of rehearsal-rl is running, as pid" G rehearse rl token.check
+  refused "a run of rehearsal-rl is running, as pid" G rehearse --stop rl
+  [ -f deployments/rehearsal-rl/token.json ] && cast chain-id --rpc-url "$fork" >/dev/null || die "concurrent: rehearse touched a copy in use"
+  cast rpc evm_setAutomine true --rpc-url "$fork" >/dev/null; cast rpc evm_mine --rpc-url "$fork" >/dev/null
+  rc=0; wait "$a" || rc=$?; [ "$rc" = 0 ] || die "concurrent: the run of the copy exited $rc: $(tail -c 600 "$W.a")"
+  exits 0 G rehearse --stop rl
+
   # A lock whose run was killed names a pid that has exited.
   fresh "$RPC"; network conc 31337
   set -m; G run conc token.check >"$W.a" 2>&1 & a=$!
@@ -639,7 +667,7 @@ scenario_attended() {
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
   # Ctrl-C at the question ends the run; the next one takes over its lock.
   rc=0; tty ^C "${run[@]}" >/dev/null 2>&1 || rc=$?
-  [ "$rc" != 0 ] && [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: Ctrl-C at the question exited $rc or sent"
+  [ "$rc" = 130 ] && [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: Ctrl-C at the question exited $rc, not 130, or sent"
   # Every step is asked, the check too.
   # Without DEPLOYER the run sends as its signer.
   out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
@@ -784,8 +812,8 @@ scenario_mermaid() {
 
 setup
 cd "$W"
-# E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
-# set -e holds inside each.
+# E2E_ONLY="<name> ..." runs only those scenarios, in this order; tag and question need attended before
+# them. Called outside a condition, so that set -e holds inside each.
 for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag question; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"

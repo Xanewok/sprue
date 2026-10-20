@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-`run` and `rehearse` refuse a second run of a network while one runs (exit 2), by a lock in the git
-directory; a lock whose run has exited is taken over. Before, two runs raced: the later one failed inside
-forge or stopped at exit 3. A signal to `run` while a step sends stops the step and waits for it.
+`run` refuses a second run of a network while one or its step runs (exit 2), by a lock in the git
+directory, and `rehearse` refuses while a run of its copy does; a lock whose pids have exited is taken
+over. Before, two runs raced: the later one failed inside forge or stopped at exit 3. A signal to `run`
+while a step sends stops the step and waits for it.
 
 Fixed: an attended run refuses a send when a file in the network's directory, such as a journal, changed
 while the question waited. git status showed no change for a journal already modified or ignored, so the
