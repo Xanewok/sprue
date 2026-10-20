@@ -288,7 +288,13 @@ abstract contract Journal is Script {
     ///      through this and not from another unit's uncertified keys. The certificate's chain is
     ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
     function _checked(string memory unit, string memory role) internal view returns (address addr) {
-        return _checkedRole(_checkedRecord(unit, role), unit, role);
+        string memory record = _checkedRecord(unit, role);
+        addr = _addr(record, string.concat(".checked.", role));
+        require(addr.code.length != 0, string.concat(role, " has no code"));
+        require(
+            addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
+            string.concat(role, "'s code differs from ", unit, ".json's check")
+        );
     }
 
     /// @dev `_checked` for a role that may not exist on this chain: `(false, address(0))` where the
@@ -301,9 +307,7 @@ abstract contract Journal is Script {
     {
         string memory record = _checkedRecord(unit, role);
         string memory absent = string.concat(".checked.", role, "Absent");
-        if (!_has(record, absent) || !vm.parseJsonBool(record, absent)) {
-            return (true, _checkedRole(record, unit, role));
-        }
+        if (!_has(record, absent) || !vm.parseJsonBool(record, absent)) return (true, _checked(unit, role));
         require(
             _addr(record, string.concat(".checked.", role)).code.length == 0,
             string.concat(role, " has code since ", unit, ".json recorded it absent: a person must resolve it")
@@ -327,19 +331,6 @@ abstract contract Journal is Script {
             _uint(record, _has(record, chainKey) ? chainKey : string.concat(".checked", _stampKey(_networkJson())))
                 == block.chainid,
             string.concat(unit, ".json was checked on another chain")
-        );
-    }
-
-    function _checkedRole(string memory record, string memory unit, string memory role)
-        private
-        view
-        returns (address addr)
-    {
-        addr = _addr(record, string.concat(".checked.", role));
-        require(addr.code.length != 0, string.concat(role, " has no code"));
-        require(
-            addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
-            string.concat(role, "'s code differs from ", unit, ".json's check")
         );
     }
 

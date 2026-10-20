@@ -155,11 +155,7 @@ contract ToyUnit is ToyJournal {
         return _checked("toy", "toy");
     }
 
-    function checkedOptionalToy(string calldata network) external returns (bool, address) {
-        return checkedOptional(network, "toy");
-    }
-
-    function checkedOptional(string calldata network, string memory role) public returns (bool, address) {
+    function checkedOptional(string calldata network, string memory role) external returns (bool, address) {
         _use(network);
         return _checkedOptional("toy", role);
     }

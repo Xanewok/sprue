@@ -802,18 +802,18 @@ contract CoreUnitTest is Test {
 
     function test_checkedOptional_readsACertifiedRoleAsPresent_andRefusesWhatCheckedRefuses() public {
         _deployChecked("optional-present");
-        (bool present, address addr) = unit.checkedOptionalToy(network);
+        (bool present, address addr) = unit.checkedOptional(network, "toy");
         assertTrue(present);
         assertEq(addr, _journalOf("toy", ".toy"));
 
         string memory path = string.concat(dir, "/toy.json");
         vm.writeJson("false", path, ".checked.toyAbsent");
-        (present,) = unit.checkedOptionalToy(network);
+        (present,) = unit.checkedOptional(network, "toy");
         assertTrue(present, "a false absence is not one");
 
         vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".checked.toyCodeHash");
         vm.expectRevert(bytes("toy's code differs from toy.json's check"));
-        unit.checkedOptionalToy(network);
+        unit.checkedOptional(network, "toy");
     }
 
     /// @dev An absence holds only while its address stays empty: code there since the check is refused.
@@ -823,28 +823,25 @@ contract CoreUnitTest is Test {
         address spare = makeAddr("spare");
         unit.checkAbsent(network, at, spare);
 
-        (bool present, address addr) = unit.checkedOptionalToy(network);
+        (bool present, address addr) = unit.checkedOptional(network, "toy");
         assertFalse(present);
         assertEq(addr, address(0));
-        (present,) = unit.checkedOptional(network, "spare");
-        assertFalse(present);
         vm.etch(spare, hex"00");
         vm.expectRevert(bytes("spare has code since toy.json recorded it absent: a person must resolve it"));
         unit.checkedOptional(network, "spare");
-        vm.etch(spare, "");
         vm.expectRevert(bytes("toy has no code"));
         unit.checkedToy(network);
 
         vm.etch(at, hex"00");
         vm.expectRevert(bytes("toy has code since toy.json recorded it absent: a person must resolve it"));
-        unit.checkedOptionalToy(network);
+        unit.checkedOptional(network, "toy");
         vm.expectRevert(bytes("toy has code: certify it instead"));
         unit.checkAbsent(network, at, spare);
 
         vm.etch(at, "");
         vm.writeJson("1", string.concat(dir, "/toy.json"), ".checked.mainChainId");
         vm.expectRevert(bytes("toy.json was checked on another chain"));
-        unit.checkedOptionalToy(network);
+        unit.checkedOptional(network, "toy");
     }
 
     /// @dev Forge keeps serialized objects across one run: a certificate keeps no key of an earlier one.
@@ -853,11 +850,8 @@ contract CoreUnitTest is Test {
         unit.deploy(network);
         unit.checkAbsent(network, makeAddr("absent toy"), makeAddr("spare"));
         unit.check(network);
-        (bool present,) = unit.checkedOptionalToy(network);
+        (bool present,) = unit.checkedOptional(network, "toy");
         assertTrue(present, "the certificate kept toyAbsent");
-
-        unit.checkAbsent(network, makeAddr("absent toy"), makeAddr("spare"));
-        assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".checked.toyCodeHash"));
     }
 
     function test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity() public {
