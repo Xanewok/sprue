@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+`_recordAbsent(obj, role, at)` records in a certificate that `role` has no code at `at`, and
+`_checkedOptional(unit, role)` reads a role that may be absent: `(true, addr)` as `_checked` reads it, or
+`(false, address(0))` while the recorded address still has no code. Code there since the check reverts,
+so a dependent never builds on a stale absence. `_checked` refuses an absent role.
+
+Fixed: a certificate no longer carries keys that an earlier check wrote in the same forge run.
+
 ## 0.1.3
 
 Breaking: each chain of `network.json` must name an `rpc` alias of `foundry.toml`'s `[rpc_endpoints]`,
