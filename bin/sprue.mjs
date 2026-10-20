@@ -33,7 +33,7 @@ Flags may appear anywhere after the command.
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
-  run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
+  run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor | --browser <address>] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
                             runs target on Anvil forks of network's chains, which it starts, in a fresh copy
@@ -43,11 +43,15 @@ Flags may appear anywhere after the command.
 run, on a network whose chains sprue.json lists all as local, sends unattended, sending from Anvil's unlocked
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
 terminal and no CI variable. A rehearsal network (the name that paths.rehearsal ends in, or it and -<suffix>) requires
-Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
+Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger, --trezor and --browser, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
 interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
 .env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
+
+--browser <address> signs in a browser wallet, such as MetaMask, connected to forge's local page (forge
+--browser): each step's send opens the page, and the wallet must connect as <address>. --browser-port <port>
+and --browser-disable-open pass to forge.
 
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
@@ -362,7 +366,7 @@ async function main(argv) {
 
   // Flags may stand anywhere. The other arguments keep their order.
   let wait = false, dirtyOk = false, keep = false, stopOnly = false;
-  const signers = [], blocks = [];
+  const signers = [], blocks = [], browserOpts = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
@@ -370,10 +374,13 @@ async function main(argv) {
     const a = rest[i];
     if (verb === "plan") pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
-    else if (a === "--account" || a === "--ledger" || a === "--trezor") {
+    else if (a === "--account" || a === "--ledger" || a === "--trezor" || a === "--browser") {
       if (rehearsing) fail(2, `refusing ${a}: rehearse sends as each step's sender on its forks, and no key signs`);
-      if (a === "--account" && ++i >= rest.length) usageError();
-      signers.push(a === "--account" ? [a, rest[i]] : [a]);
+      if ((a === "--account" || a === "--browser") && ++i >= rest.length) usageError();
+      signers.push(a === "--account" || a === "--browser" ? [a, rest[i]] : [a]);
+    } else if (!rehearsing && (a === "--browser-port" || a === "--browser-disable-open")) {
+      if (a === "--browser-port" && !/^[0-9]+$/.test(rest[++i] ?? "")) usageError();
+      browserOpts.push(...(a === "--browser-port" ? [a, rest[i]] : [a]));
     } else if (rehearsing && a === "--keep") keep = true;
     else if (rehearsing && a === "--stop") stopOnly = true;
     else if (rehearsing && a === "--block") {
@@ -671,7 +678,8 @@ async function main(argv) {
     const tty = openTty();
     if (!tty) fail(2, `refusing ${network}: no terminal to ask on`);
     for (const fd of tty) closeSync(fd);
-    if (signers.length !== 1) fail(2, "sign with exactly one of --account, --ledger and --trezor");
+    if (signers.length !== 1) fail(2, "sign with exactly one of --account, --ledger, --trezor and --browser");
+    if (browserOpts.length && signers[0][0] !== "--browser") fail(2, `${browserOpts[0]} has no use without --browser`);
     if (dirtyOk) {
       // A live chain deploys only from a clean commit, so refuse if any chain is live. The kinds come
       // from the `# chain` lines that `plan` prints. Refuse too if no kind is seen.
@@ -699,7 +707,13 @@ async function main(argv) {
       if (!dev && broadcastDir) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal requires Anvil or a chains.local id`);
     }
     signer = signers[0];
-    me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
+    if (signer[0] === "--browser") {
+      // The wallet connects only at the send, so the person names its address now; forge refuses a
+      // connected wallet that is not the step's sender.
+      me = signer[1];
+      if (!/^0x[0-9a-fA-F]{40}$/.test(me)) fail(2, `--browser names ${me}, which is not a 0x address`);
+      signer = ["--browser", ...browserOpts];
+    } else me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
     out(`signer ${me}\n`);
     settleDeployer(me, (d) => same(d, me), `this run signs only as ${me}`);
   }

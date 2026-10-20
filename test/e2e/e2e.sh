@@ -703,6 +703,43 @@ scenario_mermaid() {
   echo "ok  mermaid starts with flowchart TD and has one subgraph per unit"
 }
 
+# --browser: a wallet on forge's page signs each send, as the address the person named.
+scenario_browser() {
+  command -v python3 >/dev/null || { echo "skip browser: it needs python3"; return; }
+  local net=rehearsal-browser out rc n0 bp=$((PORT + 7)) wallet snap
+  # The live chain returns to this state for the next scenario.
+  snap=$(cast rpc evm_snapshot --rpc-url "$LIVE" | tr -d '"')
+  network "$net" 1; network rehearsal-browser-own 1
+  git add -A; git commit -qm browser-networks
+  unset CI
+  local run=(G run "$net" token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open)
+  refused 'has no use without --browser' tty no G run "$net" token.check --account e2e --browser-port "$bp"
+  refused 'browser names nope, which is not a 0x address' tty no G run "$net" token.check --browser nope
+  n0=$(nonce "$LIVE")
+  node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
+  rc=0; out=$(tty yes "${run[@]}" 2>&1) || rc=$?
+  kill "$wallet"
+  [ "$rc" != 0 ] || die "browser: a wallet of another address was accepted"
+  [ "$(nonce "$LIVE")" = "$n0" ] || die "browser: a wallet of another address sent"
+  node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" "$OPS" 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
+  out=$(tty yes "${run[@]}" 2>&1) || die "browser: the run failed: ${out: -600}"
+  kill "$wallet"
+  [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "browser: the run did not send once"
+  grep -q '"tokenTx"' "deployments/$net/token.json" || die "browser: the journal has no receipt"
+  echo "ok  browser: a wallet on forge's page signs each send; a wallet of another address is refused"
+  # A wallet that picks its own nonce moves a CREATE away from the address forge simulated.
+  [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
+  snap=$(cast rpc evm_snapshot --rpc-url "$LIVE" | tr -d '"')
+  node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" "$OPS" own-nonce 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
+  rc=0; out=$(tty yes G run rehearsal-browser-own token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open 2>&1) || rc=$?
+  kill "$wallet"
+  echo "SPIKE own-nonce: exit $rc"
+  grep -aE '^(Error|sprue|  chain|##|Contract Address|✅|deployer)' <<<"$out" | tail -15 || true
+  jq -c '{token, tokenNonce, tokenTx}' deployments/rehearsal-browser-own/token.json 2>/dev/null || echo "SPIKE own-nonce: no journal"
+  echo "SPIKE own-nonce: OPS nonce $(nonce "$LIVE"); code at nonce 0's address: $(cast code "$(cast compute-address "$OPS" --nonce 0 | awk '{print $NF}')" --rpc-url "$LIVE" | cut -c1-12); at nonce 1's: $(cast code "$(cast compute-address "$OPS" --nonce 1 | awk '{print $NF}')" --rpc-url "$LIVE" | cut -c1-12)"
+  [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
+}
+
 setup
 cd "$W"
 scenario_mermaid
@@ -715,6 +752,7 @@ scenario_wait
 scenario_kill
 scenario_two_chain
 scenario_rehearse
+scenario_browser
 scenario_attended
 scenario_tag
 echo "PASS e2e"
