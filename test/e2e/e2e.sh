@@ -370,7 +370,8 @@ scenario_rehearse() {
   # its journal until it exits, and a kept fork would let it finish.
   "${go[@]}" --keep main vault.check >"$W.int" 2>&1 & local pid=$! rc=0 step=
   for _ in $(seq 1 1500); do
-    step=$(ps -eo pid=,args= | awk '/forge script .* rehearsal-main .*--broadcast/ && !/awk/ {print $1; exit}')
+    # awk reads all of ps: an early exit would end ps with SIGPIPE, which pipefail makes fatal.
+    step=$(ps -eo pid=,args= | awk '/forge script .* rehearsal-main .*--broadcast/ && !/awk/ && !p {p = $1} END {if (p) print p}')
     [ -n "$step" ] && break; sleep 0.02
   done
   [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
@@ -386,7 +387,7 @@ scenario_rehearse() {
   local silent=$!; PIDS="$PIDS $silent"
   "${go[@]}" --keep mute token.check >/dev/null 2>&1 & pid=$!
   for _ in $(seq 1 300); do
-    fork=$(ps -eo pid=,args= | awk -v u="--fork-url wide " 'index($0, u) && !/awk/ {print $1; exit}')
+    fork=$(ps -eo pid=,args= | awk -v u="--fork-url wide " 'index($0, u) && !/awk/ && !p {p = $1} END {if (p) print p}')
     [ -n "$fork" ] && break; sleep 0.05
   done
   [ -n "$fork" ] || die "rehearse: no fork of the silent upstream started"
