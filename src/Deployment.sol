@@ -155,23 +155,26 @@ abstract contract Deployment is ForgeBroadcasts {
         if (addr != address(0)) _requireRecordedCode(journal, role);
     }
 
-    /// @dev Reverts while the journal's `role` has no code and a CREATE of `artifact` at that address,
-    ///      in this chain's broadcast records, landed and reverted. A resend would revert too: the chain
-    ///      ran it otherwise than forge's simulation (its EVM version or gas rules), and each rerun
-    ///      would spend a nonce and gas. An address in the journal's `retired` list passes. An RPC that
-    ///      cannot show the receipt counts as no revert.
+    /// @dev Reverts while the journal's `role` has no code and its journaled intent, the same initcode at
+    ///      that address, landed and reverted, as the chain shows for a transaction of a broadcast record
+    ///      of `artifact`. A resend would most likely revert too: the chain ran it otherwise than forge's
+    ///      simulation (its EVM version, its gas rules, or state that changed before inclusion), and each
+    ///      rerun would spend a nonce and gas. An address in the journal's `retired` list passes. An RPC
+    ///      that cannot show the transaction counts as no revert.
     function _requireNotReverted(string memory journal, string memory role, string memory artifact) internal {
         string memory key = string.concat(".", role);
-        if (!_has(journal, key)) return;
+        string memory hashKey = string.concat(key, "InitcodeHash");
+        if (!_has(journal, key) || !_has(journal, hashKey)) return;
         address addr = _addr(journal, key);
         if (addr.code.length != 0 || _isRetired(journal, addr)) return;
+        bytes32 initcodeHash = vm.parseJsonBytes32(journal, hashKey);
         Create[] memory creates = _creates(artifact);
         for (uint256 i; i < creates.length; ++i) {
             Create memory c = creates[i];
             if (c.create2 || c.addr != addr) continue;
             for (uint256 j; _hasTransaction(c, j); ++j) {
                 (bool ok, bytes32 hash) = _candidateHash(c, j);
-                if (!ok || !_revertedCreate(hash, addr)) continue;
+                if (!ok || !_revertedCreate(hash, addr, initcodeHash)) continue;
                 revert(
                     string.concat(
                         role,
@@ -179,7 +182,7 @@ abstract contract Deployment is ForgeBroadcasts {
                         vm.toString(addr),
                         " reverted on chain in ",
                         vm.toString(hash),
-                        ", though forge's simulation passed: the chain runs it otherwise (evm_version, gas); fix the build, then list ",
+                        ", though forge's simulation passed: the chain ran it otherwise (evm_version, gas, or state); fix the cause, then list ",
                         vm.toString(addr),
                         " in ",
                         _unit(),
@@ -190,15 +193,18 @@ abstract contract Deployment is ForgeBroadcasts {
         }
     }
 
-    function _revertedCreate(bytes32 txHash, address addr) private returns (bool) {
+    /// @dev The address comes from the sender and nonce, since a node may name none for a failed CREATE.
+    function _revertedCreate(bytes32 txHash, address addr, bytes32 initcodeHash) private returns (bool) {
         string memory hash = string.concat('["', vm.toString(txHash), '"]');
         try VmRpcJson(address(vm)).rpcJson("eth_getTransactionReceipt", hash) returns (string memory receipt) {
             if (!_has(receipt, ".status") || _uint(receipt, ".status") != 0) return false;
-            try vm.parseJsonAddress(receipt, ".contractAddress") returns (address created) {
-                return created == addr;
-            } catch {
-                return false;
-            }
+        } catch {
+            return false;
+        }
+        try VmRpcJson(address(vm)).rpcJson("eth_getTransactionByHash", hash) returns (string memory sent) {
+            return _has(sent, ".from") && _has(sent, ".nonce") && _has(sent, ".input")
+                && vm.computeCreateAddress(_addr(sent, ".from"), _uint(sent, ".nonce")) == addr
+                && keccak256(vm.parseJsonBytes(sent, ".input")) == initcodeHash;
         } catch {
             return false;
         }

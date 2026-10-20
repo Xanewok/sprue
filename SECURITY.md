@@ -31,9 +31,11 @@ end-to-end scenario for each invariant.
   or a role whose recorded deployment can no longer land, is also refused while a known deployer (the
   sender, the pin, any journal's deployer) has used more than 256 nonces, or has a CREATE with code
   no journal records. An address in the journal's `retired` list passes both checks.
-- A role whose journaled CREATE landed and reverted, as the chain's receipt of a broadcast record shows,
-  is not sent again: the chain ran it otherwise than forge's simulation, by its EVM version or gas rules.
-  A person fixes the build and lists the address in the journal's `retired`. A call that reverts on chain
+- A role whose journaled intent, its initcode at its address, landed and reverted, as the chain shows
+  for a transaction of a broadcast record, is not sent again: the chain ran it otherwise than forge's
+  simulation (its EVM version, its gas rules, or state that changed before inclusion), and a resend
+  would most likely revert too. A person fixes the cause and lists the address in the journal's
+  `retired`. A call that reverts on chain
   is resent by every rerun while its step is due.
 - A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
   `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
@@ -57,7 +59,8 @@ end-to-end scenario for each invariant.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
   reads the role through `_checked` re-reads its certified code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.
-- A failing RPC stops the runner. A receipt that cannot be read while a step journals its deployment
+- A failing RPC stops the runner, but for the check of a reverted CREATE, which passes when the RPC
+  cannot show the transaction. A receipt that cannot be read while a step journals its deployment
   is left out of the journal, and the step goes on.
 
 An external security audit is not part of this project.

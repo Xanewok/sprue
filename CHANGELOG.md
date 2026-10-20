@@ -7,8 +7,8 @@ directory, and `rehearse` refuses while a run of its copy does; a lock whose pid
 over. Before, two runs raced: the later one failed inside forge or stopped at exit 3. A signal to `run`
 while a step sends stops the step and waits for it.
 
-Fixed: a deploy step refuses to send again a CREATE that the chain reverted though forge's simulation
-passed, as on a chain without PUSH0 or with other gas rules, and names the fix: correct the build, then
+Fixed: a deploy step refuses to send again a journaled CREATE that the chain reverted though forge's
+simulation passed, as on a chain without PUSH0 or with other gas rules, and names the fix: correct the build, then
 list the address in the journal's `retired`. Before, every rerun sent it again and spent a nonce and gas.
 
 `run` and `rehearse` refuse `FOUNDRY_CHAIN_ID` (or a `DAPP_` form) and a `chain_id` in `foundry.toml` by
