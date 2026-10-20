@@ -727,16 +727,17 @@ scenario_browser() {
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "browser: the run did not send once"
   grep -q '"tokenTx"' "deployments/$net/token.json" || die "browser: the journal has no receipt"
   echo "ok  browser: a wallet on forge's page signs each send; a wallet of another address is refused"
-  # A wallet that picks its own nonce moves a CREATE away from the address forge simulated.
+  # A wallet that picks its own nonce moves a CREATE off the address the dry run simulated.
   [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
   snap=$(cast rpc evm_snapshot --rpc-url "$LIVE" | tr -d '"')
   node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" "$OPS" own-nonce 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
   rc=0; out=$(tty yes G run rehearsal-browser-own token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open 2>&1) || rc=$?
   kill "$wallet"
-  echo "SPIKE own-nonce: exit $rc"
-  grep -aE '^(Error|sprue|  chain|##|Contract Address|✅|deployer)' <<<"$out" | tail -15 || true
-  jq -c '{token, tokenNonce, tokenTx}' deployments/rehearsal-browser-own/token.json 2>/dev/null || echo "SPIKE own-nonce: no journal"
-  echo "SPIKE own-nonce: OPS nonce $(nonce "$LIVE"); code at nonce 0's address: $(cast code "$(cast compute-address "$OPS" --nonce 0 | awk '{print $NF}')" --rpc-url "$LIVE" | cut -c1-12); at nonce 1's: $(cast code "$(cast compute-address "$OPS" --nonce 1 | awk '{print $NF}')" --rpc-url "$LIVE" | cut -c1-12)"
+  [ "$rc" = 1 ] || die "browser: a send at a nonce the wallet chose exited $rc, not 1: ${out: -600}"
+  grep -aq 'used nonce 1, not 0 as its dry run planned, so Token is at 0x[0-9a-fA-F]*, not 0x[0-9a-fA-F]*, which the journal records' <<<"$out" \
+    || die "browser: the moved CREATE was not named: ${out: -600}"
+  [ "$(grep -ac 'Type yes: ' <<<"$out")" = 1 ] || die "browser: the run went on after the moved CREATE"
+  echo "ok  browser: a send at a nonce the wallet chose stops the run at that step, naming both addresses"
   [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
 }
 

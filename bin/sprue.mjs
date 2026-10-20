@@ -816,6 +816,30 @@ async function main(argv) {
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
     const pre = new Set(porcelain());
     await step(cmd);
+    // Each transaction must have used the nonce of its dry run: a browser wallet is handed the request
+    // and may send at a nonce of its own, which moves a CREATE off the address the journal recorded.
+    for (const f of records) {
+      const sentFile = f.replace("/dry-run/", "/");
+      const planned = readJson(f), sent = readJson(sentFile);
+      if (!Array.isArray(planned?.transactions) || !Array.isArray(sent?.transactions)) {
+        out(`warning: no single-chain record of the send beside ${f}; its nonces were not checked\n`);
+        continue;
+      }
+      const rpc = Object.values(chainMap).find((c) => String(c.id) === String(sent.chain))?.rpc;
+      for (const [i, t] of planned.transactions.entries()) {
+        const hash = sent.transactions[i]?.hash;
+        const receipt = (sent.receipts ?? []).find((r) => hash && r.transactionHash?.toLowerCase() === hash.toLowerCase());
+        if (!receipt || !rpc) fail(1, `cannot check the send of ${line}: ${sentFile} has no receipt for its transaction ${i}`);
+        const want = BigInt(t.transaction.nonce), got = BigInt(must("cast", ["tx", hash, "nonce", "--rpc-url", rpc]));
+        const moved = t.transactionType === "CREATE" && t.contractAddress && receipt.contractAddress
+          && t.contractAddress.toLowerCase() !== receipt.contractAddress.toLowerCase();
+        if (got !== want || moved) {
+          fail(1, `stopped after ${line}\n  transaction ${hash} used nonce ${got}, not ${want} as its dry run planned` +
+            (moved ? `, so ${t.contractName ?? "its contract"} is at ${receipt.contractAddress}, not ${t.contractAddress}, which the journal records` : "") +
+            `.\n  The signer chose the nonce. Correct ${DEPLOYMENTS}/${network}'s journal before any other run.`);
+        }
+      }
+    }
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
     // is not known here). A concurrent run of the same script is not told apart.
     const script = cmd.args[1].split(":")[0].split("/").pop();
