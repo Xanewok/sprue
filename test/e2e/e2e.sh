@@ -46,9 +46,10 @@ geth = \"$GETH\"
 receiver = \"http://127.0.0.1:$((PORT + 3))\"
 wide = \"http://127.0.0.1:$((PORT + 4))\"
 prod = \"http://127.0.0.1:$((PORT + 5))\"
-stage = \"http://127.0.0.1:$((PORT + 6))\""
+stage = \"http://127.0.0.1:$((PORT + 6))\"
+edit = \"http://127.0.0.1:$((PORT + 7))\""
 alias_of() {
-  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; *) die "no alias for chain $1" ;; esac
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 100) echo edit ;; *) die "no alias for chain $1" ;; esac
 }
 endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
   sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
@@ -362,6 +363,35 @@ scenario_concurrent() {
   [ ! -e "$lock" ] || die "concurrent: the run left its lock"
   rm -f "$W.a"
   echo "ok  concurrent a second run of a network refuses while the first runs; a signal stops the step, then the lock; a dead run's lock is taken over"
+}
+
+# Edits while an attended question waits, which the git status cannot show: a journal already
+# modified or ignored, here one swapped to a contract of the same code.
+scenario_question() {
+  command -v python3 >/dev/null || { echo "skip question: it needs python3"; return; }
+  local edit=http://127.0.0.1:$((PORT + 7)) other twin token out n0 nodes
+  nodes=$PIDS; live_node $((PORT + 7)) 100; nodes=${PIDS#"$nodes"}
+  # scenario_attended ends without the rehearsal ignore line.
+  grep -qxF 'deployments/rehearsal*/' .gitignore || echo 'deployments/rehearsal*/' >>.gitignore
+  network edit 100; git add -A; git commit -qm edit
+  out=$(tty yes,yes G run edit token.check --account e2e 2>&1) || die "question: the token run failed: $(tail -c 600 <<<"$out")"
+  git add -A; git commit -qm token
+  token=$(jq -r .checked.token deployments/edit/token.json)
+  # Another key deploys a token of the same code.
+  other=$(cast rpc eth_accounts --rpc-url "$edit" | jq -r '.[1]')
+  out=$(forge create script/deploy/units/token/Token.sol:Token --rpc-url "$edit" --unlocked --from "$other" --broadcast --json \
+    --constructor-args 1000 2>&1) || die "question: the twin was not deployed: ${out: -400}"
+  twin=$(jq -r .deployedTo <<<"$out")
+  [ "$(cast codehash "$twin" --rpc-url "$edit")" = "$(cast codehash "$token" --rpc-url "$edit")" ] || die "question: the twin's code differs"
+  n0=$(nonce "$edit")
+  PTY_HOOK="jq --arg t $twin '.checked.token = \$t' deployments/edit/token.json >$W/j && mv $W/j deployments/edit/token.json" \
+    refused 'changed since the dry run' tty yes G run edit vault.deploy --account e2e
+  [ "$(nonce "$edit")" = "$n0" ] || die "question: a send went on after its journal changed; the vault's token is $(cast call "$(jq -r .vault deployments/edit/vault.json)" 'TOKEN()(address)' --rpc-url "$edit")"
+  git checkout -q deployments/edit/token.json
+  out=$(tty yes G run edit vault.deploy --account e2e 2>&1) || die "question: the vault run failed: $(tail -c 600 <<<"$out")"
+  [ "$(cast call "$(jq -r .vault deployments/edit/vault.json)" 'TOKEN()(address)' --rpc-url "$edit")" = "$token" ] || die "question: the vault's token is not the certified one"
+  for p in $nodes; do kill "$p" 2>/dev/null || true; done
+  echo "ok  question an edit to a journal while the question waits stops the send"
 }
 
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
@@ -756,7 +786,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
+for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag question; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done

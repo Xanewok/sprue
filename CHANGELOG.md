@@ -6,6 +6,10 @@
 directory; a lock whose run has exited is taken over. Before, two runs raced: the later one failed inside
 forge or stopped at exit 3. A signal to `run` while a step sends stops the step and waits for it.
 
+Fixed: an attended run refuses a send when a file in the network's directory, such as a journal, changed
+while the question waited. git status showed no change for a journal already modified or ignored, so the
+send could read another journal than its dry run.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

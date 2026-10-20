@@ -68,7 +68,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
 | `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; two rehearses of one network do not run at once; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
-| An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
+| An attended send needs a typed `yes`, stops on a change during the question, a journal's content included, and asks for every step. | e2e `scenario_attended`, `scenario_question` |
 | Two runs of one network do not run at once; a signal to the runner stops its step before the lock is released; an exited run's lock is taken over. | e2e `scenario_concurrent` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 

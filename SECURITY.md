@@ -13,11 +13,12 @@ end-to-end scenario for each invariant.
   passed empty as an assignment before `forge`.
 - An attended send needs `yes` typed at the terminal. It refuses if, from before the dry run to the
   answer, the sender's nonce on any chain of the network, git HEAD, the lines of
-  `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed. The status leaves out the
-  network's `<unit>.json` and `*.metadata.json` files, which the run writes, so a new file there is
-  not seen; a status line names a path and its state, not its contents, so an edit to a file already
-  modified or untracked is not seen either. A clean checkout at the start keeps that list short;
-  `--allow-dirty` waives it, and is refused when any chain of the network is live.
+  `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed, or, from after the dry run, which
+  writes receipts into them, the contents of the files directly in the network's directory. The status
+  leaves out the network's `<unit>.json` and `*.metadata.json` files, which the run writes; a status line
+  names a path and its state, not its contents, so an edit elsewhere to a file already modified or
+  untracked is not seen. A clean checkout at the start keeps that list short; `--allow-dirty` waives it,
+  and is refused when any chain of the network is live.
 - One `run` or `rehearse` of a network runs at a time, by a lock in the git directory that names its
   pid. A run whose pid has exited leaves its lock to the next. A signal to the runner stops the running
   step and waits for it to exit before the lock is released; a signal during a dry run or the question
