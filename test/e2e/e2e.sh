@@ -525,6 +525,14 @@ scenario_attended() {
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
   DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
+  # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
+  local plain; plain=$(<"deployments/$net/network.json")
+  jq -c '. + {deployer: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}' <<<"$plain" >"deployments/$net/network.json"
+  (unset DEPLOYER; refused 'pins the deployer 0x70997970C51812dc3A010C7d01b50e0d17dc79C8, and this run signs only as' tty no "${run[@]}")
+  jq -c --arg d "$OPS" '. + {deployer: $d}' <<<"$plain" >"deployments/$net/network.json"
+  rc=0; out=$( (unset DEPLOYER; tty no "${run[@]}") 2>&1) || rc=$?
+  [ "$rc" = 6 ] && grep -aqi "^deployer $OPS, from network.json" <<<"$out" || die "attended: the pinned wallet did not reach its question as the deployer ($rc): ${out: -600}"
+  echo "$plain" >"deployments/$net/network.json"
   # Nothing above sent.
   n0=$(nonce "$LIVE")
   [ "$n0" = 0 ] || die "attended: a refusal sent"
