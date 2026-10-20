@@ -5,11 +5,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync,
+  closeSync, copyFileSync, existsSync, linkSync, realpathSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync,
   statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -419,6 +420,17 @@ async function main(argv) {
     return 0;
   }
   if (verb !== "plan" && verb !== "run" && verb !== "rehearse") usageError();
+  // The units compile against the library that `sprue/` names, which must be this runner's own: a runner
+  // and a library of other versions each assume guards the other may lack.
+  const mapped = JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).remappings?.find?.((r) => String(r).startsWith("sprue/="));
+  if (mapped) {
+    const real = (p) => { try { return realpathSync(p); } catch {} };
+    const lib = String(mapped).slice("sprue/=".length);
+    const mine = fileURLToPath(new URL("../src/", import.meta.url));
+    if (!real(resolve(lib)) || real(resolve(lib)) !== real(mine)) {
+      fail(2, `refusing: the units build against ${lib} (forge's sprue/ remapping), not ${mine}, this runner's library; run the sprue beside that library, or fix the remapping`);
+    }
+  }
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.

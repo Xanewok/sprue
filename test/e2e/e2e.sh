@@ -462,6 +462,11 @@ scenario_reverted() {
   rc=0; out=$(G run reverted token.check 2>&1) || rc=$?
   [ "$rc" = 1 ] && grep -aq "token's CREATE at $t reverted on chain" <<<"$out" || die "reverted: the rerun exited $rc: $(tail -c 600 <<<"$out")"
   [ "$(nonce "$old")" = 1 ] || die "reverted: the rerun sent the CREATE again"
+  # A library other than the runner's own, here a copy without this guard, would not refuse.
+  mkdir -p "$W/oldlib"; cp -R "$W/lib/sprue/src" "$W/oldlib/"
+  sed -i.bak '/^ *_requireNotReverted(journal, role, artifact);$/d' "$W/oldlib/src/Deployment.sol"
+  refused "the units build against $W/oldlib/src/ (forge's sprue/ remapping), not" env FOUNDRY_REMAPPINGS="sprue/=$W/oldlib/src/" G run reverted token.check
+  [ "$(nonce "$old")" = 1 ] || die "reverted: a run against another library sent"
   jq --arg t "$t" '.retired = [$t]' deployments/reverted/token.json >"$W/j" && mv "$W/j" deployments/reverted/token.json
   out=$(FOUNDRY_EVM_VERSION=paris G run reverted token.check 2>&1) || die "reverted: the fixed build failed: $(tail -c 600 <<<"$out")"
   [ "$(cast codesize "$(jq -r .token deployments/reverted/token.json)" --rpc-url "$old")" != 0 ] || die "reverted: the fixed build has no code"

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`plan`, `run` and `rehearse` refuse a `sprue/` remapping that names another library than the runner's
+own, such as a lib/ copy of another version beside `npx sprue`. With one, the runner's checks ran over a
+library without the guards they assume: a run against a copy without the reverted-CREATE guard sent the
+failing CREATE again.
+
 `run` refuses a second run of a network while one or its step runs (exit 2), by a lock in the git
 directory, and `rehearse` refuses while a run of its copy does; a lock whose pids have exited is taken
 over. Before, two runs raced: the later one failed inside forge or stopped at exit 3. A signal to `run`
