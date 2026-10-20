@@ -108,9 +108,11 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     construction.
 11. **Dependencies are string ids (tentative).** Typed references are preferred when the compiler allows
     them without a fight; ids stay forward compatible.
-12. **A network may pin its deployer.** `network.json`'s `deployer`. A CREATE step sent by another key
-    refuses before it sends, unless `--unsafe-unexpected-deployer` (`UNSAFE_UNEXPECTED_DEPLOYER=1`). One pin
-    per network; a pin per chain waits for a network that needs one.
+12. **A network may pin its deployer.** `network.json`'s `deployer`, which is then the default `DEPLOYER`
+    of `run` and `rehearse`: a committed choice beats one inferred from the signer. A run that cannot sign
+    as it refuses at the start, and a CREATE step sent by another key refuses before it sends, unless
+    `--unsafe-unexpected-deployer` (`UNSAFE_UNEXPECTED_DEPLOYER=1`). One pin per network; a pin per chain
+    waits for a network that needs one.
 13. **Chains are a named map.** `network.json` keys chains by name with an id and an `rpc` alias from
     `foundry.toml`'s `[rpc_endpoints]`, the one RPC configuration, which forge and cast resolve; a file never
     holds a URL, which may carry a key, but for a rehearsal copy's loopback forks. Rejected: an `R` variable

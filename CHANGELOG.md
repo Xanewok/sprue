@@ -9,6 +9,12 @@ so a dependent never builds on a stale absence. `_checked` refuses an absent rol
 
 Fixed: a certificate no longer carries keys that an earlier check wrote in the same forge run.
 
+`run` and `rehearse` default `DEPLOYER` to `network.json`'s pinned `deployer`, else `run` sends as its own
+signer: an unattended run's `KEY`, else Anvil's dev key, as an attended run's wallet. `run` prints the
+deployer and refuses at the start a deployer it cannot sign as, or a `DEPLOYER` that differs from the
+pin. `--unsafe-unexpected-deployer` lets the pin's steps send as `DEPLOYER`, or as the signer when the run
+cannot sign as the pin, and is refused on a network with no pin.
+
 ## 0.1.3
 
 Breaking: each chain of `network.json` must name an `rpc` alias of `foundry.toml`'s `[rpc_endpoints]`,

@@ -38,12 +38,13 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
    `sprue list` prints the targets, the nodes nothing depends on, and `sprue mermaid [target]` draws
    the saved graph.
 6. Plan with `sprue plan <network> <target>`, which reads the default chain's `rpc` and sends nothing.
-7. Run with `sprue run <network> <target>`. `DEPLOYER` sends the steps that name no sender. On a network
-   whose chains are all in `chains.local`, the run is unattended and needs `DEPLOYER` set; it sends
-   unlocked on Anvil and signs with `KEY` (Anvil's dev key if unset) on another node. On any other
-   network a person runs it at a terminal, with no `CI` variable, from a clean git checkout, signing
-   with exactly one of `--account <name>`, `--ledger` or `--trezor`. There `DEPLOYER` defaults to the
-   signer's address, a step that another account sends is refused, and each step is sent only after
+7. Run with `sprue run <network> <target>`. The deployer sends the steps that name no sender: `DEPLOYER`,
+   else `network.json`'s pinned `deployer`, else the run's own signer. The run prints it and refuses at
+   the start if it cannot sign as it. On a network whose chains are all in `chains.local`, the run is
+   unattended: it sends unlocked on Anvil, as any account the node lists, and signs with `KEY` (Anvil's
+   dev key if unset) on another node. On any other network a person runs it at a terminal, with no `CI`
+   variable, from a clean git checkout, signing with exactly one of `--account <name>`, `--ledger` or
+   `--trezor`. There a step that another account sends is refused, and each step is sent only after
    `yes` is typed at its dry run.
 8. Once the run stops, commit each step's journal, metadata and `broadcast/` records; each step prints
    its `git add`. An attended run refuses a commit made while it waits for `yes`. `recover` reads the
@@ -54,8 +55,8 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
    failed push prints its retry command and keeps the run's status.
 
 Two flags are a person's decision, never a way past a refusal. `--allow-dirty` starts on a dirty tree
-and is refused when any chain is live. `--unsafe-unexpected-deployer` lets a deploy step send with a key
-other than the pinned `deployer`. `sprue --help` lists the flags and the exit codes.
+and is refused when any chain is live. `--unsafe-unexpected-deployer` lets the pinned `deployer`'s steps
+send as `DEPLOYER`, or as the run's own signer when it cannot sign as the pin. `sprue --help` lists the flags and the exit codes.
 
 A unit's directory, its `_unit()` and the prefix of its step ids are one name, and a contract `<Name>`
 that it deploys is declared in the project's only file named `<Name>.sol`. The typed forms

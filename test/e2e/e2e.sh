@@ -98,7 +98,7 @@ if pid == 0:
 sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))' "$@"; }
 nonce() { cast nonce "$OPS" --rpc-url "${1:-$RPC}"; }
 now() { cast block latest -f timestamp --rpc-url "${1:-$RPC}"; }
-all_done() { ! grep -Eqv '^# (done|chain) ' <<<"$2" || die "$1 left a node not done: $2"; }
+all_done() { ! grep -Eqv '^(# (done|chain) |deployer )' <<<"$2" || die "$1 left a node not done: $2"; }
 # network <name> <chain id> [openAt]: a fresh network of one chain.
 network() {
   rm -rf "deployments/$1"; mkdir -p "deployments/$1"
@@ -180,12 +180,29 @@ geth_stub() {
 # A failed step ends with forge's last Error: line, after the output that buries it.
 scenario_failure() {
   fresh "$RPC"; network pinned 31337
-  echo '{"chains":{"l2":{"id":31337,"rpc":"local"}},"deployer":"0x000000000000000000000000000000000000dEaD"}' >deployments/pinned/network.json
-  local out rc=0
-  out=$(G run pinned token.check 2>&1) || rc=$?
+  local dead=0x000000000000000000000000000000000000dEaD out rc=0 n0
+  echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"local\"}},\"deployer\":\"$dead\"}" >deployments/pinned/network.json
+  # The pin is the default deployer, and one that the run cannot sign as is refused before any send.
+  n0=$(nonce)
+  refused "DEPLOYER is $OPS, and pinned's network.json pins the deployer $dead" G run pinned token.check
+  refused "pins the deployer $dead, and Anvil signs only for its unlocked accounts" env -u DEPLOYER G run pinned token.check
+  refused "DEPLOYER is $dead, and Anvil signs only for its unlocked accounts" env DEPLOYER="$dead" G run --unsafe-unexpected-deployer pinned token.check
+  network nopin 31337
+  refused "unexpected-deployer has no use: nopin's network.json pins no deployer" G run --unsafe-unexpected-deployer nopin token.check
+  [ "$(nonce)" = "$n0" ] || die "failure: a refused deployer sent"
+  # An unlocked deployer without funds: forge's own failure.
+  cast rpc anvil_impersonateAccount "$dead" --rpc-url "$RPC" >/dev/null
+  out=$(env -u DEPLOYER G run pinned token.check 2>&1) || rc=$?
+  cast rpc anvil_stopImpersonatingAccount "$dead" --rpc-url "$RPC" >/dev/null
+  grep -q "^deployer $dead, from network.json$" <<<"$out" || die "failure: the run did not print the pinned deployer: ${out: -400}"
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
+  fresh "$RPC"; rm -f deployments/pinned/token.json
+  out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1) || die "failure: the unsafe run failed: ${out: -400}"
+  grep -qi "^deployer $OPS, from the signer (--unsafe-unexpected-deployer)$" <<<"$out" || die "failure: the unsafe run did not print its deployer: $(grep -v "^ " <<<"$out" | head -20)"
+  [ "$(jq -r .tokenDeployer deployments/pinned/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "failure: --unsafe-unexpected-deployer did not send the pin's steps as the signer"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml.
   network elsewhere 31337; local n0; n0=$(nonce)
@@ -194,7 +211,7 @@ scenario_failure() {
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
   [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
-  echo "ok  a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
+  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -212,11 +229,13 @@ scenario_rerun() {
 }
 
 # The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
-# and after that command a rerun reaches done.
+# and after that command a rerun reaches done. Without DEPLOYER the run sends as Anvil's dev key.
 scenario_recover() {
   fresh "$RPC"; git clean -fdXq deployments/local
   local out cmd
-  G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  env -u DEPLOYER G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  [ "$(jq -r .tokenDeployer deployments/local/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "recover: without DEPLOYER the run did not send as Anvil's dev key"
   rm deployments/local/token.json
   if out=$(G run local vault.check 2>&1); then die "recover: a run went on without its journal"; fi
   cmd=$(grep -o "forge script [^ ]* --sig 'recover(string)' .*" <<<"$out" | head -1)
@@ -234,8 +253,10 @@ scenario_wait() {
   fresh "$GETH"; network wait 412346 "$(($(now "$GETH") + 3600))"
   geth_stub
   export OLD_PATH=$PATH
-  PATH="$PWD/stub:$PATH" exits 4 G run wait vault.check
+  PATH="$PWD/stub:$PATH" exits 4 env -u DEPLOYER G run wait vault.check
   [ -n "$(jq -r '.vault // empty' deployments/wait/vault.json)" ] || die "wait: the work before the date was not done"
+  [ "$(jq -r .vaultDeployer deployments/wait/vault.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
+    || die "wait: without DEPLOYER a run off Anvil did not send as its signing key"
   local at; at=$(jq .openAt deployments/wait/vault.input.json)
   (sleep 3; cast rpc evm_setNextBlockTimestamp "$at" --rpc-url "$GETH" >/dev/null; cast rpc evm_mine --rpc-url "$GETH" >/dev/null) &
   local bumper=$!
@@ -353,6 +374,7 @@ scenario_rehearse() {
   # Inherited, a keystore name that forge would fail to find, and an eth_rpc_url that forge would send to
   # over --rpc-url, are dropped.
   out=$(ETH_KEYSTORE_ACCOUNT=nosuch FOUNDRY_ETH_RPC_URL=$LIVE "${go[@]}" main vault.check 2>&1) || die "rehearse: failed: $(tail -c 600 <<<"$out")"
+  grep -q "^deployer $dead, from DEPLOYER$" <<<"$out" || die "rehearse: the deployer and its source were not printed"
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
   [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
   jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
@@ -504,7 +526,15 @@ scenario_attended() {
   refused 'not clean' tty no "${run[@]}"
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
-  DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'not the signer' tty no "${run[@]}"
+  DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
+  # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
+  local plain; plain=$(<"deployments/$net/network.json")
+  jq -c '. + {deployer: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"}' <<<"$plain" >"deployments/$net/network.json"
+  (unset DEPLOYER; refused 'pins the deployer 0x70997970C51812dc3A010C7d01b50e0d17dc79C8, and this run signs only as' tty no "${run[@]}")
+  jq -c --arg d "$OPS" '. + {deployer: $d}' <<<"$plain" >"deployments/$net/network.json"
+  rc=0; out=$( (unset DEPLOYER; tty no "${run[@]}") 2>&1) || rc=$?
+  [ "$rc" = 6 ] && grep -aqi "^deployer $OPS, from network.json" <<<"$out" || die "attended: the pinned wallet did not reach its question as the deployer ($rc): ${out: -600}"
+  echo "$plain" >"deployments/$net/network.json"
   # Nothing above sent.
   n0=$(nonce "$LIVE")
   [ "$n0" = 0 ] || die "attended: a refusal sent"
