@@ -18,6 +18,10 @@ end-to-end scenario for each invariant.
   not seen; a status line names a path and its state, not its contents, so an edit to a file already
   modified or untracked is not seen either. A clean checkout at the start keeps that list short;
   `--allow-dirty` waives it, and is refused when any chain of the network is live.
+- One `run` or `rehearse` of a network runs at a time, by a lock in the git directory that names its
+  pid. A run whose pid has exited leaves its lock to the next. A signal to the runner stops the running
+  step and waits for it to exit before the lock is released; a signal during a dry run or the question
+  ends the runner alone.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its

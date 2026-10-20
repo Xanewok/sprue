@@ -1,5 +1,5 @@
 # Runs argv on a pseudo-terminal that types $PTY_PASSWORD at a keystore prompt and the next of the
-# comma-separated $PTY_ANSWER at each `Type yes: `. $PTY_HOOK runs while a question waits.
+# comma-separated $PTY_ANSWER at each `Type yes: `, where ^C is Ctrl-C. $PTY_HOOK runs while a question waits.
 import os, pty, subprocess, sys
 answers, password = os.environ["PTY_ANSWER"].split(","), os.environ["PTY_PASSWORD"]
 pid, fd = pty.fork()
@@ -22,5 +22,5 @@ while True:
                     answers.pop(0)
                 if os.environ.get("PTY_HOOK"):
                     subprocess.run(os.environ["PTY_HOOK"], shell=True, check=True, stdout=subprocess.DEVNULL)
-            os.write(fd, reply.encode() + b"\n"); seen = b""
+            os.write(fd, b"\x03" if reply == "^C" else reply.encode() + b"\n"); seen = b""
 sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))

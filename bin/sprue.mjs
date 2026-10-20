@@ -5,8 +5,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync,
-  writeFileSync, writeSync,
+  closeSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync,
+  statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -49,6 +49,9 @@ and every step is asked: it is sent only after \`yes\` is typed at the terminal,
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
 .env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
 
+One run or rehearse of a network runs at a time; the next refuses while it runs and takes over the lock of
+one that has exited. A signal waits for the running step to exit.
+
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
 
@@ -69,7 +72,8 @@ skips every node already done, rehearse starts over from network's files:
   0   the target is done
   1   a step or a clock read failed
   2   usage error, unknown target, \`--wait\` on the unlocked chain, an unknown plan line, or a refusal: no terminal,
-      CI set, a development node, a signer other than the step's sender, a pending transaction
+      CI set, a development node, a signer other than the step's sender, a pending transaction, another run
+      of the network
   3   a node it cannot reach yet (\`# cannot reach\`)
   4   a date the chain has not reached; --wait waits for it instead
   5   the target is not done: a plan is unchanged after its sends
@@ -112,6 +116,56 @@ const readJson = (file) => {
 const isFile = (f) => {
   try { return statSync(f).isFile(); } catch { return false; }
 };
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
+// Exclusive, naming its holder's pid, and released at exit. A lock whose holder has exited is taken over
+// under a second exclusive file, so two runs never both take it.
+function lock(file, what) {
+  const mine = `${file}.${process.pid}`;
+  const held = () => {
+    try { return readFileSync(file, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
+  };
+  writeFileSync(mine, String(process.pid));
+  try {
+    for (;;) {
+      try {
+        linkSync(mine, file);
+        break;
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+      }
+      const got = held();
+      if (got === undefined) continue;
+      const pid = Number(got);
+      if (pid > 0 && alive(pid)) fail(2, `refusing: ${what} is running, as pid ${pid}; wait for it to end`);
+      try {
+        linkSync(mine, `${file}.takeover`);
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+        fail(2, `refusing: ${file}.takeover exists; remove it if no ${what} runs`);
+      }
+      try {
+        if (held() === got) {
+          renameSync(mine, file);
+          break;
+        }
+      } finally {
+        rmSync(`${file}.takeover`, { force: true });
+      }
+    }
+  } finally {
+    rmSync(mine, { force: true });
+  }
+  process.on("exit", () => {
+    if (held() === String(process.pid)) rmSync(file, { force: true });
+  });
+}
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
 function exec(bin, args, stdio = ["ignore", "pipe", "inherit"]) {
@@ -426,14 +480,6 @@ async function main(argv) {
     const recordFile = `${dir}/.sprue/rehearsal.json`;
     const lock = `${dir}/.sprue/lock`;
     const save = (m) => writeFileSync(recordFile, `${JSON.stringify(m, null, 2)}\n`);
-    const alive = (pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (e) {
-        return e.code === "EPERM";
-      }
-    };
     const anvilMetadata = (url) => {
       const r = exec("cast", ["rpc", "anvil_metadata", "--rpc-url", url], ["ignore", "pipe", "ignore"]);
       try { return r.status === 0 ? JSON.parse(r.out) : undefined; } catch {}
@@ -599,6 +645,10 @@ async function main(argv) {
     for (const l of await plan()) out(`${l}\n`);
     return 0;
   }
+  // Two runs of one network would interleave their writes to its journals and forge's records, and fail on
+  // each other's nonces. The lock is kept in the git directory, outside the tree that git status reads.
+  const gitDir = must("git", ["rev-parse", "--absolute-git-dir"], "refusing: git rev-parse --absolute-git-dir failed");
+  lock(join(gitDir, `sprue-run-${createHash("sha256").update(join(root, DEPLOYMENTS, network)).digest("hex").slice(0, 16)}.lock`), `a run of ${network}`);
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
   // The sender of steps without .by: DEPLOYER, else the pinned deployer, else the run's own signer
   // (below). A rehearsal has no signer.
@@ -744,6 +794,18 @@ async function main(argv) {
     const { code, log } = await new Promise((resolve) => {
       const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
       forgeStep = child;
+      // A signal stops the step and waits for it, since it writes its journal until it exits, and the lock
+      // is released only then. Only while it runs: a handler would hold Ctrl-C at the question until Enter.
+      // rehearse has its own.
+      const stopStep = () => {
+        child.once("exit", () => process.exit(130));
+        child.kill();
+      };
+      const signals = rehearsing ? [] : ["SIGINT", "SIGTERM", "SIGHUP"];
+      for (const sig of signals) process.on(sig, stopStep);
+      child.on("exit", () => {
+        for (const sig of signals) process.off(sig, stopStep);
+      });
       let log = "";
       for (const s of [child.stdout, child.stderr]) {
         s.setEncoding("utf8");
@@ -803,7 +865,7 @@ async function main(argv) {
     const pre = new Set(porcelain());
     await step(cmd);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
-    // is not known here). A concurrent run of the same script is not told apart.
+    // is not known here).
     const script = cmd.args[1].split(":")[0].split("/").pop();
     for (const l of porcelain()) if (l.startsWith(`?? broadcast/${script}/`) && !pre.has(l)) ours.add(l);
   }

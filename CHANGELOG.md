@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+`run` and `rehearse` refuse a second run of a network while one runs (exit 2), by a lock in the git
+directory; a lock whose run has exited is taken over. Before, two runs raced: the later one failed inside
+forge or stopped at exit 3. A signal to `run` while a step sends stops the step and waits for it.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

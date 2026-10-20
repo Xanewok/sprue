@@ -320,6 +320,50 @@ scenario_kill() {
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
 }
 
+# Two runs of one network: the second refuses at its start while the first runs, and a signal to the
+# runner alone stops its step before the lock is released. A killed run's lock is taken over.
+scenario_concurrent() {
+  local n0 a rc out lock
+  fresh "$RPC"; network conc 31337; n0=$(nonce)
+  held() { for _ in $(seq 1 600); do [ "$(cast rpc txpool_status --rpc-url "$RPC" | jq -r .pending)" != 0x0 ] && return; sleep 0.1; done; die "concurrent: no transaction became pending"; }
+  cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
+  G run conc vault.check >"$W.a" 2>&1 & a=$!
+  held
+  refused "a run of conc is running, as pid $a" G run conc vault.check
+  cast rpc evm_setAutomine true --rpc-url "$RPC" >/dev/null; cast rpc evm_mine --rpc-url "$RPC" >/dev/null
+  rc=0; wait "$a" || rc=$?
+  [ "$rc" = 0 ] || die "concurrent: the first run exited $rc: $(tail -c 600 "$W.a")"
+  [ "$(nonce)" = $((n0 + 3)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions, not 3"
+  all_done concurrent "$(G run conc vault.check 2>>log)"
+  [ "$(nonce)" = $((n0 + 3)) ] || die "concurrent: the rerun sent"
+
+  fresh "$RPC"; network conc 31337; n0=$(nonce)
+  cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
+  G run conc token.check >"$W.a" 2>&1 & a=$!
+  held
+  local step; step=$(ps -eo pid=,args= | awk '/forge script .* conc .*--broadcast/ && !/awk/ && !p {p = $1} END {if (p) print p}')
+  [ -n "$step" ] || die "concurrent: no step was seen to interrupt"
+  rc=0; kill -TERM "$a"; wait "$a" || rc=$?
+  [ "$rc" = 130 ] || die "concurrent: a signal exited $rc, not 130: $(tail -c 600 "$W.a")"
+  ! kill -0 "$step" 2>/dev/null || die "concurrent: the runner exited before its step"
+  cast rpc evm_mine --rpc-url "$RPC" >/dev/null; cast rpc evm_setAutomine true --rpc-url "$RPC" >/dev/null
+  rm -f cache/DeployToken.s.sol/31337/*.recovery.pending
+  out=$(G run conc token.check 2>&1) || die "concurrent: the run after a signal failed: $(tail -c 600 <<<"$out")"
+  [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a signal, not 1"
+
+  # A lock whose run was killed names a pid that has exited.
+  fresh "$RPC"; network conc 31337
+  set -m; G run conc token.check >"$W.a" 2>&1 & a=$!
+  for _ in $(seq 1 300); do lock=$(ls .git/sprue-run-*.lock 2>/dev/null || true); [ -n "$lock" ] && break; sleep 0.05; done
+  [ -n "$lock" ] || die "concurrent: no lock was taken"
+  kill -9 -- "-$a"; wait "$a" 2>/dev/null || true; set +m
+  [ -f "$lock" ] || die "concurrent: the killed run left no lock"
+  out=$(G run conc token.check 2>&1) || die "concurrent: a dead run's lock was not taken over: $(tail -c 600 <<<"$out")"
+  [ ! -e "$lock" ] || die "concurrent: the run left its lock"
+  rm -f "$W.a"
+  echo "ok  concurrent a second run of a network refuses while the first runs; a signal stops the step, then the lock; a dead run's lock is taken over"
+}
+
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
 # second node's clock, one window at a time, and leaves the first node's alone.
 scenario_two_chain() {
@@ -563,6 +607,9 @@ scenario_attended() {
   grep -aqE 'chain 1 nonce [0-9a-fx]+: CREATE Token 0x[0-9a-fA-F]{40} value 0x0' <<<"$out" || die "attended: the preview does not show the CREATE's chain, nonce, address and value: ${out: -600}"
   grep -aq 'Estimated amount required' <<<"$out" || die "attended: the preview does not show the cost"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
+  # Ctrl-C at the question ends the run; the next one takes over its lock.
+  rc=0; tty ^C "${run[@]}" >/dev/null 2>&1 || rc=$?
+  [ "$rc" != 0 ] && [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: Ctrl-C at the question exited $rc or sent"
   # Every step is asked, the check too.
   # Without DEPLOYER the run sends as its signer.
   out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
@@ -709,7 +756,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill two_chain rehearse attended tag; do
+for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
