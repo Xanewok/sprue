@@ -63,9 +63,8 @@ sprue needs Node 18 or later, `git`, `cast`, `forge` 1.8 or later (CI pins v1.8.
 ```sh
 git clone https://github.com/Xanewok/sprue && cd sprue
 cp -R examples/token-vault ../my-deploy && cd ../my-deploy
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.3
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
 anvil &                                   # chain 31337 on :8545
-export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
 node lib/sprue/bin/sprue.mjs run local vault.check    # the token's two steps, then the vault's three
 ```
@@ -80,13 +79,14 @@ forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'chec
 ```
 
 The vault needs the token's address, so the plan stops until those two commands land. `run` sends them
-and plans again until the plan prints `# done` for all five steps, and a second `run` sends nothing.
+with `$DEPLOYER` as Anvil's dev key, the run's own signer here, and plans again until the plan prints
+`# done` for all five steps, and a second `run` sends nothing.
 The example's [README](examples/token-vault/README.md) explains each step, then loses a journal and
 rebuilds it.
 
 ## Install
 
-Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.3`. The remapping is
+Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4`. The remapping is
 `sprue/=lib/sprue/src/` and the runner is `node lib/sprue/bin/sprue.mjs`. With npm
 (`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
 
