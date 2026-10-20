@@ -47,9 +47,10 @@ receiver = \"http://127.0.0.1:$((PORT + 3))\"
 wide = \"http://127.0.0.1:$((PORT + 4))\"
 prod = \"http://127.0.0.1:$((PORT + 5))\"
 stage = \"http://127.0.0.1:$((PORT + 6))\"
-edit = \"http://127.0.0.1:$((PORT + 7))\""
+edit = \"http://127.0.0.1:$((PORT + 7))\"
+old = \"http://127.0.0.1:$((PORT + 8))\""
 alias_of() {
-  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 100) echo edit ;; *) die "no alias for chain $1" ;; esac
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 100) echo edit ;; 1337) echo old ;; *) die "no alias for chain $1" ;; esac
 }
 endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
   sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
@@ -420,6 +421,27 @@ scenario_question() {
   [ "$(cast call "$(jq -r .vault deployments/edit/vault.json)" 'TOKEN()(address)' --rpc-url "$edit")" = "$token" ] || die "question: the vault's token is not the certified one"
   for p in $nodes; do kill "$p" 2>/dev/null || true; done
   echo "ok  question an edit to a journal while the question waits stops the send"
+}
+
+# A CREATE that forge's simulation passes and the chain reverts, here PUSH0 on a chain before Shanghai: the
+# rerun refuses instead of sending it again, and a person fixes the build and retires the address.
+scenario_reverted() {
+  local old=http://127.0.0.1:$((PORT + 8)) out rc pid t
+  anvil --port $((PORT + 8)) --chain-id 1337 --hardfork paris --silent >/dev/null 2>&1 & pid=$!; PIDS="$PIDS $pid"
+  for _ in $(seq 1 100); do cast chain-id --rpc-url "$old" >/dev/null 2>&1 && break; sleep 0.1; done
+  network reverted 1337
+  rc=0; out=$(G run reverted token.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && grep -aq '^Error: Transaction Failure' <<<"$out" || die "reverted: the first run exited $rc: $(tail -c 600 <<<"$out")"
+  t=$(jq -r .token deployments/reverted/token.json)
+  [ "$(nonce "$old")" = 1 ] && [ "$(cast codesize "$t" --rpc-url "$old")" = 0 ] || die "reverted: the first send did not revert"
+  rc=0; out=$(G run reverted token.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && grep -aq "token's CREATE at $t reverted on chain" <<<"$out" || die "reverted: the rerun exited $rc: $(tail -c 600 <<<"$out")"
+  [ "$(nonce "$old")" = 1 ] || die "reverted: the rerun sent the CREATE again"
+  jq --arg t "$t" '.retired = [$t]' deployments/reverted/token.json >"$W/j" && mv "$W/j" deployments/reverted/token.json
+  out=$(FOUNDRY_EVM_VERSION=paris G run reverted token.check 2>&1) || die "reverted: the fixed build failed: $(tail -c 600 <<<"$out")"
+  [ "$(cast codesize "$(jq -r .token deployments/reverted/token.json)" --rpc-url "$old")" != 0 ] || die "reverted: the fixed build has no code"
+  kill "$pid"
+  echo "ok  reverted a CREATE that reverted on chain is not sent again; a fixed build deploys once the address is retired"
 }
 
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
@@ -814,7 +836,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order; tag and question need attended before
 # them. Called outside a condition, so that set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag question; do
+for s in mermaid refuses grammar failure rerun recover wait kill concurrent reverted two_chain rehearse attended tag question; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done

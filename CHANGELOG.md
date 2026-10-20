@@ -7,6 +7,10 @@ directory, and `rehearse` refuses while a run of its copy does; a lock whose pid
 over. Before, two runs raced: the later one failed inside forge or stopped at exit 3. A signal to `run`
 while a step sends stops the step and waits for it.
 
+Fixed: a deploy step refuses to send again a CREATE that the chain reverted though forge's simulation
+passed, as on a chain without PUSH0 or with other gas rules, and names the fix: correct the build, then
+list the address in the journal's `retired`. Before, every rerun sent it again and spent a nonce and gas.
+
 Fixed: an attended run refuses a send when a file in the network's directory, such as a journal, changed
 while the question waited. git status showed no change for a journal already modified or ignored, so the
 send could read another journal than its dry run.

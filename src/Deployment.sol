@@ -127,6 +127,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoStray(journal, role, artifact);
             _requireNoUnjournaled(journal, role, sender);
         }
+        _requireNotReverted(journal, role, artifact);
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) _requireRecordedCode(journal, role);
     }
@@ -149,8 +150,58 @@ abstract contract Deployment is ForgeBroadcasts {
         if (addr != address(0) && addr.code.length == 0 && _samePendingIntent(journal, role, artifact, args)) {
             return address(0);
         }
+        _requireNotReverted(journal, role, artifact);
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) _requireRecordedCode(journal, role);
+    }
+
+    /// @dev Reverts while the journal's `role` has no code and a CREATE of `artifact` at that address,
+    ///      in this chain's broadcast records, landed and reverted. A resend would revert too: the chain
+    ///      ran it otherwise than forge's simulation (its EVM version or gas rules), and each rerun
+    ///      would spend a nonce and gas. An address in the journal's `retired` list passes. An RPC that
+    ///      cannot show the receipt counts as no revert.
+    function _requireNotReverted(string memory journal, string memory role, string memory artifact) internal {
+        string memory key = string.concat(".", role);
+        if (!_has(journal, key)) return;
+        address addr = _addr(journal, key);
+        if (addr.code.length != 0 || _isRetired(journal, addr)) return;
+        Create[] memory creates = _creates(artifact);
+        for (uint256 i; i < creates.length; ++i) {
+            Create memory c = creates[i];
+            if (c.create2 || c.addr != addr) continue;
+            for (uint256 j; _hasTransaction(c, j); ++j) {
+                (bool ok, bytes32 hash) = _candidateHash(c, j);
+                if (!ok || !_revertedCreate(hash, addr)) continue;
+                revert(
+                    string.concat(
+                        role,
+                        "'s CREATE at ",
+                        vm.toString(addr),
+                        " reverted on chain in ",
+                        vm.toString(hash),
+                        ", though forge's simulation passed: the chain runs it otherwise (evm_version, gas); fix the build, then list ",
+                        vm.toString(addr),
+                        " in ",
+                        _unit(),
+                        ".json's retired to deploy afresh"
+                    )
+                );
+            }
+        }
+    }
+
+    function _revertedCreate(bytes32 txHash, address addr) private returns (bool) {
+        string memory hash = string.concat('["', vm.toString(txHash), '"]');
+        try VmRpcJson(address(vm)).rpcJson("eth_getTransactionReceipt", hash) returns (string memory receipt) {
+            if (!_has(receipt, ".status") || _uint(receipt, ".status") != 0) return false;
+            try vm.parseJsonAddress(receipt, ".contractAddress") returns (address created) {
+                return created == addr;
+            } catch {
+                return false;
+            }
+        } catch {
+            return false;
+        }
     }
 
     /// @dev Whether the journal records `role` at an address with no code, and its recorded
