@@ -420,17 +420,6 @@ async function main(argv) {
     return 0;
   }
   if (verb !== "plan" && verb !== "run" && verb !== "rehearse") usageError();
-  // The units compile against the library that `sprue/` names, which must be this runner's own: a runner
-  // and a library of other versions each assume guards the other may lack.
-  const mapped = JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).remappings?.find?.((r) => String(r).startsWith("sprue/="));
-  if (mapped) {
-    const real = (p) => { try { return realpathSync(p); } catch {} };
-    const lib = String(mapped).slice("sprue/=".length);
-    const mine = fileURLToPath(new URL("../src/", import.meta.url));
-    if (!real(resolve(lib)) || real(resolve(lib)) !== real(mine)) {
-      fail(2, `refusing: the units build against ${lib} (forge's sprue/ remapping), not ${mine}, this runner's library; run the sprue beside that library, or fix the remapping`);
-    }
-  }
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
@@ -463,6 +452,18 @@ async function main(argv) {
   const netfile = `${DEPLOYMENTS}/${network}/network.json`;
   if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
   if (!stopOnly) known(target);
+  // The units compile against the library that `sprue/` names, in any context, which must be this
+  // runner's own: a runner and a library of other versions each assume guards the other may lack.
+  if (!stopOnly) {
+    const real = (p) => { try { return realpathSync(p); } catch {} };
+    const mine = fileURLToPath(new URL("../src/", import.meta.url));
+    for (const r of JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).remappings ?? []) {
+      const lib = /^(?:[^:=]*:)?sprue\/=(.*)$/.exec(String(r))?.[1];
+      if (lib !== undefined && (!real(resolve(lib)) || real(resolve(lib)) !== real(mine))) {
+        fail(2, `refusing: the units build against ${lib} (forge's remapping ${r}), not ${mine}, this runner's library; run the sprue beside that library, or fix the remapping`);
+      }
+    }
+  }
   const isLocal = (id) => Array.isArray(project.chains.local) && project.chains.local.includes(id);
   function chainsOf(name) {
     const file = `${DEPLOYMENTS}/${name}/network.json`;
@@ -1028,12 +1029,14 @@ async function main(argv) {
         const over = overriding(config, process.env);
         if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
         // forge puts it in place of the node's chain id, which the units then refuse without naming it. forge
-        // config names a chain it knows, so the node's id is named the same way to compare, with every
-        // spelling of the variable replaced. A step that makes its own forks reads chains the line does not name.
+        // config names a chain it knows, so the node's id is named the same way to compare. A step that makes
+        // its own forks reads chains the line does not name.
         const id = rpc && String(Object.values(chainMap).find((c) => c.rpc === rpc).id);
+        // In an empty directory, so that no .env or foundry.toml spelling of it takes part.
         const named = (v) => {
-          const env = Object.fromEntries(Object.entries({ ...process.env, ...cmd.env }).filter(([k]) => !/^(foundry|dapp|dapp_test)_chain_id$/i.test(k)));
-          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...env, FOUNDRY_CHAIN_ID: v } }).stdout).chain_id); } catch {}
+          const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(foundry|dapp|dapp_test)_chain_id$/i.test(k)));
+          const cwd = mkdtempSync(join(tmpdir(), "sprue-"));
+          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...env, FOUNDRY_CHAIN_ID: v } }).stdout).chain_id); } catch {} finally { rmSync(cwd, { recursive: true, force: true }); }
         };
         if (rpc && config.chain_id != null && String(config.chain_id) !== id && String(config.chain_id) !== named(id)) {
           fail(2, `refusing: forge would take chain_id ${config.chain_id} (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain ${id}: unset it: ${line}`);

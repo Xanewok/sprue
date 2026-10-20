@@ -104,7 +104,7 @@ counts as stopped.
 - `chains.unrecordedDeploys`: `{"<chain id>": "<reason>"}` turns off the nonce fence on that live chain,
   for a deploy key that already deployed outside the graph. Leave it `{}` otherwise.
 
-`plan`, `run` and `rehearse` refuse a `sprue/` remapping, as `forge config` resolves it, that names a library
+`plan`, `run` and `rehearse` refuse a `sprue/` remapping in any context, as `forge config` resolves it, that names a library
 other than the runner's own `src/`: a runner and a library of other versions each assume guards the other
 may lack. Run the runner that lies beside the library the units import.
 

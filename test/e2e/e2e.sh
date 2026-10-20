@@ -166,6 +166,7 @@ scenario_refuses() {
   # It replaces the node's chain id in the simulation, where the units refuse it without naming it.
   FOUNDRY_CHAIN_ID=1 refused "forge would take chain_id mainnet (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the node's chain 31337" G run refuse vault.check
   foundry_chain_id=1 refused "forge would take chain_id mainnet" G run refuse vault.check
+  echo foundry_chain_id=1 >.env; refused "forge would take chain_id mainnet" G run refuse vault.check; rm .env
   echo "export FOUNDRY_SENDER=$OPS" >.env
   refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
   # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.
@@ -465,7 +466,8 @@ scenario_reverted() {
   # A library other than the runner's own, here a copy without this guard, would not refuse.
   mkdir -p "$W/oldlib"; cp -R "$W/lib/sprue/src" "$W/oldlib/"
   sed -i.bak '/^ *_requireNotReverted(journal, role, artifact);$/d' "$W/oldlib/src/Deployment.sol"
-  refused "the units build against $W/oldlib/src/ (forge's sprue/ remapping), not" env FOUNDRY_REMAPPINGS="sprue/=$W/oldlib/src/" G run reverted token.check
+  refused "the units build against .*oldlib/src/ (forge's remapping .*), not" env FOUNDRY_REMAPPINGS="sprue/=$W/oldlib/src/" G run reverted token.check
+  refused "the units build against .*oldlib/src/" env FOUNDRY_REMAPPINGS="script/:sprue/=$W/oldlib/src/" G run reverted token.check
   [ "$(nonce "$old")" = 1 ] || die "reverted: a run against another library sent"
   jq --arg t "$t" '.retired = [$t]' deployments/reverted/token.json >"$W/j" && mv "$W/j" deployments/reverted/token.json
   out=$(FOUNDRY_EVM_VERSION=paris G run reverted token.check 2>&1) || die "reverted: the fixed build failed: $(tail -c 600 <<<"$out")"
@@ -582,7 +584,8 @@ scenario_rehearse() {
   kill -TERM "$pid"; wait "$pid" || rc=$?
   ! kill -0 "$step" 2>/dev/null || die "rehearse: the runner exited before its step"
   [ "$rc" = 130 ] || die "rehearse: a signal exited $rc, not 130"
-  exits 0 G rehearse --stop main
+  # --stop compiles nothing, so the library's remapping does not matter to it.
+  FOUNDRY_REMAPPINGS="sprue/=nowhere/src/" exits 0 G rehearse --stop main
   # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no
   # record could stop it later.
   local mute=$((PORT + 4)) fork=
