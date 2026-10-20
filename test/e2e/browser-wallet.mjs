@@ -2,8 +2,9 @@
 // requested transaction through the node, which must have <address> unlocked, and answers with the hash.
 // Each forge process serves a page of its own, so it connects again whenever the page comes back.
 // Mode `own-nonce` acts as a wallet that picks its own nonce: before its first send it sends a
-// transaction of its own, and it drops the nonce that forge asks for.
-// usage: node browser-wallet.mjs <port> <rpc> <address> [exact|own-nonce]
+// transaction of its own, and it drops the nonce that forge asks for. Mode `swap` sends a transfer to
+// itself at the requested nonce instead of the request.
+// usage: node browser-wallet.mjs <port> <rpc> <address> [exact|own-nonce|swap]
 const [port, rpc, address, mode = "exact"] = process.argv.slice(2);
 const page = `http://127.0.0.1:${port}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,7 +37,8 @@ for (;;) {
       if (sw.status === "ok" && sw.data) await api("/chain/response", { id: sw.data.id, chainId });
       const t = await api("/transaction/request");
       if (t.status === "ok" && t.data) {
-        const tx = { ...t.data.request };
+        let tx = { ...t.data.request };
+        if (mode === "swap") tx = { from: address, to: address, nonce: tx.nonce };
         if (mode === "own-nonce") {
           if (!bumped) { await node("eth_sendTransaction", [{ from: address, to: address }]); bumped = true; }
           delete tx.nonce;

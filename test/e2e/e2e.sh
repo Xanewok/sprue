@@ -715,6 +715,9 @@ scenario_browser() {
   local run=(G run "$net" token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open)
   refused 'has no use without --browser' tty no G run "$net" token.check --account e2e --browser-port "$bp"
   refused 'browser names nope, which is not a 0x address' tty no G run "$net" token.check --browser nope
+  refused 'takes a port from 1 to 65535' tty no G run "$net" token.check --browser "$OPS" --browser-port 65536
+  network browser-local 31337; git add -A; git commit -qm browser-local
+  refused 'a browser wallet signs only on an attended network' G run browser-local token.check --browser "$OPS"
   n0=$(nonce "$LIVE")
   node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
   rc=0; out=$(tty yes "${run[@]}" 2>&1) || rc=$?
@@ -734,10 +737,18 @@ scenario_browser() {
   rc=0; out=$(tty yes G run rehearsal-browser-own token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open 2>&1) || rc=$?
   kill "$wallet"
   [ "$rc" = 1 ] || die "browser: a send at a nonce the wallet chose exited $rc, not 1: ${out: -600}"
-  grep -aq 'used nonce 1, not 0 as its dry run planned, so Token is at 0x[0-9a-fA-F]*, not 0x[0-9a-fA-F]*, which the journal records' <<<"$out" \
-    || die "browser: the moved CREATE was not named: ${out: -600}"
+  grep -aq 'has nonce 1, not 0 as its dry run planned' <<<"$out" || die "browser: the moved nonce was not named: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 1 ] || die "browser: the run went on after the moved CREATE"
-  echo "ok  browser: a send at a nonce the wallet chose stops the run at that step, naming both addresses"
+  # A wallet that sends something else at the planned nonce: no contract, and the run stops there too.
+  [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
+  snap=$(cast rpc evm_snapshot --rpc-url "$LIVE" | tr -d '"')
+  rm -rf deployments/rehearsal-browser-own/token.json deployments/rehearsal-browser-own/broadcast deployments/rehearsal-browser-own/cache
+  node "$HERE/browser-wallet.mjs" "$bp" "$LIVE" "$OPS" swap 2>/dev/null & wallet=$!; PIDS="$PIDS $wallet"
+  rc=0; out=$(tty yes G run rehearsal-browser-own token.check --browser "$OPS" --browser-port "$bp" --browser-disable-open 2>&1) || rc=$?
+  kill "$wallet"
+  [ "$rc" = 1 ] && grep -aq 'has destination 0x[0-9a-fA-F]*, not null as its dry run planned' <<<"$out" \
+    || die "browser: a swapped transaction was not stopped ($rc): ${out: -600}"
+  echo "ok  browser: a send at a nonce the wallet chose, or another transaction at the planned one, stops the run at that step"
   [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
 }
 

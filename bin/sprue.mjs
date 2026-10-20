@@ -9,7 +9,7 @@ import {
   writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -379,7 +379,7 @@ async function main(argv) {
       if ((a === "--account" || a === "--browser") && ++i >= rest.length) usageError();
       signers.push(a === "--account" || a === "--browser" ? [a, rest[i]] : [a]);
     } else if (!rehearsing && (a === "--browser-port" || a === "--browser-disable-open")) {
-      if (a === "--browser-port" && !/^[0-9]+$/.test(rest[++i] ?? "")) usageError();
+      if (a === "--browser-port" && !(/^[0-9]+$/.test(rest[++i] ?? "") && Number(rest[i]) >= 1 && Number(rest[i]) <= 65535)) fail(2, "--browser-port takes a port from 1 to 65535");
       browserOpts.push(...(a === "--browser-port" ? [a, rest[i]] : [a]));
     } else if (rehearsing && a === "--keep") keep = true;
     else if (rehearsing && a === "--stop") stopOnly = true;
@@ -663,6 +663,9 @@ async function main(argv) {
     const got = chainId(rpc);
     if (got !== String(id)) fail(2, `refusing ${network}: ${rpc} is chain ${got}, network.json says ${id}`);
   }
+  if (!rehearsing && !attended && (signers.some((x) => x[0] === "--browser") || browserOpts.length)) {
+    fail(2, `refusing --browser: ${network} sends unattended, from Anvil's unlocked accounts or KEY; a browser wallet signs only on an attended network`);
+  }
   if (!rehearsing && !attended) {
     const key = must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
     // Anvil's --unlocked signs only for the accounts each node lists, impersonated ones included.
@@ -776,6 +779,48 @@ async function main(argv) {
     if (code !== 0) stop(log, code);
   };
 
+  function verifySent(line, records) {
+    const lower = (v) => (typeof v === "string" ? v.toLowerCase() : v);
+    const stopAt = (why) => fail(1, `stopped after ${line}\n  ${why}\n  Check the chain and ${DEPLOYMENTS}/${network}'s journals before any other run.`);
+    for (const f of records) {
+      // forge keeps a dry run in dry-run/ beside the record of the send.
+      if (basename(dirname(f)) !== "dry-run") stopAt(`cannot find the record of the send for the dry run ${f}`);
+      const sentFile = join(dirname(dirname(f)), basename(f));
+      const runs = (r) => (r ? r.deployments ?? [r] : []);
+      const planned = runs(readJson(f)), sent = runs(readJson(sentFile));
+      if (!planned.length || planned.length !== sent.length) stopAt(`${sentFile} does not record the send of every chain the dry run planned`);
+      for (const [k, p] of planned.entries()) {
+        const s = sent[k];
+        const rpc = Object.values(chainMap).find((c) => String(c.id) === String(p.chain))?.rpc;
+        if (!rpc || String(s.chain) !== String(p.chain)) stopAt(`the send's record is for chain ${s.chain}, the dry run's for ${p.chain}`);
+        const want = [...p.transactions].sort((a, b) => Number(a.transaction.nonce) - Number(b.transaction.nonce));
+        if ((s.transactions ?? []).length !== want.length) stopAt(`the dry run planned ${want.length} transactions on chain ${p.chain}; the send recorded ${(s.transactions ?? []).length}`);
+        const got = s.transactions.map((t) => {
+          const tx = JSON.parse(must("cast", ["rpc", "eth_getTransactionByHash", t.hash, "--rpc-url", rpc]));
+          const receipt = JSON.parse(must("cast", ["rpc", "eth_getTransactionReceipt", t.hash, "--rpc-url", rpc]));
+          if (!tx || !receipt) stopAt(`chain ${p.chain} has no mined transaction ${t.hash}`);
+          return { hash: t.hash, tx, receipt };
+        }).sort((a, b) => Number(a.tx.nonce) - Number(b.tx.nonce));
+        for (const [i, w] of want.entries()) {
+          const { hash, tx, receipt } = got[i], pt = w.transaction;
+          const field = (name, planned, landed) => {
+            if (lower(planned ?? null) !== lower(landed ?? null)) stopAt(`transaction ${hash} has ${name} ${landed}, not ${planned} as its dry run planned`);
+          };
+          field("sender", pt.from, tx.from);
+          field("nonce", Number(pt.nonce), Number(tx.nonce));
+          field("destination", pt.to ?? null, tx.to ?? null);
+          field("value", BigInt(pt.value ?? 0).toString(), BigInt(tx.value ?? 0).toString());
+          field("input", pt.input ?? pt.data, tx.input);
+          if (receipt.status !== "0x1") stopAt(`transaction ${hash} reverted`);
+          if (/^CREATE2?$/.test(w.transactionType)) {
+            field(`created address (${w.contractName ?? "contract"})`, w.contractAddress, receipt.contractAddress);
+            if (w.transactionType === "CREATE" && must("cast", ["code", w.contractAddress, "--rpc-url", rpc]) === "0x") stopAt(`${w.contractAddress} has no code after transaction ${hash}`);
+          }
+        }
+      }
+    }
+  }
+
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
   async function attend(line, cmd) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
@@ -816,30 +861,10 @@ async function main(argv) {
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
     const pre = new Set(porcelain());
     await step(cmd);
-    // Each transaction must have used the nonce of its dry run: a browser wallet is handed the request
-    // and may send at a nonce of its own, which moves a CREATE off the address the journal recorded.
-    for (const f of records) {
-      const sentFile = f.replace("/dry-run/", "/");
-      const planned = readJson(f), sent = readJson(sentFile);
-      if (!Array.isArray(planned?.transactions) || !Array.isArray(sent?.transactions)) {
-        out(`warning: no single-chain record of the send beside ${f}; its nonces were not checked\n`);
-        continue;
-      }
-      const rpc = Object.values(chainMap).find((c) => String(c.id) === String(sent.chain))?.rpc;
-      for (const [i, t] of planned.transactions.entries()) {
-        const hash = sent.transactions[i]?.hash;
-        const receipt = (sent.receipts ?? []).find((r) => hash && r.transactionHash?.toLowerCase() === hash.toLowerCase());
-        if (!receipt || !rpc) fail(1, `cannot check the send of ${line}: ${sentFile} has no receipt for its transaction ${i}`);
-        const want = BigInt(t.transaction.nonce), got = BigInt(must("cast", ["tx", hash, "nonce", "--rpc-url", rpc]));
-        const moved = t.transactionType === "CREATE" && t.contractAddress && receipt.contractAddress
-          && t.contractAddress.toLowerCase() !== receipt.contractAddress.toLowerCase();
-        if (got !== want || moved) {
-          fail(1, `stopped after ${line}\n  transaction ${hash} used nonce ${got}, not ${want} as its dry run planned` +
-            (moved ? `, so ${t.contractName ?? "its contract"} is at ${receipt.contractAddress}, not ${t.contractAddress}, which the journal records` : "") +
-            `.\n  The signer chose the nonce. Correct ${DEPLOYMENTS}/${network}'s journal before any other run.`);
-        }
-      }
-    }
+    // What landed must be what the dry run showed: a browser wallet is handed each request and may
+    // send another nonce, sender, call or value. Every planned transaction needs the evidence, or the
+    // run stops: a CREATE elsewhere than the journal records would mislead every later step.
+    verifySent(line, records);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
     // is not known here). A concurrent run of the same script is not told apart.
     const script = cmd.args[1].split(":")[0].split("/").pop();
