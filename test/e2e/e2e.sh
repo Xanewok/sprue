@@ -74,6 +74,8 @@ setup() {
   node lib/sprue/bin/sprue.mjs json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
   # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
   echo 'broadcast/Deploy*/1/' >>.gitignore
+  # The scenarios' stderr, which must not make an attended run's tree dirty whichever scenarios run.
+  echo /log >>.gitignore
   git add -A; git commit -qm example
   start_anvil "$PORT" 31337; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
