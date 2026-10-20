@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.a" "$W.a"
 }
 trap cleanup EXIT
 
