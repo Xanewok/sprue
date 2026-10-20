@@ -587,7 +587,7 @@ async function main(argv) {
     if (stopOnly) return 0;
     network = name;
   }
-  const { net, chainMap, chains, home } = chainsOf(network);
+  const { chainMap, chains, home } = chainsOf(network);
   // The chain the plan reads, and whose clock a date line without `on` names.
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
@@ -627,11 +627,8 @@ async function main(argv) {
     anvil = isAnvil(clientVersion(planRpc));
     signer = anvil ? ["--unlocked"] : ["--private-key", process.env.KEY || DEV_KEY];
     if (wait && anvil) fail(2, "--wait has no use on Anvil: it moves the clock itself");
-    // Off Anvil only the signing key can send. Anvil signs for any address, so the pinned deployer.
-    process.env.DEPLOYER ||=
-      anvil && typeof net.deployer === "string"
-        ? net.deployer
-        : must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
+    // Off Anvil only the signing key can send; Anvil's --unlocked signs only for its own accounts.
+    process.env.DEPLOYER ||= must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
   }
   // Each endpoint must serve the chain that network.json names. With FOUNDRY_CHAIN_ID set, forge's own
   // chain check reads the variable and not the node, so the preview would show the network's chain for

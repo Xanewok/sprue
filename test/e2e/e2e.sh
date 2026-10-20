@@ -211,8 +211,8 @@ scenario_rerun() {
   echo "ok  rerun a finished target changes no block, nonce or journal"
 }
 
-# The example's own network, as its README runs it: without DEPLOYER the run sends as Anvil's dev key,
-# a lost journal is refused with a `recover` command, and after that command a rerun reaches done.
+# The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
+# and after that command a rerun reaches done. Without DEPLOYER the run sends as Anvil's dev key.
 scenario_recover() {
   fresh "$RPC"; git clean -fdXq deployments/local
   local out cmd

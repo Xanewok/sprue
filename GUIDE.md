@@ -39,10 +39,9 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
    the saved graph.
 6. Plan with `sprue plan <network> <target>`, which reads the default chain's `rpc` and sends nothing.
 7. Run with `sprue run <network> <target>`. `DEPLOYER` sends the steps that name no sender, and defaults
-   to the run's own sender. On a network whose chains are all in `chains.local`, the run is unattended.
-   On another node than Anvil it signs with `KEY` (Anvil's dev key if unset), whose address is the
-   default. Anvil sends unlocked, so there the default is `network.json`'s pinned `deployer`, else the
-   address of `KEY` or the dev key. On any other network a person runs it at a terminal, with no `CI`
+   to the run's own sender. On a network whose chains are all in `chains.local`, the run is unattended:
+   it sends unlocked on Anvil and signs with `KEY` (Anvil's dev key if unset) on another node, and the
+   default is that key's address. On any other network a person runs it at a terminal, with no `CI`
    variable, from a clean git checkout, signing with exactly one of `--account <name>`, `--ledger` or
    `--trezor`. There `DEPLOYER` defaults to the signer's address, a step that another account sends is
    refused, and each step is sent only after `yes` is typed at its dry run.
