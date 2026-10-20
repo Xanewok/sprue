@@ -186,6 +186,7 @@ scenario_failure() {
   n0=$(nonce)
   refused "DEPLOYER is $OPS, and pinned's network.json pins the deployer $dead" G run pinned token.check
   refused "pins the deployer $dead, and Anvil signs only for its unlocked accounts" env -u DEPLOYER G run pinned token.check
+  refused "DEPLOYER is $dead, and Anvil signs only for its unlocked accounts" env DEPLOYER="$dead" G run --unsafe-unexpected-deployer pinned token.check
   network nopin 31337
   refused "unexpected-deployer has no use: nopin's network.json pins no deployer" G run --unsafe-unexpected-deployer nopin token.check
   [ "$(nonce)" = "$n0" ] || die "failure: a refused deployer sent"

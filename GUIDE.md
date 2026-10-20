@@ -55,8 +55,8 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
    failed push prints its retry command and keeps the run's status.
 
 Two flags are a person's decision, never a way past a refusal. `--allow-dirty` starts on a dirty tree
-and is refused when any chain is live. `--unsafe-unexpected-deployer` sends the pinned `deployer`'s steps
-with another key: `DEPLOYER`, else the run's own signer. `sprue --help` lists the flags and the exit codes.
+and is refused when any chain is live. `--unsafe-unexpected-deployer` lets the pinned `deployer`'s steps
+send as `DEPLOYER`, or as the run's own signer when it cannot sign as the pin. `sprue --help` lists the flags and the exit codes.
 
 A unit's directory, its `_unit()` and the prefix of its step ids are one name, and a contract `<Name>`
 that it deploys is declared in the project's only file named `<Name>.sol`. The typed forms

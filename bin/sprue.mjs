@@ -52,8 +52,8 @@ transaction and the sender's nonces, the git HEAD and status (but for the journa
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
 
---unsafe-unexpected-deployer sends the steps of network.json's \`deployer\` with another key: DEPLOYER,
-else the signer (it exports UNSAFE_UNEXPECTED_DEPLOYER=1 for this run; forge takes only the variable).
+--unsafe-unexpected-deployer lets the steps of network.json's \`deployer\` send as DEPLOYER, or as the
+signer when the run cannot sign as the pin (it exports UNSAFE_UNEXPECTED_DEPLOYER=1; forge takes only the variable).
 
 Every chain of network.json names its rpc: an alias of foundry.toml's [rpc_endpoints], which forge and
 cast resolve, with .env.
@@ -614,13 +614,16 @@ async function main(argv) {
     fail(2, `refusing: DEPLOYER is ${process.env.DEPLOYER}, and ${network}'s network.json pins the deployer ${pin}; unset DEPLOYER, or pass --unsafe-unexpected-deployer`);
   }
   if (rehearsing) out(`deployer ${process.env.DEPLOYER}, from ${from}\n`);
-  // A sender the run cannot sign for is refused before any send, not at its step's turn. With
-  // --unsafe-unexpected-deployer the pinned deployer's steps go to the run's own signer.
+  // A sender the run cannot sign for is refused before any send, not at its step's turn. Only a pin
+  // falls back to the run's own signer: a DEPLOYER that a person set is never replaced.
   const settleDeployer = (own, canSign, why) => {
     const d = process.env.DEPLOYER || own;
     if (canSign(d)) process.env.DEPLOYER = d;
-    else if (unsafeDeployer && same(d, pin)) process.env.DEPLOYER = own;
-    else fail(2, `refusing: ${from === "DEPLOYER" ? "DEPLOYER is" : `${network}'s network.json pins the deployer`} ${d}, and ${why}; sign as it${pin ? `, or pass --unsafe-unexpected-deployer to send as ${own}` : ""}`);
+    else {
+      const fallback = from === "network.json" && canSign(own);
+      if (unsafeDeployer && fallback) process.env.DEPLOYER = own;
+      else fail(2, `refusing: ${from === "DEPLOYER" ? "DEPLOYER is" : `${network}'s network.json pins the deployer`} ${d}, and ${why}; sign as it${fallback && !unsafeDeployer ? `, or pass --unsafe-unexpected-deployer to send as ${own}` : ""}`);
+    }
     out(`deployer ${process.env.DEPLOYER}, from ${process.env.DEPLOYER === d ? from || "the signer" : "the signer (--unsafe-unexpected-deployer)"}\n`);
   };
   // git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
