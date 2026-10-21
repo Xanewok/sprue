@@ -755,9 +755,11 @@ function layout(list, out) {
 // Places nodes and routes links for a page width. Runs in the page (serialised), so it must not use anything
 // outside its own body. Positions depend on the deployment and the width only, never on the step.
 // Links run only in the gaps between rows, lanes and columns, so no link crosses a box. Links into one node
-// share its entry point and their channel tracks, so they merge into one trunk.
+// share its entry point and their channel tracks, so they merge into one trunk. Each trunk or bus owns a track
+// of every channel it uses, and channels widen until their tracks fit, so parallel links never draw over each other.
 export function place(D, G, avail) {
   const g = avail < 560 ? { ...G, w: 148, gx: 24, pad: 8 } : { ...G };
+  const SP = g.w < G.w ? 6 : 8;
   const byId = new Map(D.nodes.map((n) => [n.id, n]));
   const bundles = new Map();
   for (const e of D.edges) {
@@ -804,171 +806,225 @@ export function place(D, G, avail) {
   }
   const laneList = [...lanes.values()].filter((l) => l.nodes.length);
   const hasSide = side.size > 0;
-  const gridX0 = g.pad + (hasSide ? g.w + gutter : g.gx / 2 + 4);
-  const cols = Math.max(1, Math.min(G.cols, Math.floor((avail - gridX0 - g.pad) / (g.w + g.gx))));
+  const x0 = hasSide ? g.pad + g.w : 0, gap0 = hasSide ? gutter : 2 * g.pad + 8;
+  const fit = Math.max(1, Math.min(G.cols, Math.floor((avail - x0 - gap0 - g.pad) / (g.w + g.gx))));
+  // Widened gaps can overflow the width: then one column fewer, down to two.
+  for (let cols = fit; ; cols--) {
+    const L = attempt(cols);
+    if (L.W <= avail || cols <= Math.min(2, fit)) return L;
+  }
 
-  // Columns: barycenter sweeps over the lanes. A lane that fits in one row puts each node at the free column
-  // nearest its barycenter, so linked nodes line up; a longer lane spreads over every column, filling column
-  // by column, so a node's x still follows its barycenter.
-  const cell = new Map();
-  const assign = (l, bary) => {
-    const n = l.nodes.length;
-    if (n <= cols) {
-      l.rows = 1;
-      let prev = -1;
+  function attempt(cols) {
+    // Columns: barycenter sweeps over the lanes. A lane that fits in one row puts each node at the free column
+    // nearest its barycenter, so linked nodes line up; a longer lane spreads over every column, filling column
+    // by column, so a node's x still follows its barycenter.
+    const cell = new Map();
+    const assign = (l, bary) => {
+      const n = l.nodes.length;
+      if (n <= cols) {
+        l.rows = 1;
+        let prev = -1;
+        l.nodes.forEach((m, k) => {
+          const want = bary ? Math.round(bary.get(m.id)) : k;
+          prev = Math.min(Math.max(prev + 1, want), cols - (n - k));
+          cell.set(m.id, { c: prev, r: 0 });
+        });
+        l.used = prev + 1;
+        return;
+      }
+      const at = new Map();
       l.nodes.forEach((m, k) => {
-        const want = bary ? Math.round(bary.get(m.id)) : k;
-        prev = Math.min(Math.max(prev + 1, want), cols - (n - k));
-        cell.set(m.id, { c: prev, r: 0 });
+        const c = Math.floor((k * cols) / n);
+        at.set(c, (at.get(c) || 0) + 1);
+        cell.set(m.id, { c, r: at.get(c) - 1 });
       });
-      l.used = prev + 1;
-      return;
+      l.rows = Math.max(...at.values());
+      l.used = cols;
+    };
+    laneList.forEach((l) => assign(l));
+    const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
+    for (let it = 0; it < 6; it++) {
+      for (const l of it % 2 ? [...laneList].reverse() : laneList) {
+        const own = new Set(l.nodes.map((n) => n.id));
+        const idx = new Map(l.nodes.map((n, k) => [n.id, k]));
+        const bary = new Map(l.nodes.map((n) => {
+          const xs = [...nbrs.get(n.id)].filter((id) => !own.has(id)).map(colOf);
+          return [n.id, xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : colOf(n.id)];
+        }));
+        l.nodes.sort((a, b) => bary.get(a.id) - bary.get(b.id) || idx.get(a.id) - idx.get(b.id));
+        assign(l, bary);
+      }
     }
-    const at = new Map();
-    l.nodes.forEach((m, k) => {
-      const c = Math.floor((k * cols) / n);
-      at.set(c, (at.get(c) || 0) + 1);
-      cell.set(m.id, { c, r: at.get(c) - 1 });
-    });
-    l.rows = Math.max(...at.values());
-    l.used = cols;
-  };
-  laneList.forEach((l) => assign(l));
-  const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
-  for (let it = 0; it < 6; it++) {
-    for (const l of it % 2 ? [...laneList].reverse() : laneList) {
-      const own = new Set(l.nodes.map((n) => n.id));
-      const idx = new Map(l.nodes.map((n, k) => [n.id, k]));
-      const bary = new Map(l.nodes.map((n) => {
-        const xs = [...nbrs.get(n.id)].filter((id) => !own.has(id)).map(colOf);
-        return [n.id, xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : colOf(n.id)];
-      }));
-      l.nodes.sort((a, b) => bary.get(a.id) - bary.get(b.id) || idx.get(a.id) - idx.get(b.id));
-      assign(l, bary);
+    // Each channel needs a track per trunk or bus it carries; route, widen what overflowed, route again.
+    const vw = Array(cols + 1).fill(g.gx);
+    vw[0] = gap0;
+    const widths = new Map();
+    for (let it = 0; ; it++) {
+      const L = route(cols, cell, vw, widths);
+      let grew = false;
+      for (const [key, n] of L.counts) {
+        const need = 2 * (SP * Math.ceil((n - 1) / 2) + 6);
+        if (key[0] === 'v') {
+          if (need > vw[+key.slice(1)]) { vw[+key.slice(1)] = need; grew = true; }
+        } else if (need > L.width.get(key)) { widths.set(key, need); grew = true; }
+      }
+      if (!grew || it > 20) return L;
     }
   }
 
-  const box = new Map();
-  const sides = [];
-  let y = g.pad + g.laneGap / 2;
-  for (const chain of [...new Set(D.lanes.map((k) => k.split('|')[0]))]) {
-    const top = y;
-    for (const l of laneList.filter((l) => l.chain === chain)) {
-      const y0 = y;
-      const rowTop = (r) => y0 + g.title + r * (g.h + g.gy);
-      const y1 = rowTop(l.rows - 1) + g.h + 10;
-      Object.assign(l, { y0, y1 });
-      l.above = (r) => (r === 0 ? { y: y0 - g.laneGap / 2, half: g.laneGap / 2 } : { y: rowTop(r) - g.gy / 2, half: g.gy / 2 });
-      l.below = (r) => (r === l.rows - 1 ? { y: y1 + g.laneGap / 2, half: g.laneGap / 2 } : { y: rowTop(r) + g.h + g.gy / 2, half: g.gy / 2 });
-      for (const n of l.nodes) {
-        const { c, r } = cell.get(n.id);
-        box.set(n.id, { x: gridX0 + c * (g.w + g.gx), y: rowTop(r), lane: l, row: r, col: c });
-      }
-      y = y1 + g.laneGap;
+  function route(cols, cell, vw, widths) {
+    const colX = [], gapC = [];
+    let x = x0;
+    for (let i = 0; i <= cols; i++) {
+      gapC.push(x + vw[i] / 2);
+      x += vw[i];
+      if (i < cols) { colX.push(x); x += g.w; }
     }
-    const ns = side.get(chain) || [];
-    if (ns.length) {
-      const want = ns.map((n) => {
-        const ys = [...nbrs.get(n.id)].map((id) => box.get(id)).filter(Boolean).map((b) => b.y);
-        return { n, y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : top };
-      }).sort((a, b) => a.y - b.y);
-      let next = top + g.title;
-      for (const w of want) {
-        const at = Math.max(w.y, next);
-        box.set(w.n.id, { x: g.pad, y: at, side: true });
-        next = at + g.h + 14;
+    const width = new Map();
+    const chan = (id, top, base) => {
+      const w = Math.max(base, widths.get(id) || 0);
+      width.set(id, w);
+      return { id, y: top + w / 2, w };
+    };
+    const box = new Map();
+    const sides = [];
+    let y = g.pad - g.laneGap / 2, k = 0, prev = null;
+    for (const chain of [...new Set(D.lanes.map((key) => key.split('|')[0]))]) {
+      let top = null;
+      for (const l of laneList.filter((l) => l.chain === chain)) {
+        const above = prev || chan('b' + k++, y, g.laneGap);
+        const y0 = above.y + above.w / 2;
+        if (top === null) top = y0;
+        const rowTop = [], inner = [];
+        let ry = y0 + g.title;
+        for (let r = 0; r < l.rows; r++) {
+          rowTop.push(ry);
+          ry += g.h;
+          if (r < l.rows - 1) {
+            inner.push(chan(`r${k}.${r}`, ry, g.gy));
+            ry += inner[r].w;
+          }
+        }
+        const y1 = ry + 10;
+        const below = chan('b' + k++, y1, g.laneGap);
+        Object.assign(l, { y0, y1 });
+        l.above = (r) => (r === 0 ? above : inner[r - 1]);
+        l.below = (r) => (r === l.rows - 1 ? below : inner[r]);
+        for (const n of l.nodes) {
+          const { c, r } = cell.get(n.id);
+          box.set(n.id, { x: colX[c], y: rowTop[r], lane: l, row: r, col: c });
+        }
+        prev = below;
+        y = y1;
       }
-      sides.push({ chain, y0: top, y1: next - 4 });
-      y = Math.max(y, next + g.laneGap);
+      const ns = side.get(chain) || [];
+      if (ns.length) {
+        if (top === null) top = y + g.laneGap / 2;
+        const want = ns.map((n) => {
+          const ys = [...nbrs.get(n.id)].map((id) => box.get(id)).filter(Boolean).map((b) => b.y);
+          return { n, y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : top };
+        }).sort((a, b) => a.y - b.y);
+        let next = top + g.title;
+        for (const w of want) {
+          const at = Math.max(w.y, next);
+          box.set(w.n.id, { x: g.pad, y: at, side: true });
+          next = at + g.h + 14;
+        }
+        sides.push({ chain, y0: top, y1: next - 4 });
+        if (next > y) {
+          y = next;
+          prev = null;
+        }
+      }
     }
-  }
 
-  const gapX = (i) => (i === 0 ? gridX0 - (hasSide ? gutter : g.gx) / 2 : gridX0 + i * (g.w + g.gx) - g.gx / 2);
-  const gapHalf = (i) => (i === 0 && hasSide ? gutter / 2 : g.gx / 2);
-  const tracks = new Map();
-  const track = (key, target, half) => {
-    if (!tracks.has(key)) tracks.set(key, []);
-    const l = tracks.get(key);
-    let i = l.indexOf(target);
-    if (i < 0) i = l.push(target) - 1;
-    const j = i % Math.max(1, Math.floor((half - 5) / 5) * 2 + 1);
-    return j === 0 ? 0 : (j % 2 ? 1 : -1) * Math.ceil(j / 2) * 5;
-  };
-  const cy = (b) => b.y + g.h / 2;
-  const outDeg = new Map(), inDeg = new Map();
-  for (const b of bundles.values()) {
-    outDeg.set(b.from, (outDeg.get(b.from) || 0) + 1);
-    inDeg.set(b.to, (inDeg.get(b.to) || 0) + 1);
-  }
-  const routes = [];
-  for (const bd of bundles.values()) {
-    const A = box.get(bd.from), B = box.get(bd.to), T = bd.to;
-    // Near the source a channel track is shared by the source's links (a fan-out), near the target by the
-    // target's (a trunk).
-    const S = 's' + bd.from;
-    // The middle of a route follows the busier end: a fan-out shares one bus, links into one node one trunk.
-    const mid = outDeg.get(bd.from) > inDeg.get(bd.to) ? S : T;
-    const h = (ch, by = T) => ch.y + track('h' + Math.round(ch.y), by, ch.half);
-    const v = (i, by = T) => gapX(i) + track('v' + i, by, gapHalf(i));
-    const sx = A.x + g.w / 2 - 16, ex = B.x + g.w / 2 + 16;
-    let pts;
-    if (A.side && B.side) {
-      const xg = v(0);
-      pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
-    } else if (B.side) {
-      const up = cy(B) < cy(A), yc = h(up ? A.lane.above(A.row) : A.lane.below(A.row), S), xg = v(0);
-      pts = [[sx, up ? A.y : A.y + g.h], [sx, yc], [xg, yc], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
-    } else if (A.side) {
-      const down = cy(B) > cy(A), yc = h(down ? B.lane.above(B.row) : B.lane.below(B.row)), xg = v(0, S);
-      pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, yc], [ex, yc], [ex, down ? B.y : B.y + g.h]];
-    } else if (A.lane === B.lane && A.row === B.row) {
-      if (Math.abs(A.col - B.col) === 1) {
-        const right = A.col < B.col, yy = cy(A) + (bd.from < bd.to ? -6 : 6);
-        pts = [[right ? A.x + g.w : A.x, yy], [right ? B.x : B.x + g.w, yy]];
-      } else {
-        const yc = h(A.lane.below(A.row));
-        pts = [[sx, A.y + g.h], [sx, yc], [ex, yc], [ex, B.y + g.h]];
-      }
-    } else {
-      const down = B.y > A.y;
-      const c1 = down ? A.lane.below(A.row) : A.lane.above(A.row), c2 = down ? B.lane.above(B.row) : B.lane.below(B.row);
-      const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h;
-      if (Math.abs(c1.y - c2.y) < 1) {
-        const yc = h(c1);
-        pts = [[sx, aEdge], [sx, yc], [ex, yc], [ex, bEdge]];
-      } else {
-        const cost = (i) => Math.abs(gapX(i) - sx) + Math.abs(gapX(i) - ex);
-        const gi = [B.col, B.col + 1, A.col, A.col + 1].reduce((a, b) => (cost(b) < cost(a) ? b : a));
-        const xg = v(gi, mid), ya = h(c1, S), yb = h(c2);
-        pts = [[sx, aEdge], [sx, ya], [xg, ya], [xg, yb], [ex, yb], [ex, bEdge]];
-      }
+    const tracks = new Map();
+    const track = (key, by) => {
+      if (!tracks.has(key)) tracks.set(key, []);
+      const l = tracks.get(key);
+      let i = l.indexOf(by);
+      if (i < 0) i = l.push(by) - 1;
+      return i === 0 ? 0 : (i % 2 ? 1 : -1) * Math.ceil(i / 2) * SP;
+    };
+    const cy = (b) => b.y + g.h / 2;
+    // Top and bottom edges put their ports at different x, so stubs that meet in one channel from the rows
+    // above and below never run along each other.
+    const port = (b, top, out) => b.x + g.w / 2 + (out ? -1 : 1) * (top ? 12 : 24);
+    const outDeg = new Map(), inDeg = new Map();
+    for (const b of bundles.values()) {
+      outDeg.set(b.from, (outDeg.get(b.from) || 0) + 1);
+      inDeg.set(b.to, (inDeg.get(b.to) || 0) + 1);
     }
-    let best = 0, at = [pts[0][0], pts[0][1]];
-    for (let i = 1; i < pts.length; i++) {
-      const len = Math.abs(pts[i][0] - pts[i - 1][0]) + Math.abs(pts[i][1] - pts[i - 1][1]);
-      if (len > best) { best = len; at = [(pts[i][0] + pts[i - 1][0]) / 2, (pts[i][1] + pts[i - 1][1]) / 2]; }
+    const routes = [];
+    for (const bd of bundles.values()) {
+      const A = box.get(bd.from), B = box.get(bd.to), T = bd.to;
+      // Near the source a channel track is shared by the source's links (a fan-out), near the target by the
+      // target's (a trunk).
+      const S = 's' + bd.from;
+      // The middle of a route follows the busier end: a fan-out shares one bus, links into one node one trunk.
+      const mid = outDeg.get(bd.from) > inDeg.get(bd.to) ? S : T;
+      const h = (ch, by = T) => ch.y + track(ch.id, by);
+      const v = (i, by = T) => gapC[i] + track('v' + i, by);
+      let pts;
+      if (A.side && B.side) {
+        const xg = v(0);
+        pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
+      } else if (B.side) {
+        const up = cy(B) < cy(A), yc = h(up ? A.lane.above(A.row) : A.lane.below(A.row), S), xg = v(0), sx = port(A, up, true);
+        pts = [[sx, up ? A.y : A.y + g.h], [sx, yc], [xg, yc], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
+      } else if (A.side) {
+        const down = cy(B) > cy(A), yc = h(down ? B.lane.above(B.row) : B.lane.below(B.row)), xg = v(0, S), ex = port(B, down, false);
+        pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, yc], [ex, yc], [ex, down ? B.y : B.y + g.h]];
+      } else if (A.lane === B.lane && A.row === B.row) {
+        if (Math.abs(A.col - B.col) === 1) {
+          const right = A.col < B.col, yy = cy(A) + (bd.from < bd.to ? -6 : 6);
+          pts = [[right ? A.x + g.w : A.x, yy], [right ? B.x : B.x + g.w, yy]];
+        } else {
+          const yc = h(A.lane.below(A.row)), sx = port(A, false, true), ex = port(B, false, false);
+          pts = [[sx, A.y + g.h], [sx, yc], [ex, yc], [ex, B.y + g.h]];
+        }
+      } else {
+        const down = B.y > A.y;
+        const c1 = down ? A.lane.below(A.row) : A.lane.above(A.row), c2 = down ? B.lane.above(B.row) : B.lane.below(B.row);
+        const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h, sx = port(A, !down, true), ex = port(B, down, false);
+        if (c1.id === c2.id) {
+          const yc = h(c1);
+          pts = [[sx, aEdge], [sx, yc], [ex, yc], [ex, bEdge]];
+        } else {
+          const cost = (i) => Math.abs(gapC[i] - sx) + Math.abs(gapC[i] - ex);
+          const gi = [B.col, B.col + 1, A.col, A.col + 1].reduce((a, b) => (cost(b) < cost(a) ? b : a));
+          const xg = v(gi, mid), ya = h(c1, S), yb = h(c2);
+          pts = [[sx, aEdge], [sx, ya], [xg, ya], [xg, yb], [ex, yb], [ex, bEdge]];
+        }
+      }
+      let best = 0, at = [pts[0][0], pts[0][1]];
+      for (let i = 1; i < pts.length; i++) {
+        const len = Math.abs(pts[i][0] - pts[i - 1][0]) + Math.abs(pts[i][1] - pts[i - 1][1]);
+        if (len > best) { best = len; at = [(pts[i][0] + pts[i - 1][0]) / 2, (pts[i][1] + pts[i - 1][1]) / 2]; }
+      }
+      routes.push({ ...bd, pts, labelAt: at });
     }
-    routes.push({ ...bd, pts, labelAt: at });
+    // A trunk's count sits at its shared entry point.
+    const entries = new Map();
+    for (const r of routes) {
+      const k = r.to + '@' + r.pts[r.pts.length - 1].join(',');
+      if (!entries.has(k)) entries.set(k, { to: r.to, n: 0, a: r.pts[r.pts.length - 1], b: r.pts[r.pts.length - 2] });
+      entries.get(k).n++;
+    }
+    const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 }));
+    const exits = new Map();
+    for (const r of routes) {
+      const k = r.from + '@' + r.pts[0].join(',');
+      if (!exits.has(k)) exits.set(k, { from: r.from, n: 0, a: r.pts[0], b: r.pts[1] });
+      exits.get(k).n++;
+    }
+    for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
+    const maxUsed = Math.max(1, ...laneList.map((l) => l.used));
+    const W = Math.max(Math.min(avail, 440), gapC[maxUsed] + vw[maxUsed] / 2 + g.pad);
+    const H = Math.max(prev ? prev.y + prev.w / 2 : y, ...sides.map((s) => s.y1 + 10)) + g.pad / 2;
+    const counts = new Map([...tracks].map(([key, l]) => [key, l.length]));
+    return { g, W, H, cols, gridX0: colX[0], box, routes, badges, lanes: laneList.map((l) => ({ key: l.key, y0: l.y0, y1: l.y1 })), sides, counts, width };
   }
-  // A trunk's count sits at its shared entry point.
-  const entries = new Map();
-  for (const r of routes) {
-    const k = r.to + '@' + r.pts[r.pts.length - 1].join(',');
-    if (!entries.has(k)) entries.set(k, { to: r.to, n: 0, a: r.pts[r.pts.length - 1], b: r.pts[r.pts.length - 2] });
-    entries.get(k).n++;
-  }
-  const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 }));
-  const exits = new Map();
-  for (const r of routes) {
-    const k = r.from + '@' + r.pts[0].join(',');
-    if (!exits.has(k)) exits.set(k, { from: r.from, n: 0, a: r.pts[0], b: r.pts[1] });
-    exits.get(k).n++;
-  }
-  for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
-  const maxUsed = Math.max(1, ...laneList.map((l) => l.used));
-  const W = Math.max(Math.min(avail, 440), gapX(maxUsed) + g.gx / 2 + g.pad);
-  const H = Math.max(y - g.laneGap / 2, ...sides.map((s) => s.y1 + 10)) + g.pad;
-  return { g, W, H, gridX0, box, routes, badges, lanes: laneList.map((l) => ({ key: l.key, y0: l.y0, y1: l.y1 })), sides };
 }
 
 // ---------- HTML ----------

@@ -78,3 +78,38 @@ test('no link crosses a box, at desktop and phone width', () => {
       }
   }
 });
+
+// Twelve contracts in one script, two outside addresses, links between most of them.
+function dense() {
+  const nodes = [];
+  for (let k = 0; k < 12; k++) nodes.push({ id: `1:c${k}`, chain: 1, kind: 'contract', laneKey: '1|Deploy.s.sol', ord: k + 1 });
+  nodes.push({ id: '1:d', chain: 1, kind: 'sender', laneKey: '1|outside', ord: 0 }, { id: '1:o', chain: 1, kind: 'outside', laneKey: '1|outside', ord: 13 });
+  const edges = [];
+  for (let k = 0; k < 12; k++)
+    for (const to of [(k * 5 + 3) % 12, (k * 7 + 1) % 12]) if (to !== k) edges.push({ from: `1:c${k}`, to: `1:c${to}` });
+  for (let k = 0; k < 12; k += 3) edges.push({ from: `1:c${k}`, to: '1:d' }, { from: `1:c${k + 1}`, to: '1:o' });
+  return { nodes, edges, lanes: ['1|outside', '1|Deploy.s.sol'] };
+}
+
+const segments = (routes) =>
+  routes.flatMap((r) => r.pts.slice(1).map(([x2, y2], i) => {
+    const [x1, y1] = r.pts[i];
+    return { r, x1: Math.min(x1, x2), x2: Math.max(x1, x2), y1: Math.min(y1, y2), y2: Math.max(y1, y2) };
+  }));
+
+test('links that share no end never share a track, however many cross one gap', () => {
+  for (const width of [1060, 390]) {
+    const { g, box, routes } = place(dense(), GEOM, width);
+    const segs = segments(routes);
+    for (const s of segs)
+      for (const [id, b] of box)
+        assert.ok(!(s.x1 < b.x + g.w - 0.5 && s.x2 > b.x + 0.5 && s.y1 < b.y + g.h - 0.5 && s.y2 > b.y + 0.5), `${s.r.key} crosses ${id}`);
+    for (const a of segs)
+      for (const b of segs) {
+        if (a.r.from === b.r.from || a.r.to === b.r.to) continue;
+        const vertical = a.x1 === a.x2 && b.x1 === b.x2 && a.x1 === b.x1 && Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1) > 1;
+        const horizontal = a.y1 === a.y2 && b.y1 === b.y2 && a.y1 === b.y1 && Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1) > 1;
+        assert.ok(!vertical && !horizontal, `${a.r.key} and ${b.r.key} share a track at width ${width}`);
+      }
+  }
+});
