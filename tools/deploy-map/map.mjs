@@ -733,7 +733,7 @@ function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
 // ---------- layout ----------
 
 // Lane and rank only; the page places them for its width.
-export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 5, pad: 24, title: 26 };
+export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 8, pad: 24, title: 26 };
 
 function layout(list, out) {
   const lanes = [];
@@ -772,18 +772,21 @@ export function place(D, G, avail) {
     nbrs.get(b.to).add(b.from);
   }
 
-  // Contracts sit in their script's lane; an outside address that links into one lane only joins it; the
-  // others (the deployer, shared owners) go to their chain's side column.
+  // Contracts sit in their script's lane; an outside address that links into one lane only joins it, one
+  // linked to no contract joins its chain's first lane; the others (the deployer, shared owners) go to their
+  // chain's side column.
   const lanes = new Map();
   for (const k of D.lanes) if (!k.endsWith('|outside')) lanes.set(k, { key: k, chain: k.split('|')[0], nodes: [] });
   const side = new Map();
-  for (const n of [...D.nodes].sort((a, b) => a.ord - b.ord)) {
+  for (const n of [...D.nodes].sort((a, b) => (a.kind !== 'contract') - (b.kind !== 'contract') || a.ord - b.ord)) {
     if (n.kind === 'contract') {
       lanes.get(n.laneKey).nodes.push(n);
       continue;
     }
     const into = new Set([...nbrs.get(n.id)].map((id) => byId.get(id)).filter((m) => m.kind === 'contract').map((m) => m.laneKey));
-    if (!n.sender && into.size === 1) lanes.get([...into][0]).nodes.push(n);
+    const first = [...lanes.values()].find((l) => l.chain === String(n.chain) && l.nodes.length);
+    if (into.size === 1) lanes.get([...into][0]).nodes.push(n);
+    else if (!into.size && first) first.nodes.push(n);
     else {
       const c = String(n.chain);
       if (!side.has(c)) side.set(c, []);
@@ -804,15 +807,33 @@ export function place(D, G, avail) {
   const gridX0 = g.pad + (hasSide ? g.w + gutter : g.gx / 2 + 4);
   const cols = Math.max(1, Math.min(G.cols, Math.floor((avail - gridX0 - g.pad) / (g.w + g.gx))));
 
-  // Columns: barycenter sweeps over the lanes; a multi-row lane fills column by column, so a node's x still
-  // follows its barycenter.
+  // Columns: barycenter sweeps over the lanes. A lane that fits in one row puts each node at the free column
+  // nearest its barycenter, so linked nodes line up; a longer lane spreads over every column, filling column
+  // by column, so a node's x still follows its barycenter.
   const cell = new Map();
-  const assign = (l) => {
-    l.rows = Math.ceil(l.nodes.length / cols);
-    l.used = Math.ceil(l.nodes.length / l.rows);
-    l.nodes.forEach((n, k) => cell.set(n.id, { c: Math.floor(k / l.rows), r: k % l.rows }));
+  const assign = (l, bary) => {
+    const n = l.nodes.length;
+    if (n <= cols) {
+      l.rows = 1;
+      let prev = -1;
+      l.nodes.forEach((m, k) => {
+        const want = bary ? Math.round(bary.get(m.id)) : k;
+        prev = Math.min(Math.max(prev + 1, want), cols - (n - k));
+        cell.set(m.id, { c: prev, r: 0 });
+      });
+      l.used = prev + 1;
+      return;
+    }
+    const at = new Map();
+    l.nodes.forEach((m, k) => {
+      const c = Math.floor((k * cols) / n);
+      at.set(c, (at.get(c) || 0) + 1);
+      cell.set(m.id, { c, r: at.get(c) - 1 });
+    });
+    l.rows = Math.max(...at.values());
+    l.used = cols;
   };
-  laneList.forEach(assign);
+  laneList.forEach((l) => assign(l));
   const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
   for (let it = 0; it < 6; it++) {
     for (const l of it % 2 ? [...laneList].reverse() : laneList) {
@@ -823,7 +844,7 @@ export function place(D, G, avail) {
         return [n.id, xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : colOf(n.id)];
       }));
       l.nodes.sort((a, b) => bary.get(a.id) - bary.get(b.id) || idx.get(a.id) - idx.get(b.id));
-      assign(l);
+      assign(l, bary);
     }
   }
 
@@ -874,12 +895,19 @@ export function place(D, G, avail) {
     return j === 0 ? 0 : (j % 2 ? 1 : -1) * Math.ceil(j / 2) * 5;
   };
   const cy = (b) => b.y + g.h / 2;
+  const outDeg = new Map(), inDeg = new Map();
+  for (const b of bundles.values()) {
+    outDeg.set(b.from, (outDeg.get(b.from) || 0) + 1);
+    inDeg.set(b.to, (inDeg.get(b.to) || 0) + 1);
+  }
   const routes = [];
   for (const bd of bundles.values()) {
     const A = box.get(bd.from), B = box.get(bd.to), T = bd.to;
     // Near the source a channel track is shared by the source's links (a fan-out), near the target by the
     // target's (a trunk).
     const S = 's' + bd.from;
+    // The middle of a route follows the busier end: a fan-out shares one bus, links into one node one trunk.
+    const mid = outDeg.get(bd.from) > inDeg.get(bd.to) ? S : T;
     const h = (ch, by = T) => ch.y + track('h' + Math.round(ch.y), by, ch.half);
     const v = (i, by = T) => gapX(i) + track('v' + i, by, gapHalf(i));
     const sx = A.x + g.w / 2 - 16, ex = B.x + g.w / 2 + 16;
@@ -911,7 +939,7 @@ export function place(D, G, avail) {
       } else {
         const cost = (i) => Math.abs(gapX(i) - sx) + Math.abs(gapX(i) - ex);
         const gi = [B.col, B.col + 1, A.col, A.col + 1].reduce((a, b) => (cost(b) < cost(a) ? b : a));
-        const xg = v(gi), ya = h(c1, S), yb = h(c2);
+        const xg = v(gi, mid), ya = h(c1, S), yb = h(c2);
         pts = [[sx, aEdge], [sx, ya], [xg, ya], [xg, yb], [ex, yb], [ex, bEdge]];
       }
     }
@@ -930,6 +958,13 @@ export function place(D, G, avail) {
     entries.get(k).n++;
   }
   const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 }));
+  const exits = new Map();
+  for (const r of routes) {
+    const k = r.from + '@' + r.pts[0].join(',');
+    if (!exits.has(k)) exits.set(k, { from: r.from, n: 0, a: r.pts[0], b: r.pts[1] });
+    exits.get(k).n++;
+  }
+  for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
   const maxUsed = Math.max(1, ...laneList.map((l) => l.used));
   const W = Math.max(Math.min(avail, 440), gapX(maxUsed) + g.gx / 2 + g.pad);
   const H = Math.max(y - g.laneGap / 2, ...sides.map((s) => s.y1 + 10)) + g.pad;
@@ -950,7 +985,12 @@ button,.tab{font:inherit;color:inherit;background:var(--panel);border:1px solid 
 button:focus-visible,input:focus-visible{outline:2px solid var(--accent2);outline-offset:1px}
 .tab[aria-selected=true]{border-color:var(--fg);font-weight:600}
 #count{font-variant-numeric:tabular-nums;min-width:5.5em;text-align:center}
-#scrub{flex:1 1 160px;min-width:120px}
+#scrubwrap{flex:1 1 160px;min-width:120px;display:flex;flex-direction:column;gap:2px}#scrub{width:100%;margin:0}
+#sections{display:flex;gap:2px;height:15px}.sec{flex:1 1 0;min-width:3px;padding:0 4px;font-size:10px;line-height:15px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border-radius:3px;background:var(--lane);border:0;color:var(--muted);text-align:left}
+.sec.cur{background:var(--accent2);color:var(--bg)}
+main.nopanel #panel{display:none}#paneltoggle[aria-pressed=false]{opacity:.7}
+#legend{padding:0 16px 4px;font-size:12px;color:var(--muted)}#legend summary{cursor:pointer;width:max-content}
+ul.changes{margin:4px 0 8px;padding-left:16px}ul.changes li{margin:2px 0}ul.changes ul{padding-left:14px}#panel a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--muted)}
 label.chk{display:flex;gap:4px;align-items:center;font-size:13px}
 #stepinfo{padding:6px 16px;font-size:13px;color:var(--muted);min-height:2.2em}
 #stepinfo b{color:var(--fg)}.rev{color:var(--bad);font-weight:600}
@@ -976,11 +1016,11 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .edge.call path{stroke-dasharray:6 3}.edge.verified path{stroke-dasharray:none;stroke-width:2}
 .lens .edge path{opacity:.45}.lens .edge.ctl path{opacity:1;stroke:var(--accent);stroke-width:2}
 .elabel{font-size:11px;fill:var(--fg);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round;display:none;pointer-events:none}
-.elabel.hot,.elabel.now{display:block}.elabel.future{display:none}.dim .elabel.now:not(.hot){display:none}
+.elabel.shown{display:block}
 .edge.now path{stroke:var(--new);stroke-width:2.6;opacity:1}.edge.future{display:none}
 .edge.hot path{opacity:1;stroke-width:2.4}.edge{cursor:pointer}.edge path.hit{stroke:transparent;stroke-width:10;opacity:0}
 .edge path{stroke-linejoin:round}
-.badge circle{fill:var(--panel);stroke:var(--edge)}.badge text{font-size:10px;font-weight:600}
+.badge circle{fill:var(--panel);stroke:var(--edge)}.badge.future{opacity:.18}.badge text{font-size:10px;font-weight:600}
 .node .chain{fill:var(--muted);font-size:10px}
 .lane text{paint-order:stroke;stroke:var(--lane);stroke-width:4px;stroke-linejoin:round}
 .dim .node:not(.hot){opacity:.15}.dim .edge:not(.hot){opacity:.08}.dim .badge{opacity:.15}
@@ -990,11 +1030,11 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 #tableview{padding:0 16px 24px;overflow:auto}#tableview input{font:inherit;padding:4px 8px;margin:8px 0;width:min(420px,100%);border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
 table{border-collapse:collapse;width:100%;font-size:12.5px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:5px 6px}
 th{position:sticky;top:0;background:var(--bg)}tr.reverted td{color:var(--bad)}
-.legend{display:flex;flex-wrap:wrap;gap:10px;padding:4px 16px 8px;font-size:12px;color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:10px;padding:4px 0 6px}
 .legend svg{display:inline-block;vertical-align:middle}
 .hidden{display:none!important}
 @media (max-width:760px){main{flex-direction:column}#panel{flex:none;border-left:0;border-top:1px solid var(--line);max-height:none}#mapwrap{max-height:70vh}}
-@media print{.bar,#mapwrap,#panel,.legend,#stepinfo{display:none!important}#tableview{display:block!important}}
+@media print{.bar,#mapwrap,#panel,#legend,#stepinfo{display:none!important}#tableview{display:block!important}}
 `;
 
 function client(place) {
@@ -1036,8 +1076,9 @@ function client(place) {
     return d + ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
   };
 
+  let L;
   function draw() {
-    const L = place(D, G, view.clientWidth || 1000);
+    L = place(D, G, view.clientWidth || 1000);
     const g = L.g;
     svg.setAttribute('viewBox', `0 0 ${L.W} ${L.H}`);
     svg.setAttribute('width', L.W);
@@ -1110,10 +1151,10 @@ function client(place) {
       edgeEls.set(r.key, { g: eg, label: lt, r, firstStep: Math.min(...r.edges.map((e) => e.firstStep)) });
     }
     for (const b of L.badges) {
-      const bg = el('g', { class: 'badge' }, labelsG);
+      const bg = el('g', { class: 'badge', 'data-node': b.to || b.from }, labelsG);
       el('circle', { cx: b.x, cy: b.y, r: 8 }, bg);
       el('text', { x: b.x, y: b.y + 3.5, 'text-anchor': 'middle' }, bg).textContent = b.n;
-      el('title', {}, bg).textContent = `${b.n} links merge here into ${title(byId.get(b.to))}`;
+      el('title', {}, bg).textContent = b.to ? `${b.n} links merge here into ${title(byId.get(b.to))}` : `${b.n} links leave ${title(byId.get(b.from))} here as one bus`;
     }
   }
 
@@ -1158,9 +1199,38 @@ function client(place) {
     } else {
       const s = D.stats;
       P.innerHTML = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} outside addresses, ${s.edges} links (${s.control} matched a control rule), ${s.steps} steps${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>
-        <p class="muted">Hover or select an address to see its links and the transactions behind each one. The control lens draws links whose function or parameter name suggests control; the rule that matched is shown. Name rules are a heuristic.</p>
-        ${D.warnings.map((w) => `<p class="rev">${esc(w)}</p>`).join('')}`;
+        ${D.warnings.map((w) => `<p class="rev">${esc(w)}</p>`).join('')}
+        <h3>Step ${S.step + 1}: what changed</h3>${stepChanges(S.step)}
+        <h3>Who controls what</h3>${controls()}
+        <p class="muted">Control is read from function and parameter names (the rule is shown), so it is a heuristic. Select a line, an address or a link for the transactions behind it.</p>`;
     }
+  }
+  const nameOf = (id) => esc(title(byId.get(id)));
+  const linkKey = (e) => e.from + '>' + e.to;
+  // One line per change, newest state first: what the step created, then each link it set.
+  function stepChanges(k) {
+    const lines = [];
+    for (const i of D.steps[k].txs) {
+      const x = D.txs[i];
+      if (x.status === 'reverted') lines.push(`<li class="rev">${esc(x.fn || x.type)} reverted: nothing created or bound</li>`);
+      for (const id of x.created) lines.push(`<li><a href="#" data-node="${esc(id)}">+ ${nameOf(id)}</a> created</li>`);
+      for (const e of D.edges)
+        if (e.kind !== 'created' && e.txs.some((d) => d.i === i))
+          lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${e.rule ? ` <span class="pill ctl">${esc(e.rule)}</span>` : ''}</li>`);
+      if (!x.created.length && !D.edges.some((e) => e.txs.some((d) => d.i === i)) && x.status !== 'reverted')
+        lines.push(`<li class="muted">${esc(x.fn || x.type)} on ${nameOf(`${x.chain}:${x.to}`)}: no link</li>`);
+    }
+    const seen = new Map();
+    for (const l of lines) seen.set(l, (seen.get(l) || 0) + 1);
+    return `<ul class="changes">${[...seen].map(([l, n]) => (n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l)).join('')}</ul>`;
+  }
+  // The handover question: each address that a control rule points at, and what it holds; outside addresses first.
+  function controls() {
+    const by = new Map();
+    for (const e of D.edges) if (e.rule) (by.get(e.to) || by.set(e.to, []).get(e.to)).push(e);
+    if (!by.size) return '<p class="muted">No link matched a control rule.</p>';
+    const order = [...by.keys()].sort((a, b) => (byId.get(a).kind === 'contract') - (byId.get(b).kind === 'contract'));
+    return `<ul class="changes">${order.map((id) => `<li><a href="#" data-node="${esc(id)}"><b>${nameOf(id)}</b></a> <code>${esc(short(byId.get(id).addr))}</code>${multiChain ? ` <span class="muted">chain ${byId.get(id).chain}</span>` : ''}${byId.get(id).kind === 'contract' ? '' : ' <span class="pill">outside</span>'}<ul>${by.get(id).map((e) => `<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)}</a> <span class="muted">step ${e.firstStep + 1}</span></li>`).join('')}</ul></li>`).join('')}</ul>`;
   }
   function hover(focus) {
     if (!focus && S.sel) return apply();
@@ -1207,6 +1277,9 @@ function client(place) {
       if (focus.node) hot.add(focus.node);
       for (const id of hot) nodeEls.get(id)?.classList.add('hot');
     }
+    svg.querySelectorAll('.badge').forEach((b) => b.classList.toggle('future', byId.get(b.dataset.node).firstStep > s));
+    placeLabels(focus);
+    document.querySelectorAll('.sec').forEach((b, k) => b.classList.toggle('cur', k === secOf(s)));
     $('#count').textContent = `${s + 1}/${D.steps.length}`;
     scrub.value = s;
     scrub.setAttribute('aria-valuetext', `step ${s + 1} of ${D.steps.length}`);
@@ -1223,12 +1296,62 @@ function client(place) {
     $('#stepinfo').innerHTML = `${st.id ? `<b>${esc(st.id)}</b> · ` : ''}${esc(D.txs[st.txs[0]].script)} · ${parts.join('<br>')}`;
   }
 
+  // Labels of the focused links, else of the current step's, each at the first spot along its route that
+  // overlaps no box and no other label; one that fits nowhere stays in the side panel only.
+  function placeLabels(focus) {
+    const g = L.g, taken = [...L.box.values()].map((b) => [b.x, b.y, b.x + g.w, b.y + g.h]).concat(L.badges.map((b) => [b.x - 9, b.y - 9, b.x + 9, b.y + 9]));
+    const free = (r) => r[0] >= 0 && r[2] <= L.W && taken.every((t) => r[2] <= t[0] || r[0] >= t[2] || r[3] <= t[1] || r[1] >= t[3]);
+    for (const x of edgeEls.values()) {
+      const want = focus ? x.g.classList.contains('hot') : x.label.classList.contains('now') && !x.label.classList.contains('future');
+      x.label.classList.remove('shown');
+      if (!want) continue;
+      const w = x.label.textContent.length * 6.2 + 6, h = 14, pts = x.r.pts;
+      let spot = null;
+      for (const t of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+        for (let i = 1; i < pts.length && !spot; i++) {
+          const [x1, y1] = pts[i - 1], [x2, y2] = pts[i];
+          const px = x1 + (x2 - x1) * t, py = y1 + (y2 - y1) * t;
+          const cands = y1 === y2 ? [[px, py - 4], [px, py + 13]] : [[px + w / 2 + 4, py + 4], [px - w / 2 - 4, py + 4]];
+          for (const [cx, cy] of cands) {
+            const r = [cx - w / 2, cy - 11, cx + w / 2, cy - 11 + h];
+            if (free(r)) { spot = [cx, cy, r]; break; }
+          }
+        }
+        if (spot) break;
+      }
+      if (!spot) continue;
+      x.label.setAttribute('x', spot[0]);
+      x.label.setAttribute('y', spot[1]);
+      x.label.classList.add('shown');
+      taken.push(spot[2]);
+    }
+  }
+
   const go = (s) => {
     S.step = Math.max(0, Math.min(D.steps.length - 1, s));
     S.moved = true;
     svg.classList.add('anim');
     apply();
+    if (!S.sel) panel();
   };
+  // Sections: runs of steps from one script, or one sprue unit.
+  const sections = [];
+  D.steps.forEach((st, k) => {
+    const name = D.sprue && st.id ? st.id.split('.')[0] : D.txs[st.txs[0]].script;
+    const last = sections[sections.length - 1];
+    if (last && last.name === name) last.end = k;
+    else sections.push({ name, start: k, end: k });
+  });
+  const secOf = (k) => sections.findIndex((x) => k >= x.start && k <= x.end);
+  $('#sections').append(...sections.map((x) => {
+    const b = document.createElement('button');
+    b.className = 'sec';
+    b.style.flexGrow = x.end - x.start + 1;
+    b.textContent = x.name;
+    b.title = `${x.name}: steps ${x.start + 1}–${x.end + 1}`;
+    b.onclick = () => go(x.start);
+    return b;
+  }));
   $('#prev').onclick = () => go(S.step - 1);
   $('#next').onclick = () => go(S.step + 1);
   $('#first').onclick = () => go(0);
@@ -1241,12 +1364,27 @@ function client(place) {
     resizing = setTimeout(() => { draw(); apply(); }, 120);
   });
   svg.addEventListener('click', () => select(null));
+  $('#panel').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-node],a[data-link]');
+    if (!a) return;
+    e.preventDefault();
+    select(a.dataset.node ? { node: a.dataset.node } : { link: a.dataset.link });
+  });
+  $('#paneltoggle').onclick = (e) => {
+    const on = $('main').classList.toggle('nopanel');
+    e.target.setAttribute('aria-pressed', String(!on));
+    draw();
+    apply();
+  };
+  if (window.innerWidth < 760) $('#legend').open = false;
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
     if (e.key === 'ArrowRight') { go(S.step + 1); e.preventDefault(); }
     else if (e.key === 'ArrowLeft') { go(S.step - 1); e.preventDefault(); }
-    else if (e.key === 'Home') go(0);
-    else if (e.key === 'End') go(D.steps.length - 1);
+    else if (e.key === 'Home') { go(sections[secOf(S.step)].start); e.preventDefault(); }
+    else if (e.key === 'End') { go(sections[secOf(S.step)].end); e.preventDefault(); }
+    else if (e.key === 'PageUp') { const k = secOf(S.step); go(sections[S.step > sections[k].start ? k : Math.max(0, k - 1)].start); e.preventDefault(); }
+    else if (e.key === 'PageDown') { go(sections[Math.min(sections.length - 1, secOf(S.step) + 1)].start); e.preventDefault(); }
     else if (e.key === 'Escape') select(null);
   });
 
@@ -1287,20 +1425,20 @@ export function render(model, title) {
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const s = model.stats;
   const scripts = [...new Set(model.txs.map((x) => x.script))];
-  const legend = `<div class="legend" aria-hidden="true">
+  const legend = `<details id="legend" open><summary>Legend</summary><div class="legend">
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="1 3" stroke-linecap="round" stroke-width="1.5"/></svg> created by</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-width="1.5"/></svg> set at deploy</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="6 3" stroke-width="1.5"/></svg> set by call</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-width="2"/></svg> control rule matched</span>
 <span>⚑ controlled by an outside address</span>${model.sprue ? '<span>✓ certified role; thick solid line: certificate-verified link</span>' : ''}
-<span>dashed box: not created by this deployment</span><span>a number: links merging into one entry</span><span>labels show on hover, on selection and for the current step</span></div>`;
+<span>dashed box: not created by this deployment</span><span>a number: links merging into one entry</span><span>labels show on hover, on selection and for the current step</span></div></details>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark"><title>${esc(title)}</title><style>${CSS}</style></head>
 <body><header><h1 title="${esc(scripts.join(', '))}">${esc(title)}</h1>${scripts.length > 1 ? `<p>Scripts: ${esc(scripts.join(', '))}.</p>` : ''}<p>${s.contracts} contracts, ${s.nodes - s.contracts} outside addresses, ${s.edges} links, ${s.steps} steps, from ${s.records} broadcast record files. Built offline from forge's records; links show what the records say, not what the chain holds now.</p></header>
 <div class="bar" id="topbar"><button class="tab" id="tab-map" aria-selected="true">Map</button><button class="tab" id="tab-table" aria-selected="false">Table</button>
 <span id="playbar" style="display:contents"><button id="first" aria-label="first step">⏮</button><button id="prev" aria-label="previous step">◀</button><span id="count" aria-live="polite"></span><button id="next" aria-label="next step">▶</button><button id="lastb" aria-label="last step">⏭</button>
-<input id="scrub" type="range" min="0" step="1" aria-label="step"><label class="chk"><input type="checkbox" id="lens" checked> control lens</label></span></div>
+<span id="scrubwrap"><input id="scrub" type="range" min="0" step="1" aria-label="step" title="Arrow keys: step; PageUp/PageDown: section; Home/End: section start/end"><span id="sections"></span></span><label class="chk"><input type="checkbox" id="lens" checked> control lens</label></span><button id="paneltoggle" aria-pressed="true" aria-controls="panel">Panel</button></div>
 <div id="mapview"><div id="stepinfo" aria-live="polite"></div>${legend}<main><div id="mapwrap"></div><aside id="panel" aria-live="polite"></aside></main></div>
 <section id="tableview" class="hidden"><input id="filter" type="search" placeholder="Filter transactions" aria-label="Filter transactions">
 <table><caption class="muted" style="text-align:left">One row per transaction, in order.</caption><thead><tr><th>Step</th><th>Script</th><th>Type</th><th>Target</th><th>Function</th><th>Arguments</th><th>Status</th><th>Hash</th></tr></thead><tbody id="tbody"></tbody></table></section>
