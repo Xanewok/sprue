@@ -529,6 +529,9 @@ scenario_attended() {
   refused 'not clean' tty no "${run[@]}"
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
+  git config core.autocrlf true; rm README.md; git checkout -q README.md
+  refused 'other line endings than the commit' tty no "${run[@]}"
+  git config --unset core.autocrlf; rm README.md; git checkout -q README.md
   DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
   # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
   local plain; plain=$(<"deployments/$net/network.json")

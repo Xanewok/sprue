@@ -19,6 +19,10 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 
 ## Your own project
 
+**On Windows, before you clone,** run `git config --global core.autocrlf false`, which applies to all
+your repositories. Otherwise Git for Windows converts line endings as it checks files out: the files
+then differ from the commit, the build is not the commit's, and an attended `run` refuses.
+
 1. Copy `sprue.json` and `.gitignore` from the example, and merge its `foundry.toml` into yours: the
    `fs_permissions` and the `[rpc_endpoints]` aliases (its `src = "script"` suits only the example).
    `sprue` runs from any directory below `sprue.json`, and refuses unless git ignores

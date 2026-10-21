@@ -119,7 +119,7 @@ const isFile = (f) => {
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
 function exec(bin, args, stdio = ["ignore", "pipe", "inherit"]) {
-  const r = spawnSync(bin, args, { encoding: "utf8", stdio });
+  const r = spawnSync(bin, args, { encoding: "utf8", stdio, maxBuffer: 1 << 28 });
   if (r.error) fail(1, `cannot run ${bin}: ${r.error.message}`);
   return { status: r.status ?? 1, out: (r.stdout ?? "").replace(/[\r\n]+$/, "") };
 }
@@ -888,6 +888,11 @@ async function main(argv) {
   let sent = "";
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
+    // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
+    // After each plan: its forge may have just installed a submodule.
+    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(must("git", ["ls-files", "--eol", "--recurse-submodules", ":/"], "refusing: git ls-files failed"))) {
+      fail(2, "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again");
+    }
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);
