@@ -15,6 +15,11 @@ writing journals, with no lock held.
 
 Fixed: `run` refuses a line whose forge build goes elsewhere than `out/`, where the units read artifacts.
 
+Fixed: `plan`, `run` and `rehearse` no longer read the saved `graph.generated.json` to judge a target, to
+check a rehearsal's certificates against its forks, or to choose which journals an attended run
+leaves out of its git status and offers tags for. They use the graph itself (a target it lacks exits 2
+with a one-line message), and a rehearsal checks every journal of its copy. Only `mermaid` reads the saved file.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

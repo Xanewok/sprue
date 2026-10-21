@@ -265,6 +265,9 @@ async function graph(GRAPH, tag, sig, rest = [], env = {}) {
   const r = await forgeShowingCompile(["script", GRAPH, "--sig", sig, ...rest], env);
   if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
   if (r.status !== 0) {
+    // The graph is the authority on its targets: its own refusal is a usage error, not a forge failure.
+    const m = /cannot reach ([^\n]+?): unknown target/.exec(r.text);
+    if (m) fail(2, `cannot reach ${m[1]}: unknown target; see ${NAME} list`);
     err(`${r.text.replace(r.shown, "")}\n`);
     throw new Exit(1);
   }
@@ -449,7 +452,6 @@ async function main(argv) {
   if (DEVICE.test(network)) fail(2, `refusing network '${network}': Windows reserves the name; rename its directory`);
   const netfile = `${DEPLOYMENTS}/${network}/network.json`;
   if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
-  if (!stopOnly) known(target);
   // rehearse locks its copy before it stops a kept fork or restages a file that a run of it may use. A
   // plan of a copy locks too, since its simulations write the copy's journals.
   const locked = rehearsing ? `${rehearsal}-${network}` : network;
@@ -596,8 +598,9 @@ async function main(argv) {
     writeFileSync(`${dir}/network.json`, `${JSON.stringify(net, null, 2)}\n`);
     // A copied check keeps its unit done without reading the fork, so the fork must hold the code it
     // certified: a --block before the deployment would show a contract that is not there as done.
-    for (const unit of new Set(exported().nodes.map((n) => n.unit))) {
-      const checked = readJson(`${dir}/${unit}.json`)?.checked;
+    for (const f of readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "network.json" && !/\.(input|metadata)\.json$/.test(f)).sort()) {
+      const unit = f.slice(0, -5);
+      const checked = readJson(`${dir}/${f}`)?.checked;
       if (!isObject(checked)) continue;
       for (const [key, hash] of Object.entries(checked)) {
         const role = key.endsWith("CodeHash") ? key.slice(0, -"CodeHash".length) : "";
@@ -667,7 +670,12 @@ async function main(argv) {
     const s = must("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], "refusing: git status failed");
     return s === "" ? [] : s.split("\n");
   };
-  const units = new Set(exported().nodes.map((n) => n.unit).filter((u) => typeof u === "string" && u));
+  // Only an attended run filters its own journals from git status and offers tags. The units come from
+  // the graph, which the run plans with, not from a saved export that may lag it.
+  const units = new Set();
+  if (attended) {
+    for (const n of JSON.parse((await graph(GRAPH, "GRAPH", "graph()")).join("\n")).nodes) if (typeof n.unit === "string" && n.unit) units.add(n.unit);
+  }
   // Local: every chain of the network is listed in sprue.json's chains.local, so a send needs no
   // person. This only picks the signer. `plan`, which precedes every send, refuses a malformed list.
   let anvil = false;

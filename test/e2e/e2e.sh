@@ -184,6 +184,24 @@ scenario_refuses() {
   echo "ok  usage and configuration errors exit 2 before any chain is touched"
 }
 
+# The plan is the graph script's, so a saved export that no longer matches the graph decides nothing: a
+# target the graph has runs, one it lacks is refused by the graph with exit 2 and no forge trace.
+stale_export() { jq "$1" script/deploy/graph.generated.json >"$W/j" && mv "$W/j" script/deploy/graph.generated.json; }
+scenario_live_graph() {
+  local out
+  stale_export '.nodes |= map(select(.unit != "vault"))'
+  exits 0 G plan local vault.check
+  git checkout -q script/deploy/graph.generated.json
+  stale_export '.nodes += [(.nodes[0] | .id = "ghost.deploy")]'
+  out=$(G plan local ghost.deploy 2>&1 </dev/null) && die "live graph: a target the graph lacks was planned"
+  git checkout -q script/deploy/graph.generated.json
+  grep -q '^sprue: cannot reach ghost.deploy: unknown target; see sprue list$' <<<"$out" || die "live graph: the unknown target was not named: $out"
+  ! grep -q 'script failed\|Traceback\|Error:' <<<"$out" || die "live graph: the refusal shows forge's trace: $out"
+  refused 'unknown target' G plan local ghost.deploy
+  refused 'cannot reach ghost target: unknown target' G plan local 'ghost target'
+  echo "ok  the plan is the live graph's: a target absent from the saved export runs, one absent from the graph exits 2 cleanly"
+}
+
 # A <dir>/cast (default ./stub) that makes every Anvil report itself as Geth, so the runner cannot set
 # its clock.
 geth_stub() {
@@ -460,6 +478,8 @@ scenario_two_chain() {
 scenario_rehearse() {
   local d=deployments/rehearsal-main dead=0x000000000000000000000000000000000000dEaD b0 out url
   network main 1 "$(($(now "$LIVE") + 1000))"
+  # Only a unit's journal certifies: an input that has a `checked` object does not.
+  jq '. + {checked: {token: "'"$dead"'", tokenCodeHash: "0x00"}}' deployments/main/vault.input.json >"$W/j" && mv "$W/j" deployments/main/vault.input.json
   cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
   b0=$(cast block-number --rpc-url "$LIVE")
   local go=(env DEPLOYER="$dead" G rehearse)
@@ -564,11 +584,17 @@ scenario_rehearse() {
   # A copied check whose code the fork lacks, as at a --block before its deployment, is refused.
   cp "$d/token.json" deployments/main/token.json
   refused 'lacks the code token.json certifies' "${go[@]}" main token.check
+  # The certificates are those of the copy's journals, whatever units the saved export names.
+  cp "$d/token.json" deployments/main/token.json
+  stale_export '(.nodes[] | select(.unit == "token") | .unit) = "renamed"'
+  refused 'lacks the code token.json certifies' "${go[@]}" main vault.check
+  git checkout -q script/deploy/graph.generated.json
   # A role certified on another chain is read on that chain's fork, and this network forks none.
   jq '.checked.tokenChainId = 99' "$d/token.json" >deployments/main/token.json
   out=$("${go[@]}" main token.check 2>&1) || true
   ! grep -q 'lacks the code' <<<"$out" || die "rehearse: a role was read on another chain's fork"
   rm deployments/main/token.json
+  refused 'cannot reach nope.check: unknown target' "${go[@]}" main nope.check
   refused 'usage:' "${go[@]}" --wait main token.check
   network hand 1; mkdir -p deployments/rehearsal-hand; echo mine >deployments/rehearsal-hand/notes
   refused 'no rehearse staged it' "${go[@]}" hand token.check
@@ -697,6 +723,8 @@ scenario_tag() {
   # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
   live_node $((PORT + 5)) 10
   echo 'deployments/rehearsal*/' >>.gitignore
+  # The run takes its units from the graph, not the saved export, which here names the token's unit otherwise.
+  stale_export '(.nodes[] | select(.unit == "token") | .unit) = "renamed"'
   network prod 10; git add -A; git commit -qm prod
   # A rehearsal network's sends must reach Anvil, here one that answers as Geth.
   network rehearsal-prod 10
@@ -795,7 +823,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
+for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
