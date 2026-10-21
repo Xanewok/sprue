@@ -282,9 +282,10 @@ async function graph(GRAPH, tag, sig, rest = [], env = {}) {
 }
 
 // The question goes to the terminal, never to stdin or stdout, so a pipe cannot answer it. A terminal
-// that cannot open or has no more input is no answer.
+// that cannot open or has no more input is no answer. Windows documents OPEN_EXISTING for a console
+// handle, and "w" asks for CREATE_ALWAYS.
 function openTty() {
-  try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", "w")]; } catch {}
+  try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", WIN ? "r+" : "w")]; } catch {}
 }
 function ask(prompt) {
   const tty = openTty();
