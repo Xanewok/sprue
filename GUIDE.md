@@ -38,9 +38,9 @@ then differ from the commit, the build is not the commit's, and an attended `run
    the example's [`DeployGraph.s.sol`](examples/token-vault/script/deploy/DeployGraph.s.sol).
 
 5. Save the graph beside its script: `sprue json > script/deploy/graph.generated.json`. Save it again
-   whenever you add, rename or rewire a step, because `plan` and `run` refuse a target this file lacks.
-   `sprue list` prints the targets, the nodes nothing depends on, and `sprue mermaid [target]` draws
-   the saved graph.
+   whenever you add, rename or rewire a step, because `sprue mermaid [target]` draws this saved file;
+   `plan`, `run` and `rehearse` read the graph itself. `sprue list` prints the targets, the nodes
+   nothing depends on.
 6. Plan with `sprue plan <network> <target>`, which reads the default chain's `rpc` and sends nothing.
 7. Run with `sprue run <network> <target>`. The deployer sends the steps that name no sender: `DEPLOYER`,
    else `network.json`'s pinned `deployer`, else the run's own signer. The run prints it and refuses at
