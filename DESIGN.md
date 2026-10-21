@@ -54,6 +54,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 |---|---|
 | A role is deployed only if its journal lacks it or its recorded deployment can no longer land; a pending intent is resent only as the same transaction. | `CoreUnit.t.sol` `test_deployRole_aPendingIntent_isSentAgainOnlyAsTheSameTransaction`; e2e `scenario_kill` |
 | A journaled CREATE that reverted on chain is not sent again unless its address is retired. | e2e `scenario_reverted` |
+| `run` does not send again a step whose last send holds another transaction the chain reverted, until that record is removed. | e2e `scenario_reverted_call` |
 | The intent is journaled before the address; a simulation outside a rehearsal network journals nothing. | `test_deployRole_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment`, `test_deployRole_aSimulationJournalsNothing` |
 | A dry run writes no certificate (outside a rehearsal network). | `Guards.t.sol` `test_certify_writesNothingOnADryRun` |
 | A rerun of a finished target changes no block, nonce or journal bytes. | e2e `scenario_rerun`; `test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity`; `CertifyIdentity.t.sol` |

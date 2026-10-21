@@ -1093,6 +1093,23 @@ async function main(argv) {
         if (cacheDir && config.cache_path !== cacheDir) {
           fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
         }
+        // A transaction that the chain reverted though forge's simulation passed would revert again at every
+        // rerun while its step is due. The units refuse a journaled CREATE, which `retired` resolves; this
+        // refuses the rest of the step's last send on the line's chain. An RPC without the receipt passes.
+        if (rpc) {
+          const script = cmd.args[1].split(":")[0].split("/").pop();
+          const record = `${config.broadcast}/${script}/${id}/${cmd.args[cmd.args.indexOf("--sig") + 1].split("(")[0]}-latest.json`;
+          const txs = readJson(record)?.transactions;
+          for (const t of Array.isArray(txs) ? txs : []) {
+            if (t?.transactionType === "CREATE" || typeof t?.hash !== "string") continue;
+            const r = exec("cast", ["rpc", "eth_getTransactionReceipt", t.hash, "--rpc-url", rpc], ["ignore", "pipe", "ignore"]);
+            let status;
+            try { status = JSON.parse(r.out)?.status; } catch {}
+            if (r.status === 0 && status === "0x0") {
+              fail(2, `refusing: ${t.hash}, of this step's last send (${record}), reverted on chain ${id} though forge's simulation passed, and a resend would most likely revert too: fix the cause (evm_version, gas, or state), then remove ${record}, whose timestamped copy forge keeps beside it: ${line}`);
+            }
+          }
+        }
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
       }

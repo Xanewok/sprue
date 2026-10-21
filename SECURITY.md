@@ -36,8 +36,10 @@ end-to-end scenario for each invariant.
   for a transaction of a broadcast record, is not sent again: the chain ran it otherwise than forge's
   simulation (its EVM version, its gas rules, or state that changed before inclusion), and a resend
   would most likely revert too. A person fixes the cause and lists the address in the journal's
-  `retired`. A call that reverts on chain
-  is resent by every rerun while its step is due.
+  `retired`. `run` refuses, the same way, a step whose last send on the line's chain holds another
+  transaction that the chain reverted; a person fixes the cause and removes that record,
+  `<fn>-latest.json`, whose timestamped copy forge keeps. A line run by hand, and a step that makes its
+  own forks, skip this check.
 - A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
   `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
 
@@ -65,8 +67,8 @@ end-to-end scenario for each invariant.
   check refuses a send simulated before the sender's own last transaction. It cannot see another
   account's change that such a node hides, so a step can repeat work another sender just did: sprue
   assumes an RPC with a consistent head (DESIGN.md).
-- A failing RPC stops the runner, but for the check of a reverted CREATE, which passes when the RPC
-  cannot show the transaction. A receipt that cannot be read while a step journals its deployment
+- A failing RPC stops the runner, but for the checks of a reverted transaction, which pass when the
+  RPC cannot show it. A receipt that cannot be read while a step journals its deployment
   is left out of the journal, and the step goes on.
 
 An external security audit is not part of this project.

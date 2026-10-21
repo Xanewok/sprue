@@ -504,8 +504,35 @@ scenario_reverted() {
   jq --arg t "$t" '.retired = [$t]' deployments/reverted/token.json >"$W/j" && mv "$W/j" deployments/reverted/token.json
   out=$(FOUNDRY_EVM_VERSION=paris G run reverted token.check 2>&1) || die "reverted: the fixed build failed: $(tail -c 600 <<<"$out")"
   [ "$(cast codesize "$(jq -r .token deployments/reverted/token.json)" --rpc-url "$old")" != 0 ] || die "reverted: the fixed build has no code"
-  kill "$pid"
+  kill "$pid"; wait "$pid" 2>/dev/null || true
   echo "ok  reverted a CREATE that reverted on chain is not sent again; a fixed build deploys once the address is retired"
+}
+
+# A call that forge's simulation passes and the chain reverts, here the token's PUSH0 once its chain's state
+# moves to a node before Shanghai: the rerun refuses instead of sending it again, and names the record whose
+# removal lets it send.
+scenario_reverted_call() {
+  local old=http://127.0.0.1:$((PORT + 8)) out rc pid state n rec=broadcast/DeployVault.s.sol/1337/fund-latest.json
+  anvil --port $((PORT + 8)) --chain-id 1337 --silent >/dev/null 2>&1 & pid=$!; PIDS="$PIDS $pid"
+  for _ in $(seq 1 100); do cast chain-id --rpc-url "$old" >/dev/null 2>&1 && break; sleep 0.1; done
+  network revcall 1337
+  G run revcall vault.deploy >/dev/null 2>>log || die "reverted_call: the deploys failed"
+  state=$(cast rpc anvil_dumpState --rpc-url "$old" | tr -d '"')
+  kill "$pid"; wait "$pid" 2>/dev/null || true
+  anvil --port $((PORT + 8)) --chain-id 1337 --hardfork paris --silent >/dev/null 2>&1 & pid=$!; PIDS="$PIDS $pid"
+  for _ in $(seq 1 100); do cast chain-id --rpc-url "$old" >/dev/null 2>&1 && break; sleep 0.1; done
+  cast rpc anvil_loadState "$state" --rpc-url "$old" >/dev/null
+  n=$(nonce "$old")
+  rc=0; out=$(G run revcall vault.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && grep -aq '^Error: Transaction Failure' <<<"$out" || die "reverted_call: the first fund exited $rc: $(tail -c 600 <<<"$out")"
+  [ "$(nonce "$old")" = $((n + 1)) ] || die "reverted_call: the fund was not sent once"
+  refused "of this step's last send ($rec), reverted on chain 1337" G run revcall vault.check
+  [ "$(nonce "$old")" = $((n + 1)) ] || die "reverted_call: the rerun sent the call again"
+  rm "$rec"
+  rc=0; out=$(G run revcall vault.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && [ "$(nonce "$old")" = $((n + 2)) ] || die "reverted_call: without its record the call was not sent: $(tail -c 600 <<<"$out")"
+  kill "$pid"; wait "$pid" 2>/dev/null || true
+  echo "ok  reverted_call a call that reverted on chain is not sent again until its record is removed"
 }
 
 # An RPC that answers from a node a block behind the one that took each send: each run stops at a step
@@ -926,7 +953,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order; tag and question need attended before
 # them. Called outside a condition, so that set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill concurrent reverted lag two_chain rehearse attended tag question; do
+for s in mermaid refuses grammar failure rerun recover wait kill concurrent reverted reverted_call lag two_chain rehearse attended tag question; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
