@@ -99,7 +99,8 @@ const segments = (routes) =>
 
 test('links that share no end never share a track, however many cross one gap', () => {
   for (const width of [1060, 390]) {
-    const { g, box, routes } = place(dense(), GEOM, width);
+    const { g, box, routes, W } = place(dense(), GEOM, width);
+    assert.ok(W <= width, `the map fits width ${width}`);
     const segs = segments(routes);
     for (const s of segs)
       for (const [id, b] of box)
