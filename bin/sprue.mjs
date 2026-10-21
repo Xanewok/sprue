@@ -51,7 +51,8 @@ Anvil or a chains.local id on every chain; any other network refuses a developme
 interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
-.env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
+.env and ~/.foundry/foundry.toml unchanged since before the dry run, and the network's files since after
+it. Nothing skips the question.
 
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
@@ -738,6 +739,9 @@ async function main(argv) {
   const ours = new Set();
   const digest = (f) => (isFile(f) ? [`${f} ${createHash("sha256").update(readFileSync(f)).digest("hex")}`] : []);
   const tree = () => [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
+  // git status shows a journal as modified or ignored, not each edit to it, and `changes` leaves journals
+  // out: the network's files are compared by content.
+  const files = () => readdirSync(`${DEPLOYMENTS}/${network}`).flatMap((f) => digest(`${DEPLOYMENTS}/${network}/${f}`)).join("\n");
   const head = () => must("git", ["rev-parse", "HEAD"], "refusing: git rev-parse failed");
 
   // Repeats forge's last `Error:` line, where a long run buries it, and exits with forge's code.
@@ -781,6 +785,8 @@ async function main(argv) {
     if (changes().some((l) => !ours.has(l))) process.env.DEPLOY_TREE_DIRTY = "1";
     else delete process.env.DEPLOY_TREE_DIRTY;
     const dry = forge(cmd.args, cmd.env);
+    // From after the dry run, which writes them: a check's certificate, a rehearsal network's journals.
+    const shown = files();
     out(`${dry.text}\n`);
     if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
@@ -807,6 +813,7 @@ async function main(argv) {
     if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
     if (head() !== sha) fail(2, "refusing: HEAD moved since before the dry run; run again");
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
+    if (files() !== shown) fail(2, `refusing: a file in ${DEPLOYMENTS}/${network}/ changed since the dry run; run again`);
     const pre = new Set(porcelain());
     await step(cmd);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id

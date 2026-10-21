@@ -13,11 +13,12 @@ end-to-end scenario for each invariant.
   passed empty as an assignment before `forge`.
 - An attended send needs `yes` typed at the terminal. It refuses if, from before the dry run to the
   answer, the sender's nonce on any chain of the network, git HEAD, the lines of
-  `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed. The status leaves out the
-  network's `<unit>.json` and `*.metadata.json` files, which the run writes, so a new file there is
-  not seen; a status line names a path and its state, not its contents, so an edit to a file already
-  modified or untracked is not seen either. A clean checkout at the start keeps that list short;
-  `--allow-dirty` waives it, and is refused when any chain of the network is live.
+  `git status --porcelain`, `.env` or `~/.foundry/foundry.toml` changed, or, from after the dry run, the
+  contents of the files in the network's directory. The status leaves out the network's `<unit>.json`
+  and `*.metadata.json` files, which the run writes; a status line names a path and its state, not its
+  contents, so an edit elsewhere to a file already modified or untracked is not seen. A clean checkout
+  at the start keeps that list short; `--allow-dirty` waives it, and is refused when any chain of the
+  network is live.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its
