@@ -1089,7 +1089,7 @@ main.nopanel #panel{display:none}#paneltoggle[aria-pressed=false]{opacity:.7}
 ul.changes{margin:4px 0 8px;padding-left:16px}ul.changes li{margin:2px 0}ul.changes ul{padding-left:14px}#panel a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--muted)}
 label.chk{display:flex;gap:4px;align-items:center;font-size:13px}
 #stepinfo{padding:6px 16px;font-size:13px;color:var(--muted);min-height:2.2em}
-#stepinfo b{color:var(--fg)}.rev{color:var(--bad);font-weight:600}
+#stepinfo b{color:var(--fg)}#stepinfo summary{cursor:pointer}ol.txlist{margin:2px 0 0;padding-left:22px}.rev{color:var(--bad);font-weight:600}
 main{display:flex;gap:0;align-items:stretch}
 #mapwrap{flex:1 1 auto;overflow:auto;min-height:420px;max-height:calc(100vh - 150px)}
 #panel{flex:0 0 340px;border-left:1px solid var(--line);background:var(--panel);padding:12px 14px;overflow:auto;max-height:calc(100vh - 150px);font-size:13px}
@@ -1261,7 +1261,7 @@ function client(place) {
   }
 
   // The page opens on the whole deployment; a step's marks appear once the reader moves.
-  const S = { step: D.steps.length - 1, sel: null, lens: true, moved: false };
+  const S = { step: D.steps.length - 1, sel: null, lens: true, moved: false, list: false };
   const scrub = $('#scrub');
   scrub.max = D.steps.length - 1;
 
@@ -1395,7 +1395,22 @@ function client(place) {
       const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => d.i === i)).length;
       return `${what}${made}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${x.status === 'reverted' ? ' · <span class="rev">reverted: created and bound nothing</span>' : ''}`;
     });
-    $('#stepinfo').innerHTML = `${st.id ? `<b>${esc(st.id)}</b> · ` : ''}${esc(D.txs[st.txs[0]].script)} · ${parts.join('<br>')}`;
+    const head = `${st.id ? `<b>${esc(st.id)}</b> · ` : ''}${esc(D.txs[st.txs[0]].script)} · `;
+    if (parts.length === 1) {
+      $('#stepinfo').innerHTML = head + parts[0];
+      return;
+    }
+    // Several transactions: one summary line, so the map does not jump while stepping; the list on demand.
+    const xs = st.txs.map((i) => D.txs[i]), kinds = new Map();
+    for (const x of xs) {
+      const k = x.type === 'CALL' ? (x.fn || '(no data)').split('(')[0] : `${x.type} ${x.contractName || ''}`.trim();
+      kinds.set(k, (kinds.get(k) || 0) + 1);
+    }
+    const made = xs.reduce((a, x) => a + x.created.length, 0), rev = xs.filter((x) => x.status === 'reverted').length;
+    const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => stepTx.has(d.i))).length;
+    const what = [...kinds].slice(0, 3).map(([k, n]) => esc(k) + (n > 1 ? ` ×${n}` : '')).join(', ') + (kinds.size > 3 ? `, +${kinds.size - 3} more` : '');
+    $('#stepinfo').innerHTML = `<details${S.list ? ' open' : ''}><summary>${head}<b>${xs.length} transactions</b>: ${what}${made ? ` · creates ${made}` : ''}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${rev ? ` · <span class="rev">${rev} reverted</span>` : ''}</summary><ol class="txlist">${parts.map((p) => `<li>${p}</li>`).join('')}</ol></details>`;
+    $('#stepinfo details').ontoggle = (e) => (S.list = e.target.open);
   }
 
   // Labels of the focused links, else of the current step's, each at the first spot along its route that
