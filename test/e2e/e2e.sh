@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home"
 }
 trap cleanup EXIT
 
@@ -63,17 +63,30 @@ setup() {
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
   endpoints foundry.toml
+  # The forks that rehearse starts cache what they read under ~/.foundry, so the runner gets a home of
+  # its own, outside the repository, that shares only the compilers.
+  mkdir -p "$W.home/.foundry" "$W.home/.local/share"
   # A command of its own, so that the pseudo-terminal can run it.
-  # The attended scenario changes HOME, which a version manager's node shim cannot survive: name the binary.
-  mkdir -p bin; printf '#!/bin/sh\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
+  # A version manager's node shim cannot survive another HOME: name the binary.
+  mkdir -p bin; printf '#!/bin/sh\nHOME=%s; export HOME\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$W.home" "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
+  # Linked after the build, which may be the one that downloads solc.
+  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W.home/.svm"
+  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W.home/.local/share/svm"
+  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W.home/Library/Application Support"
+    ln -s "$HOME/Library/Application Support/svm" "$W.home/Library/Application Support/svm"; }
+  # The attended and tag scenarios sign with this keystore, in the runner's home.
+  HOME=$W.home cast wallet import e2e --mnemonic 'test test test test test test test test test test test junk' \
+    --unsafe-password "$KEYSTORE_PW" >/dev/null
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
   node lib/sprue/bin/sprue.mjs json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
   # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
   echo 'broadcast/Deploy*/1/' >>.gitignore
+  # The scenarios' stderr, which must not make an attended run's tree dirty whichever scenarios run.
+  echo /log >>.gitignore
   git add -A; git commit -qm example
   start_anvil "$PORT" 31337; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
@@ -396,7 +409,8 @@ scenario_rehearse() {
   "${go[@]}" --keep main vault.check >"$W.int" 2>&1 & local pid=$! rc=0 step=
   for _ in $(seq 1 1500); do
     # awk reads all of ps: an early exit would end ps with SIGPIPE, which pipefail makes fatal.
-    step=$(ps -eo pid=,args= | awk '/forge script .* rehearsal-main .*--broadcast/ && !/awk/ && !p {p = $1} END {if (p) print p}')
+    # Only this runner's child: another suite on the machine runs the same commands.
+    step=$(ps -eo pid=,ppid=,args= | awk -v r="$pid" '$2 == r && /forge script .* rehearsal-main .*--broadcast/ && !p {p = $1} END {if (p) print p}')
     [ -n "$step" ] && break; sleep 0.02
   done
   [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
@@ -412,7 +426,7 @@ scenario_rehearse() {
   local silent=$!; PIDS="$PIDS $silent"
   "${go[@]}" --keep mute token.check >/dev/null 2>&1 & pid=$!
   for _ in $(seq 1 300); do
-    fork=$(ps -eo pid=,args= | awk -v u="--fork-url wide " 'index($0, u) && !/awk/ && !p {p = $1} END {if (p) print p}')
+    fork=$(ps -eo pid=,ppid=,args= | awk -v r="$pid" -v u="--fork-url wide " '$2 == r && index($0, u) && !p {p = $1} END {if (p) print p}')
     [ -n "$fork" ] && break; sleep 0.05
   done
   [ -n "$fork" ] || die "rehearse: no fork of the silent upstream started"
@@ -497,15 +511,6 @@ scenario_rehearse() {
 scenario_attended() {
   command -v python3 >/dev/null || { echo "skip attended: it needs python3"; return; }
   local net=rehearsal-live out rc n0 account=e2e
-  # The keystore lives in a home of its own; the compilers are shared.
-  mkdir -p "$W/home/.foundry" "$W/home/.local/share"
-  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
-  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W/home/.local/share/svm"
-  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W/home/Library/Application Support"
-    ln -s "$HOME/Library/Application Support/svm" "$W/home/Library/Application Support/svm"; }
-  export HOME=$W/home
-  cast wallet import "$account" --mnemonic 'test test test test test test test test test test test junk' \
-    --unsafe-password "$KEYSTORE_PW" >/dev/null
   network "$net" 1; network livenet 1
   git add -A; git commit -qm networks
   unset CI
@@ -612,6 +617,7 @@ scenario_attended() {
 # push. A rerun offers only what is missing; a failed push keeps the run's status; a tag never moves.
 scenario_tag() {
   command -v python3 >/dev/null || { echo "skip tag: it needs python3"; return; }
+  unset CI
   local tag=deploy/prod/token out first commit prod=http://127.0.0.1:$((PORT + 5))
   # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
   live_node $((PORT + 5)) 10
@@ -709,18 +715,13 @@ scenario_mermaid() {
   echo "ok  mermaid starts with flowchart TD and has one subgraph per unit"
 }
 
+for s in ${E2E_ONLY:-}; do declare -F "scenario_$s" >/dev/null || die "E2E_ONLY: no scenario $s"; done
 setup
 cd "$W"
-scenario_mermaid
-scenario_refuses
-scenario_grammar
-scenario_failure
-scenario_rerun
-scenario_recover
-scenario_wait
-scenario_kill
-scenario_two_chain
-scenario_rehearse
-scenario_attended
-scenario_tag
+# E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
+# set -e holds inside each.
+for s in mermaid refuses grammar failure rerun recover wait kill two_chain rehearse attended tag; do
+  if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
+  "scenario_$s"
+done
 echo "PASS e2e"
