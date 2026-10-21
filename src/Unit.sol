@@ -27,7 +27,7 @@ abstract contract Unit is Deployment, Declares {
         VmSafe.DirEntry[] memory files = vm.readDir(dir);
         uint256 found;
         for (uint256 i; i < files.length; ++i) {
-            string[] memory parts = vm.split(files[i].path, "/");
+            string[] memory parts = vm.split(vm.replace(files[i].path, "\\", "/"), "/");
             string memory name = parts[parts.length - 1];
             if (vm.indexOf(name, "Deploy") == 0 && _endsWith(name, ".s.sol")) {
                 script = string.concat(dir, name);

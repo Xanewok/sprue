@@ -46,7 +46,8 @@ function stageInputs(string memory from, string memory to) {
     cheats.createDir(dir, true);
     VmSafe.DirEntry[] memory files = cheats.readDir(string.concat(root, "/", from));
     for (uint256 i; i < files.length; ++i) {
-        string[] memory path = cheats.split(files[i].path, "/");
+        // On Windows, readDir joins each name below the given root with `\`.
+        string[] memory path = cheats.split(cheats.replace(files[i].path, "\\", "/"), "/");
         if (!files[i].isDir) cheats.copyFile(files[i].path, string.concat(dir, "/", path[path.length - 1]));
     }
 }

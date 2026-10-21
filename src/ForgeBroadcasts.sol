@@ -81,20 +81,20 @@ abstract contract ForgeBroadcasts is Journal {
                 string.concat("cannot rule out a stray ", artifact, ": ", files[i].errorMessage)
             );
             if (files[i].isDir || files[i].depth != 3 || !_endsWith(files[i].path, ".json")) continue;
-            string memory record = vm.readFile(files[i].path);
+            // A refusal names it: on Windows, readDir joins each name below the root with `\`.
+            string memory path = vm.replace(files[i].path, "\\", "/");
+            string memory record = vm.readFile(path);
             if (_has(record, ".chain")) {
-                found = _createsIn(found, artifact, files[i].path, record, "");
+                found = _createsIn(found, artifact, path, record, "");
                 continue;
             }
             // A multi-chain run's record holds one run per chain.
             require(
                 _has(record, ".deployments"),
-                string.concat("cannot rule out a stray ", artifact, ": ", files[i].path, " names no chain")
+                string.concat("cannot rule out a stray ", artifact, ": ", path, " names no chain")
             );
             for (uint256 k; _has(record, string.concat(".deployments[", vm.toString(k), "]")); ++k) {
-                found = _createsIn(
-                    found, artifact, files[i].path, record, string.concat(".deployments[", vm.toString(k), "]")
-                );
+                found = _createsIn(found, artifact, path, record, string.concat(".deployments[", vm.toString(k), "]"));
             }
         }
     }
