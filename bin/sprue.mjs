@@ -25,6 +25,8 @@ const LOOPBACK = /^http:\/\/127\.0\.0\.1:[0-9]+$/;
 // A network names a directory, and Windows reserves these names in any case.
 const DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const WIN = process.platform === "win32";
+// Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
+const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
 const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
@@ -158,7 +160,7 @@ function forge(args, env) {
     closeSync(fd);
   }
   const text = readFileSync(file, "utf8");
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, RM_TREE);
   if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
   return { status: r.status ?? 1, text: text.replace(/\n+$/, "") };
 }
@@ -199,7 +201,7 @@ function forgeShowingCompile(args, env) {
       clearInterval(timer);
       const text = follow();
       closeSync(fd);
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, RM_TREE);
       resolve({ status: status ?? 1, text: text.replace(/\n+$/, ""), shown, error });
     };
     child.on("error", (e) => end(1, e));
@@ -515,7 +517,7 @@ async function main(argv) {
     if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`);
 
     // .sprue/ holds the lock.
-    for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, { recursive: true, force: true });
+    for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, RM_TREE);
     const forks = [];
     const record = (kept = forks) => ({ source, forks: kept.map(({ child, ...f }) => f) });
     save(record());
