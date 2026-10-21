@@ -113,3 +113,14 @@ test('links that share no end never share a track, however many cross one gap', 
       }
   }
 });
+
+test('short lanes of one chain share a row, each as wide as its boxes', () => {
+  const lanes = ['1|outside', '1|A.s.sol', '1|B.s.sol', '1|C.s.sol'];
+  const nodes = [['a0', 'A'], ['b0', 'B'], ['b1', 'B'], ['c0', 'C'], ['c1', 'C'], ['c2', 'C']].map(([id, s], k) => ({ id: `1:${id}`, chain: 1, kind: 'contract', laneKey: `1|${s}.s.sol`, ord: k }));
+  const { box, lanes: placed } = place({ nodes, edges: [{ from: '1:b0', to: '1:a0' }], lanes }, GEOM, 1060);
+  const [a, b, c] = placed;
+  assert.equal(a.y0, b.y0, 'A and B fit in one row of four columns');
+  assert.ok(c.y0 > b.y1, 'C does not fit beside them');
+  assert.ok(a.x1 <= b.x0, 'lanes on one row do not overlap');
+  assert.equal(new Set([...box.values()].map((p) => p.y)).size, 2);
+});

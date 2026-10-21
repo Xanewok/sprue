@@ -815,21 +815,36 @@ export function place(D, G, avail) {
   }
 
   function attempt(cols) {
+    // Shelves: consecutive lanes of one chain that fit side by side in one row share it, in deploy order, so a
+    // short lane leaves no empty row behind it. A lane alone on its shelf may use any column.
+    const shelves = [];
+    for (const l of laneList) {
+      const need = Math.min(l.nodes.length, cols), s = shelves[shelves.length - 1];
+      if (s && s.chain === l.chain && s.used + need <= cols) {
+        l.c0 = s.used;
+        s.used += need;
+        s.lanes.push(l);
+      } else {
+        l.c0 = 0;
+        shelves.push({ chain: l.chain, lanes: [l], used: need });
+      }
+      l.shelf = shelves[shelves.length - 1];
+    }
+    for (const l of laneList) l.span = l.shelf.lanes.length > 1 ? l.nodes.length : cols;
     // Columns: barycenter sweeps over the lanes. A lane that fits in one row puts each node at the free column
     // nearest its barycenter, so linked nodes line up; a longer lane spreads over every column, filling column
     // by column, so a node's x still follows its barycenter.
     const cell = new Map();
     const assign = (l, bary) => {
       const n = l.nodes.length;
-      if (n <= cols) {
+      if (n <= l.span) {
         l.rows = 1;
-        let prev = -1;
+        let prev = l.c0 - 1;
         l.nodes.forEach((m, k) => {
-          const want = bary ? Math.round(bary.get(m.id)) : k;
-          prev = Math.min(Math.max(prev + 1, want), cols - (n - k));
+          const want = bary ? Math.round(bary.get(m.id)) : l.c0 + k;
+          prev = Math.min(Math.max(prev + 1, want), l.c0 + l.span - (n - k));
           cell.set(m.id, { c: prev, r: 0 });
         });
-        l.used = prev + 1;
         return;
       }
       const at = new Map();
@@ -839,7 +854,6 @@ export function place(D, G, avail) {
         cell.set(m.id, { c, r: at.get(c) - 1 });
       });
       l.rows = Math.max(...at.values());
-      l.used = cols;
     };
     laneList.forEach((l) => assign(l));
     const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
@@ -860,7 +874,7 @@ export function place(D, G, avail) {
     vw[0] = gap0;
     const widths = new Map();
     for (let it = 0; ; it++) {
-      const L = route(cols, cell, vw, widths);
+      const L = route(cols, shelves, cell, vw, widths);
       let grew = false;
       for (const [key, n] of L.counts) {
         const need = 2 * (SP * Math.ceil((n - 1) / 2) + 6);
@@ -872,7 +886,7 @@ export function place(D, G, avail) {
     }
   }
 
-  function route(cols, cell, vw, widths) {
+  function route(cols, shelves, cell, vw, widths) {
     const colX = [], gapC = [];
     let x = x0;
     for (let i = 0; i <= cols; i++) {
@@ -891,7 +905,8 @@ export function place(D, G, avail) {
     let y = g.pad - g.laneGap / 2, k = 0, prev = null;
     for (const chain of [...new Set(D.lanes.map((key) => key.split('|')[0]))]) {
       let top = null;
-      for (const l of laneList.filter((l) => l.chain === chain)) {
+      for (const l of shelves.filter((s) => s.chain === chain)) {
+        l.rows = Math.max(...l.lanes.map((m) => m.rows));
         const above = prev || chan('b' + k++, y, g.laneGap);
         const y0 = above.y + above.w / 2;
         if (top === null) top = y0;
@@ -910,9 +925,9 @@ export function place(D, G, avail) {
         Object.assign(l, { y0, y1 });
         l.above = (r) => (r === 0 ? above : inner[r - 1]);
         l.below = (r) => (r === l.rows - 1 ? below : inner[r]);
-        for (const n of l.nodes) {
+        for (const n of l.lanes.flatMap((m) => m.nodes)) {
           const { c, r } = cell.get(n.id);
-          box.set(n.id, { x: colX[c], y: rowTop[r], lane: l, row: r, col: c });
+          box.set(n.id, { x: colX[c], y: rowTop[r], shelf: l, row: r, col: c });
         }
         prev = below;
         y = y1;
@@ -930,7 +945,7 @@ export function place(D, G, avail) {
           box.set(w.n.id, { x: g.pad, y: at, side: true });
           next = at + g.h + 14;
         }
-        sides.push({ chain, y0: top, y1: next - 4 });
+        sides.push({ chain, y0: box.get(want[0].n.id).y - g.title, y1: next - 4 });
         if (next > y) {
           y = next;
           prev = null;
@@ -970,22 +985,22 @@ export function place(D, G, avail) {
         const xg = v(0);
         pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
       } else if (B.side) {
-        const up = cy(B) < cy(A), yc = h(up ? A.lane.above(A.row) : A.lane.below(A.row), S), xg = v(0), sx = port(A, up, true);
+        const up = cy(B) < cy(A), yc = h(up ? A.shelf.above(A.row) : A.shelf.below(A.row), S), xg = v(0), sx = port(A, up, true);
         pts = [[sx, up ? A.y : A.y + g.h], [sx, yc], [xg, yc], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
       } else if (A.side) {
-        const down = cy(B) > cy(A), yc = h(down ? B.lane.above(B.row) : B.lane.below(B.row)), xg = v(0, S), ex = port(B, down, false);
+        const down = cy(B) > cy(A), yc = h(down ? B.shelf.above(B.row) : B.shelf.below(B.row)), xg = v(0, S), ex = port(B, down, false);
         pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, yc], [ex, yc], [ex, down ? B.y : B.y + g.h]];
-      } else if (A.lane === B.lane && A.row === B.row) {
+      } else if (A.shelf === B.shelf && A.row === B.row) {
         if (Math.abs(A.col - B.col) === 1) {
           const right = A.col < B.col, yy = cy(A) + (bd.from < bd.to ? -6 : 6);
           pts = [[right ? A.x + g.w : A.x, yy], [right ? B.x : B.x + g.w, yy]];
         } else {
-          const yc = h(A.lane.below(A.row)), sx = port(A, false, true), ex = port(B, false, false);
+          const yc = h(A.shelf.below(A.row)), sx = port(A, false, true), ex = port(B, false, false);
           pts = [[sx, A.y + g.h], [sx, yc], [ex, yc], [ex, B.y + g.h]];
         }
       } else {
         const down = B.y > A.y;
-        const c1 = down ? A.lane.below(A.row) : A.lane.above(A.row), c2 = down ? B.lane.above(B.row) : B.lane.below(B.row);
+        const c1 = down ? A.shelf.below(A.row) : A.shelf.above(A.row), c2 = down ? B.shelf.above(B.row) : B.shelf.below(B.row);
         const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h, sx = port(A, !down, true), ex = port(B, down, false);
         if (c1.id === c2.id) {
           const yc = h(c1);
@@ -1019,11 +1034,14 @@ export function place(D, G, avail) {
       exits.get(k).n++;
     }
     for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
-    const maxUsed = Math.max(1, ...laneList.map((l) => l.used));
+    const maxUsed = Math.max(0, ...[...cell.values()].map((p) => p.c)) + 1;
     const W = Math.max(Math.min(avail, 440), gapC[maxUsed] + vw[maxUsed] / 2 + g.pad);
     const H = Math.max(prev ? prev.y + prev.w / 2 : y, ...sides.map((s) => s.y1 + 10)) + g.pad / 2;
     const counts = new Map([...tracks].map(([key, l]) => [key, l.length]));
-    return { g, W, H, cols, gridX0: colX[0], box, routes, badges, lanes: laneList.map((l) => ({ key: l.key, y0: l.y0, y1: l.y1 })), sides, counts, width };
+    return { g, W, H, cols, box, routes, badges, lanes: laneList.map((l) => {
+      const cs = l.nodes.map((n) => cell.get(n.id).c);
+      return { key: l.key, x0: colX[Math.min(...cs)] - 12, x1: colX[Math.max(...cs)] + g.w + 12, y0: l.shelf.y0, y1: l.shelf.y1 };
+    }), sides, counts, width };
   }
 }
 
@@ -1150,8 +1168,8 @@ function client(place) {
     const lanesG = el('g', {}, svg), edgesG = el('g', {}, svg), nodesG = el('g', {}, svg), labelsG = el('g', {}, svg);
     for (const l of L.lanes) {
       const lg = el('g', { class: 'lane' }, lanesG);
-      el('rect', { x: L.gridX0 - 12, y: l.y0, width: L.W - L.gridX0 + 12 - g.pad / 2, height: l.y1 - l.y0, rx: 8 }, lg);
-      el('text', { x: L.gridX0 - 2, y: l.y0 + 17 }, lg).textContent = laneName(l.key);
+      el('rect', { x: l.x0, y: l.y0, width: l.x1 - l.x0, height: l.y1 - l.y0, rx: 8 }, lg);
+      el('text', { x: l.x0 + 10, y: l.y0 + 17 }, lg).textContent = laneName(l.key);
     }
     for (const s of L.sides) {
       const lg = el('g', { class: 'lane side' }, lanesG);
