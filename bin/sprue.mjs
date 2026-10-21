@@ -617,7 +617,7 @@ async function main(argv) {
       const fd = openSync(log, "w");
       const args = ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])];
       if (limit) args.push("--code-size-limit", String(limit));
-      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd] });
+      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
       closeSync(fd);
       child.unref();
       const fork = { chains: group.chains, pid: child.pid, url: "", instanceId: "", child };
