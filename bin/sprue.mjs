@@ -28,7 +28,7 @@ const WIN = process.platform === "win32";
 // Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
 const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
-const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
+const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan [--json] <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
 
 Flags may appear anywhere after the command.
@@ -37,6 +37,7 @@ Flags may appear anywhere after the command.
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
+                            --json prints it as one JSON object: each line typed, each command with its step id
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -367,14 +368,14 @@ async function main(argv) {
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, dirtyOk = false, keep = false, stopOnly = false;
+  let wait = false, dirtyOk = false, keep = false, stopOnly = false, json = false;
   const signers = [], blocks = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
-    if (verb === "plan") pos.push(a);
+    if (verb === "plan") a === "--json" ? (json = true) : pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
     else if (a === "--account" || a === "--ledger" || a === "--trezor") {
       if (rehearsing) fail(2, `refusing ${a}: rehearse sends as each step's sender on its forks, and no key signs`);
@@ -600,10 +601,31 @@ async function main(argv) {
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
   const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
   const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
+  // A plan line as data. A command names its step by its unit's registered script, function and argument.
+  const steps = exported().nodes.filter((n) => n.kind === "step");
+  const typed = (line) => {
+    let m;
+    if ((m = /^# chain (\S+) ([0-9]+) (\S+)$/.exec(line))) return { type: "chain", name: m[1], id: Number(m[2]), kind: m[3] };
+    if ((m = /^# done (\S+)$/.exec(line))) return { type: "done", id: m[1] };
+    if ((m = /^# then plan again (\S+)$/.exec(line))) return { type: "then-plan-again", id: m[1] };
+    if ((m = /^# cannot reach (\S+?): (.*)$/.exec(line))) return { type: "cannot-reach", id: m[1], why: m[2] };
+    if ((m = /^# not before ([0-9]+)(?: on (\S+))? (\S+?)(, movable until reached)?$/.exec(line))) return { type: "not-before", id: m[3], at: Number(m[1]), on: m[2] ?? planRpc, movable: !!m[4] };
+    if (COMMAND.test(line)) {
+      const { args } = parse(line);
+      const sig = args[args.indexOf("--sig") + 1];
+      const arg = /^[0-9]+$/.test(args[args.indexOf("--sig") + 3] ?? "") ? Number(args[args.indexOf("--sig") + 3]) : null;
+      const node = steps.find((n) => n.script === args[1] && n.signature === sig && (n.flags?.argument ?? null) === arg);
+      const rpc = args.includes("--rpc-url") ? args[args.indexOf("--rpc-url") + 1] : planRpc;
+      return { type: "send", id: node?.id ?? null, sender: /--sender (\S+)/.exec(line)[1], rpc, command: line };
+    }
+    return { type: "other", line };
+  };
   const plan = () =>
     graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
   if (verb === "plan") {
-    for (const l of await plan()) out(`${l}\n`);
+    const lines = await plan();
+    if (!json) for (const l of lines) out(`${l}\n`);
+    else out(`${JSON.stringify({ network, target, planned: Math.floor(Date.now() / 1000), lines: lines.filter(Boolean).map(typed) }, null, 2)}\n`);
     return 0;
   }
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));

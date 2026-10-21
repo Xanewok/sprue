@@ -77,10 +77,10 @@ contract ToyGraph is Graph {
 
 contract CoreTest is Test, Declares {
     string private constant GOLDEN = '{"nodes":[\n'
-        '{"id":"toy.deploy","kind":"step","unit":"toy","signature":"deploy(string)","sender":"","on":"","reads":[],"dependencies":[],"doneRule":{"kind":"view","signature":"deployDue(string)"},"gate":{"kind":"none","value":""},"flags":{"slow":false,"testOnly":false,"ownForks":false,"argument":null}},\n'
-        '{"id":"toy.check","kind":"step","unit":"toy","signature":"check(string)","sender":"","on":"","reads":[],"dependencies":["toy.deploy"],"doneRule":{"kind":"view","signature":"checkDue(string)"},"gate":{"kind":"input","value":"toy.openAt"},"flags":{"slow":false,"testOnly":false,"ownForks":false,"argument":null}},\n'
-        '{"id":"x.rich","kind":"step","unit":"x","signature":"deploy(string,uint8)","sender":"toy.owner","on":"far","reads":["near"],"dependencies":["toy.check"],"doneRule":{"kind":"view","signature":"deployDue(string,uint8)"},"gate":{"kind":"none","value":""},"flags":{"slow":true,"testOnly":true,"ownForks":false,"argument":7}},\n'
-        '{"id":"x.open","kind":"predicate","unit":"x","signature":"observed(string)","sender":"","on":"","reads":[],"dependencies":["x.rich"],"doneRule":{"kind":"predicate","signature":"observed(string)"},"gate":{"kind":"none","value":""},"flags":{"slow":false,"testOnly":true,"ownForks":false,"argument":null}}\n'
+        '{"id":"toy.deploy","kind":"step","unit":"toy","script":"toy.s.sol:Toy","signature":"deploy(string)","sender":"","on":"","reads":[],"dependencies":[],"doneRule":{"kind":"view","signature":"deployDue(string)"},"gate":{"kind":"none","value":""},"flags":{"slow":false,"testOnly":false,"ownForks":false,"argument":null}},\n'
+        '{"id":"toy.check","kind":"step","unit":"toy","script":"toy.s.sol:Toy","signature":"check(string)","sender":"","on":"","reads":[],"dependencies":["toy.deploy"],"doneRule":{"kind":"view","signature":"checkDue(string)"},"gate":{"kind":"input","value":"toy.openAt"},"flags":{"slow":false,"testOnly":false,"ownForks":false,"argument":null}},\n'
+        '{"id":"x.rich","kind":"step","unit":"x","script":"toy.s.sol:Toy","signature":"deploy(string,uint8)","sender":"toy.owner","on":"far","reads":["near"],"dependencies":["toy.check"],"doneRule":{"kind":"view","signature":"deployDue(string,uint8)"},"gate":{"kind":"none","value":""},"flags":{"slow":true,"testOnly":true,"ownForks":false,"argument":7}},\n'
+        '{"id":"x.open","kind":"predicate","unit":"x","script":"toy.s.sol:Toy","signature":"observed(string)","sender":"","on":"","reads":[],"dependencies":["x.rich"],"doneRule":{"kind":"predicate","signature":"observed(string)"},"gate":{"kind":"none","value":""},"flags":{"slow":false,"testOnly":true,"ownForks":false,"argument":null}}\n'
         "]}\n";
 
     ToyGraph private g = new ToyGraph(new Step[](0));

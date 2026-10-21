@@ -760,6 +760,8 @@ abstract contract Graph is Script {
             _quote(_kind(n)),
             ',"unit":',
             _quote(vm.split(n.id, ".")[0]),
+            ',"script":',
+            _quote(n.script),
             ',"signature":',
             _quote(_nodeSignature(n)),
             ',"sender":',

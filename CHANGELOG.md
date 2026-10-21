@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Added: `plan --json` prints the plan as one object of typed lines, each command with its step id, for a
+page or tool that reads plans. The text plan is unchanged.
+
+The graph export (`sprue json`, `graph.generated.json`) gives each node its unit's registered `script`;
+regenerate the saved export. With an old export, `plan --json` names no step for a command.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

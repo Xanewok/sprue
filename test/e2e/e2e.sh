@@ -697,6 +697,11 @@ scenario_grammar() {
     G plan local vault.check; } | grep -E '^([A-Z][A-Z0-9_]*=|forge script )' | sort -u >"$W/corpus"
   [ "$(wc -l <"$W/corpus")" -ge 6 ] || die "grammar: too few command lines in $W/corpus"
   bash "$HERE/plan-grammar.sh" "$W/corpus" 2>>"$W/log" || die "grammar: see $W/log"
+  # --json types the same lines, and each command names its step.
+  local n; n=$(G plan local vault.check 2>>"$W/log" | grep -c .)
+  G plan --json local vault.check 2>>"$W/log" | jq -e --argjson n "$n" \
+    '(.lines | length) == $n and .target == "vault.check" and ([.lines[] | select(.type == "send")] | length > 0 and all(.id != null))' >/dev/null \
+    || die "grammar: plan --json does not type every line of the plan"
   echo "ok  run sends every command line the tests and the example print, and no hostile mutation"
 }
 
