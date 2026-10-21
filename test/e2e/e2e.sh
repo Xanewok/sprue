@@ -384,11 +384,23 @@ scenario_concurrent() {
   local step; step=$(ps -eo pid=,args= | awk '/forge script .* conc .*--broadcast/ && !/awk/ && !p {p = $1} END {if (p) print p}')
   [ -n "$step" ] || die "concurrent: no step was seen to interrupt"
   rc=0; kill -TERM "$a"; wait "$a" || rc=$?
-  [ "$rc" = 130 ] || die "concurrent: a signal exited $rc, not 130: $(tail -c 600 "$W.a")"
+  [ "$rc" = 143 ] || die "concurrent: a signal exited $rc, not 143: $(tail -c 600 "$W.a")"
   ! kill -0 "$step" 2>/dev/null || die "concurrent: the runner exited before its step"
   cast rpc evm_mine --rpc-url "$RPC" >/dev/null; cast rpc evm_setAutomine true --rpc-url "$RPC" >/dev/null
   out=$(G run conc token.check 2>&1) || die "concurrent: the run after a signal failed: $(tail -c 600 <<<"$out")"
   [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a signal, not 1"
+
+  # A signal while the runner plans stops the plan's forge too, which on a rehearsal network writes journals.
+  fresh "$RPC"; network conc 31337
+  G run conc token.check >"$W.a" 2>&1 & a=$!; step=
+  for _ in $(seq 1 1500); do
+    step=$(ps -eo pid=,args= | awk '/forge script .*plan\(string,string\) conc / && !/awk/ && !p {p = $1} END {if (p) print p}')
+    [ -n "$step" ] && break; sleep 0.02
+  done
+  [ -n "$step" ] || die "concurrent: no plan was seen to interrupt"
+  rc=0; kill -HUP "$a"; wait "$a" || rc=$?
+  [ "$rc" = 129 ] || die "concurrent: a signal while planning exited $rc, not 129: $(tail -c 600 "$W.a")"
+  ! kill -0 "$step" 2>/dev/null || die "concurrent: the plan's forge outlived its runner"
 
   # A step whose runner was killed alone holds the lock until it exits.
   fresh "$RPC"; network conc 31337; n0=$(nonce)
@@ -603,7 +615,7 @@ scenario_rehearse() {
   [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
   kill -TERM "$pid"; wait "$pid" || rc=$?
   ! kill -0 "$step" 2>/dev/null || die "rehearse: the runner exited before its step"
-  [ "$rc" = 130 ] || die "rehearse: a signal exited $rc, not 130"
+  [ "$rc" = 143 ] || die "rehearse: a signal exited $rc, not 143"
   # --stop compiles nothing, so the library's remapping does not matter to it.
   FOUNDRY_REMAPPINGS="sprue/=nowhere/src/" exits 0 G rehearse --stop main
   # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no

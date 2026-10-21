@@ -21,10 +21,10 @@ end-to-end scenario for each invariant.
   and is refused when any chain of the network is live.
 - One `run` of a network runs at a time, a `rehearse`'s run of its copy included, by a lock in the git
   directory that names the runner's pid and its running step's. A run whose pids have all exited leaves
-  its lock to the next. A signal to the runner stops the running step and waits for it to exit before
-  the lock is released; a signal during a dry run or the question ends the runner alone. `rehearse` also
-  keeps its own lock. A crash's lock or takeover file whose pid has exited is removed with a note; one
-  that names a live pid, or none, is refused.
+  its lock to the next. A signal to the runner stops its running forge, a plan or a dry run too, and
+  waits for it to exit before the lock is released; at the question it ends the runner alone.
+  `rehearse` also keeps its own lock. A crash's lock or takeover file whose pid has exited is removed
+  with a note; one that names a live pid, or none, is refused.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its
