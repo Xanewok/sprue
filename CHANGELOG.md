@@ -20,6 +20,10 @@ check a rehearsal's certificates against its forks, or to choose which journals 
 leaves out of its git status and offers tags for. They use the graph itself (a target it lacks exits 2
 with a one-line message), and a rehearsal checks every journal of its copy. Only `mermaid` reads the saved file.
 
+Fixed: a role whose journaled or certified address has no code, as an RPC that lags behind the chain shows a role it
+just deployed, is refused with "has no code yet: run again once the RPC shows its deployment", not "its
+code differs".
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
