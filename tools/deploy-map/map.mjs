@@ -1117,7 +1117,6 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .edge.hot path{opacity:1;stroke-width:2.4}.edge{cursor:pointer}.edge path.hit{stroke:transparent;stroke-width:10;opacity:0}
 .edge path{stroke-linejoin:round}
 .badge circle{fill:var(--panel);stroke:var(--edge)}.badge.future{opacity:.18}.badge text{font-size:10px;font-weight:600}
-.node .chain{fill:var(--muted);font-size:10px}
 .dim .node:not(.hot){opacity:.15}.dim .edge:not(.hot){opacity:.08}.dim .badge{opacity:.15}
 @keyframes pop{0%{transform:scale(.6)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
 .anim .node.now>g{animation:pop .35s ease-out;transform-box:fill-box;transform-origin:center}
@@ -1156,10 +1155,15 @@ function client(place) {
   view.appendChild(svg);
   const nodeEls = new Map(), edgeEls = new Map();
   const multiChain = new Set(D.nodes.map((n) => n.chain)).size > 1;
-  // Shortens an SVG text to a width, keeping the whole text as its tooltip.
-  const fit = (t, text, w) => {
+  // Fits an SVG text to a width: smaller type down to `min` px, then shortened, with the whole text as its tooltip.
+  const fit = (t, text, w, min) => {
     t.textContent = text;
-    if (t.getComputedTextLength() <= w) return;
+    const len = t.getComputedTextLength();
+    if (len <= w) return;
+    if (min) {
+      t.style.fontSize = Math.max(min, Math.floor((parseFloat(getComputedStyle(t).fontSize) * w * 10) / len) / 10) + 'px';
+      if (t.getComputedTextLength() <= w) return;
+    }
     let n = text.length;
     while (n > 1 && (t.textContent = text.slice(0, --n) + '…') && t.getComputedTextLength() > w);
     el('title', {}, t).textContent = text;
@@ -1209,11 +1213,10 @@ function client(place) {
       const ng = el('g', { class: cls.join(' '), tabindex: 0, role: 'button', 'aria-label': `${title(n)} ${n.addr}` }, nodesG);
       const inner = el('g', { transform: `translate(${p.x},${p.y})` }, ng);
       el('rect', { width: g.w, height: g.h, rx: 7 }, inner);
-      const room = Math.floor((g.w - 14 - (multiChain ? String(n.chain).length * 6 + 6 : 0)) / 7.2);
-      el('text', { x: 9, y: 18 }, inner).textContent = cut(title(n), room);
-      const marks = (n.controlledBy ? 2 : 0) + (n.certified ? 2 : 0);
-      el('text', { x: 9, y: 35, class: 'addr' }, inner).textContent = short(n.addr) + (n.role && n.name ? ' · ' + cut(n.name, Math.floor(g.w / 7.2) - 14 - marks) : '');
-      if (multiChain) el('text', { x: g.w - 7, y: 15, class: 'chain', 'text-anchor': 'end' }, inner).textContent = n.chain;
+      // The lane title names the chain, so the name has the box's whole width.
+      fit(el('text', { x: 9, y: 18 }, inner), title(n), g.w - 16, 10);
+      const marks = (n.controlledBy ? 14 : 0) + (n.certified ? 14 : 0);
+      fit(el('text', { x: 9, y: 35, class: 'addr' }, inner), short(n.addr) + (n.role && n.name ? ' · ' + n.name : ''), g.w - 16 - marks);
       if (n.controlledBy) {
         const m = el('text', { x: g.w - (n.certified ? 30 : 16), y: 36, class: 'mark' }, inner);
         m.textContent = '⚑';
