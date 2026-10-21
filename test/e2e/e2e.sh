@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home"
 }
 trap cleanup EXIT
 
@@ -63,11 +63,19 @@ setup() {
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
   endpoints foundry.toml
+  # The forks that rehearse starts cache what they read under ~/.foundry, so the runner gets a home of
+  # its own, outside the repository, that shares only the compilers.
+  mkdir -p "$W.home/.foundry" "$W.home/.local/share"
   # A command of its own, so that the pseudo-terminal can run it.
-  # The attended scenario changes HOME, which a version manager's node shim cannot survive: name the binary.
-  mkdir -p bin; printf '#!/bin/sh\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
+  # A version manager's node shim cannot survive another HOME: name the binary.
+  mkdir -p bin; printf '#!/bin/sh\nHOME=%s; export HOME\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$W.home" "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
+  # Linked after the build, which may be the one that downloads solc.
+  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W.home/.svm"
+  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W.home/.local/share/svm"
+  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W.home/Library/Application Support"
+    ln -s "$HOME/Library/Application Support/svm" "$W.home/Library/Application Support/svm"; }
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
@@ -499,13 +507,8 @@ scenario_rehearse() {
 scenario_attended() {
   command -v python3 >/dev/null || { echo "skip attended: it needs python3"; return; }
   local net=rehearsal-live out rc n0 account=e2e
-  # The keystore lives in a home of its own; the compilers are shared.
-  mkdir -p "$W/home/.foundry" "$W/home/.local/share"
-  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W/home/.svm"
-  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W/home/.local/share/svm"
-  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W/home/Library/Application Support"
-    ln -s "$HOME/Library/Application Support/svm" "$W/home/Library/Application Support/svm"; }
-  export HOME=$W/home
+  # The keystore lives in the runner's home.
+  export HOME=$W.home
   cast wallet import "$account" --mnemonic 'test test test test test test test test test test test junk' \
     --unsafe-password "$KEYSTORE_PW" >/dev/null
   network "$net" 1; network livenet 1
