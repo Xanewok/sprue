@@ -625,6 +625,25 @@ export function build({ paths, project, sprue }) {
   }
   const edgeList = [...edges.values()].map((e) => ({ ...e, firstStep: Math.min(...e.txs.map((d) => out[d.i].step)) }));
 
+  // An outside address is named by how the records use it: the deployer, the parameter it was passed as, the
+  // factory of a child, or the call it received.
+  const nameOf = (n) => n.role || n.name || n.label || n.addr.slice(0, 6) + '…' + n.addr.slice(-4);
+  const steps1 = (e) => e.firstStep;
+  for (const n of nodes.values()) {
+    if (n.kind === 'contract' || n.name) continue;
+    if (n.kind === 'sender') { n.label = 'deployer'; continue; }
+    const into = edgeList.filter((e) => e.to === n.id && e.kind !== 'created').sort((a, b) => !!b.rule - !!a.rule || steps1(a) - steps1(b));
+    const made = edgeList.find((e) => e.from === n.id && e.kind === 'created');
+    const called = out.find((x) => x.type === 'CALL' && x.chain === n.chain && x.to === n.addr && x.fn);
+    if (into.length) {
+      const e = into[0], src = nameOf(nodes.get(e.from));
+      const m = /^(\w+)\((.*)\)$/.exec(e.label);
+      n.label = e.kind === 'deploy' ? (/^initcode/.test(e.label) ? `in ${src} initcode` : `${e.label} of ${src}`)
+        : m ? `${m[2]} via ${m[1]}` : `in ${e.label.split(' ')[0]} calldata`;
+    } else if (made) n.label = `factory of ${nameOf(nodes.get(made.to))}`;
+    else if (called) n.label = `target of ${called.fn.split('(')[0]}`;
+  }
+
   // Contracts that an outside address controls.
   for (const e of edgeList) {
     const to = nodes.get(e.to), from = nodes.get(e.from);
@@ -714,7 +733,7 @@ function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
 // ---------- layout ----------
 
 // Lane and rank only; the page places them for its width.
-export const GEOM = { w: 176, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 5, pad: 24, title: 26 };
+export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 5, pad: 24, title: 26 };
 
 function layout(list, out) {
   const lanes = [];
@@ -731,6 +750,190 @@ function layout(list, out) {
   const rank = (n) => (n.kind === 'contract' ? n.created : n.sender ? -1 : n.firstRef);
   [...list].sort((a, b) => rank(a) - rank(b) || a.addr.localeCompare(b.addr)).forEach((n, k) => (n.ord = k));
   return { list, lanes };
+}
+
+// Places nodes and routes links for a page width. Runs in the page (serialised), so it must not use anything
+// outside its own body. Positions depend on the deployment and the width only, never on the step.
+// Links run only in the gaps between rows, lanes and columns, so no link crosses a box. Links into one node
+// share its entry point and their channel tracks, so they merge into one trunk.
+export function place(D, G, avail) {
+  const g = avail < 560 ? { ...G, w: 148, gx: 24, pad: 8 } : { ...G };
+  const byId = new Map(D.nodes.map((n) => [n.id, n]));
+  const bundles = new Map();
+  for (const e of D.edges) {
+    if (!byId.has(e.from) || !byId.has(e.to)) continue;
+    const k = e.from + '>' + e.to;
+    if (!bundles.has(k)) bundles.set(k, { key: k, from: e.from, to: e.to, edges: [] });
+    bundles.get(k).edges.push(e);
+  }
+  const nbrs = new Map(D.nodes.map((n) => [n.id, new Set()]));
+  for (const b of bundles.values()) {
+    nbrs.get(b.from).add(b.to);
+    nbrs.get(b.to).add(b.from);
+  }
+
+  // Contracts sit in their script's lane; an outside address that links into one lane only joins it; the
+  // others (the deployer, shared owners) go to their chain's side column.
+  const lanes = new Map();
+  for (const k of D.lanes) if (!k.endsWith('|outside')) lanes.set(k, { key: k, chain: k.split('|')[0], nodes: [] });
+  const side = new Map();
+  for (const n of [...D.nodes].sort((a, b) => a.ord - b.ord)) {
+    if (n.kind === 'contract') {
+      lanes.get(n.laneKey).nodes.push(n);
+      continue;
+    }
+    const into = new Set([...nbrs.get(n.id)].map((id) => byId.get(id)).filter((m) => m.kind === 'contract').map((m) => m.laneKey));
+    if (!n.sender && into.size === 1) lanes.get([...into][0]).nodes.push(n);
+    else {
+      const c = String(n.chain);
+      if (!side.has(c)) side.set(c, []);
+      side.get(c).push(n);
+    }
+  }
+  const gutter = g.gx + 16;
+  // Too narrow for a side column beside two grid columns: the shared addresses become their chain's first lane.
+  if (side.size && avail - 2 * g.pad - g.w - gutter < 2 * g.w + g.gx) {
+    const all = [...lanes.values()];
+    lanes.clear();
+    for (const [c, ns] of side) lanes.set(c + '|shared outside', { key: c + '|shared outside', chain: c, nodes: ns });
+    for (const l of all) lanes.set(l.key, l);
+    side.clear();
+  }
+  const laneList = [...lanes.values()].filter((l) => l.nodes.length);
+  const hasSide = side.size > 0;
+  const gridX0 = g.pad + (hasSide ? g.w + gutter : g.gx / 2 + 4);
+  const cols = Math.max(1, Math.min(G.cols, Math.floor((avail - gridX0 - g.pad) / (g.w + g.gx))));
+
+  // Columns: barycenter sweeps over the lanes; a multi-row lane fills column by column, so a node's x still
+  // follows its barycenter.
+  const cell = new Map();
+  const assign = (l) => {
+    l.rows = Math.ceil(l.nodes.length / cols);
+    l.used = Math.ceil(l.nodes.length / l.rows);
+    l.nodes.forEach((n, k) => cell.set(n.id, { c: Math.floor(k / l.rows), r: k % l.rows }));
+  };
+  laneList.forEach(assign);
+  const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
+  for (let it = 0; it < 6; it++) {
+    for (const l of it % 2 ? [...laneList].reverse() : laneList) {
+      const own = new Set(l.nodes.map((n) => n.id));
+      const idx = new Map(l.nodes.map((n, k) => [n.id, k]));
+      const bary = new Map(l.nodes.map((n) => {
+        const xs = [...nbrs.get(n.id)].filter((id) => !own.has(id)).map(colOf);
+        return [n.id, xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : colOf(n.id)];
+      }));
+      l.nodes.sort((a, b) => bary.get(a.id) - bary.get(b.id) || idx.get(a.id) - idx.get(b.id));
+      assign(l);
+    }
+  }
+
+  const box = new Map();
+  const sides = [];
+  let y = g.pad + g.laneGap / 2;
+  for (const chain of [...new Set(D.lanes.map((k) => k.split('|')[0]))]) {
+    const top = y;
+    for (const l of laneList.filter((l) => l.chain === chain)) {
+      const y0 = y;
+      const rowTop = (r) => y0 + g.title + r * (g.h + g.gy);
+      const y1 = rowTop(l.rows - 1) + g.h + 10;
+      Object.assign(l, { y0, y1 });
+      l.above = (r) => (r === 0 ? { y: y0 - g.laneGap / 2, half: g.laneGap / 2 } : { y: rowTop(r) - g.gy / 2, half: g.gy / 2 });
+      l.below = (r) => (r === l.rows - 1 ? { y: y1 + g.laneGap / 2, half: g.laneGap / 2 } : { y: rowTop(r) + g.h + g.gy / 2, half: g.gy / 2 });
+      for (const n of l.nodes) {
+        const { c, r } = cell.get(n.id);
+        box.set(n.id, { x: gridX0 + c * (g.w + g.gx), y: rowTop(r), lane: l, row: r, col: c });
+      }
+      y = y1 + g.laneGap;
+    }
+    const ns = side.get(chain) || [];
+    if (ns.length) {
+      const want = ns.map((n) => {
+        const ys = [...nbrs.get(n.id)].map((id) => box.get(id)).filter(Boolean).map((b) => b.y);
+        return { n, y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : top };
+      }).sort((a, b) => a.y - b.y);
+      let next = top + g.title;
+      for (const w of want) {
+        const at = Math.max(w.y, next);
+        box.set(w.n.id, { x: g.pad, y: at, side: true });
+        next = at + g.h + 14;
+      }
+      sides.push({ chain, y0: top, y1: next - 4 });
+      y = Math.max(y, next + g.laneGap);
+    }
+  }
+
+  const gapX = (i) => (i === 0 ? gridX0 - (hasSide ? gutter : g.gx) / 2 : gridX0 + i * (g.w + g.gx) - g.gx / 2);
+  const gapHalf = (i) => (i === 0 && hasSide ? gutter / 2 : g.gx / 2);
+  const tracks = new Map();
+  const track = (key, target, half) => {
+    if (!tracks.has(key)) tracks.set(key, []);
+    const l = tracks.get(key);
+    let i = l.indexOf(target);
+    if (i < 0) i = l.push(target) - 1;
+    const j = i % Math.max(1, Math.floor((half - 5) / 5) * 2 + 1);
+    return j === 0 ? 0 : (j % 2 ? 1 : -1) * Math.ceil(j / 2) * 5;
+  };
+  const cy = (b) => b.y + g.h / 2;
+  const routes = [];
+  for (const bd of bundles.values()) {
+    const A = box.get(bd.from), B = box.get(bd.to), T = bd.to;
+    // Near the source a channel track is shared by the source's links (a fan-out), near the target by the
+    // target's (a trunk).
+    const S = 's' + bd.from;
+    const h = (ch, by = T) => ch.y + track('h' + Math.round(ch.y), by, ch.half);
+    const v = (i, by = T) => gapX(i) + track('v' + i, by, gapHalf(i));
+    const sx = A.x + g.w / 2 - 16, ex = B.x + g.w / 2 + 16;
+    let pts;
+    if (A.side && B.side) {
+      const xg = v(0);
+      pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
+    } else if (B.side) {
+      const up = cy(B) < cy(A), yc = h(up ? A.lane.above(A.row) : A.lane.below(A.row), S), xg = v(0);
+      pts = [[sx, up ? A.y : A.y + g.h], [sx, yc], [xg, yc], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
+    } else if (A.side) {
+      const down = cy(B) > cy(A), yc = h(down ? B.lane.above(B.row) : B.lane.below(B.row)), xg = v(0, S);
+      pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, yc], [ex, yc], [ex, down ? B.y : B.y + g.h]];
+    } else if (A.lane === B.lane && A.row === B.row) {
+      if (Math.abs(A.col - B.col) === 1) {
+        const right = A.col < B.col, yy = cy(A) + (bd.from < bd.to ? -6 : 6);
+        pts = [[right ? A.x + g.w : A.x, yy], [right ? B.x : B.x + g.w, yy]];
+      } else {
+        const yc = h(A.lane.below(A.row));
+        pts = [[sx, A.y + g.h], [sx, yc], [ex, yc], [ex, B.y + g.h]];
+      }
+    } else {
+      const down = B.y > A.y;
+      const c1 = down ? A.lane.below(A.row) : A.lane.above(A.row), c2 = down ? B.lane.above(B.row) : B.lane.below(B.row);
+      const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h;
+      if (Math.abs(c1.y - c2.y) < 1) {
+        const yc = h(c1);
+        pts = [[sx, aEdge], [sx, yc], [ex, yc], [ex, bEdge]];
+      } else {
+        const cost = (i) => Math.abs(gapX(i) - sx) + Math.abs(gapX(i) - ex);
+        const gi = [B.col, B.col + 1, A.col, A.col + 1].reduce((a, b) => (cost(b) < cost(a) ? b : a));
+        const xg = v(gi), ya = h(c1, S), yb = h(c2);
+        pts = [[sx, aEdge], [sx, ya], [xg, ya], [xg, yb], [ex, yb], [ex, bEdge]];
+      }
+    }
+    let best = 0, at = [pts[0][0], pts[0][1]];
+    for (let i = 1; i < pts.length; i++) {
+      const len = Math.abs(pts[i][0] - pts[i - 1][0]) + Math.abs(pts[i][1] - pts[i - 1][1]);
+      if (len > best) { best = len; at = [(pts[i][0] + pts[i - 1][0]) / 2, (pts[i][1] + pts[i - 1][1]) / 2]; }
+    }
+    routes.push({ ...bd, pts, labelAt: at });
+  }
+  // A trunk's count sits at its shared entry point.
+  const entries = new Map();
+  for (const r of routes) {
+    const k = r.to + '@' + r.pts[r.pts.length - 1].join(',');
+    if (!entries.has(k)) entries.set(k, { to: r.to, n: 0, a: r.pts[r.pts.length - 1], b: r.pts[r.pts.length - 2] });
+    entries.get(k).n++;
+  }
+  const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 }));
+  const maxUsed = Math.max(1, ...laneList.map((l) => l.used));
+  const W = Math.max(Math.min(avail, 440), gapX(maxUsed) + g.gx / 2 + g.pad);
+  const H = Math.max(y - g.laneGap / 2, ...sides.map((s) => s.y1 + 10)) + g.pad;
+  return { g, W, H, gridX0, box, routes, badges, lanes: laneList.map((l) => ({ key: l.key, y0: l.y0, y1: l.y1 })), sides };
 }
 
 // ---------- HTML ----------
@@ -771,12 +974,16 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .node.sel rect{stroke:var(--accent2);stroke-width:3}
 .edge path{fill:none;stroke:var(--edge);stroke-width:1.3;opacity:.75}.edge.created path{stroke-dasharray:1 3;stroke-linecap:round}
 .edge.call path{stroke-dasharray:6 3}.edge.verified path{stroke-dasharray:none;stroke-width:2}
-.lens .edge path{opacity:.28}.lens .edge.ctl path{opacity:1;stroke:var(--accent);stroke-width:2}
-.edge text{font-size:10.5px;fill:var(--muted);paint-order:stroke;stroke:var(--bg);stroke-width:3px;display:none}
-.lens.few .edge.ctl text,.edge.hot text,.edge.now text{display:block}
+.lens .edge path{opacity:.45}.lens .edge.ctl path{opacity:1;stroke:var(--accent);stroke-width:2}
+.elabel{font-size:11px;fill:var(--fg);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round;display:none;pointer-events:none}
+.elabel.hot,.elabel.now{display:block}.elabel.future{display:none}.dim .elabel.now:not(.hot){display:none}
 .edge.now path{stroke:var(--new);stroke-width:2.6;opacity:1}.edge.future{display:none}
 .edge.hot path{opacity:1;stroke-width:2.4}.edge{cursor:pointer}.edge path.hit{stroke:transparent;stroke-width:10;opacity:0}
-.dim .node:not(.hot){opacity:.15}.dim .edge:not(.hot){opacity:.08}
+.edge path{stroke-linejoin:round}
+.badge circle{fill:var(--panel);stroke:var(--edge)}.badge text{font-size:10px;font-weight:600}
+.node .chain{fill:var(--muted);font-size:10px}
+.lane text{paint-order:stroke;stroke:var(--lane);stroke-width:4px;stroke-linejoin:round}
+.dim .node:not(.hot){opacity:.15}.dim .edge:not(.hot){opacity:.08}.dim .badge{opacity:.15}
 @keyframes pop{0%{transform:scale(.6)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
 .anim .node.now>g{animation:pop .35s ease-out;transform-box:fill-box;transform-origin:center}
 @media (prefers-reduced-motion:reduce){.anim .node.now>g{animation:none}.node{transition:none}}
@@ -790,7 +997,7 @@ th{position:sticky;top:0;background:var(--bg)}tr.reverted td{color:var(--bad)}
 @media print{.bar,#mapwrap,#panel,.legend,#stepinfo{display:none!important}#tableview{display:block!important}}
 `;
 
-function client() {
+function client(place) {
   const D = JSON.parse(document.getElementById('data').textContent);
   const G = D.geom;
   const $ = (s) => document.querySelector(s);
@@ -799,7 +1006,7 @@ function client() {
   const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s));
   const clip = (s, n = 90) => (String(s).length > n ? String(s).slice(0, n) + `… (${String(s).length} chars)` : String(s));
   const byId = new Map(D.nodes.map((n) => [n.id, n]));
-  const title = (n) => n.role || n.name || { sender: 'sender', outside: 'outside address', 'outside-contract': 'outside contract' }[n.kind] || 'unnamed';
+  const title = (n) => n.role || n.name || n.label || { sender: 'deployer', outside: 'outside address', 'outside-contract': 'outside contract' }[n.kind] || 'unnamed';
   const kindText = { contract: 'created here', sender: 'sender (EOA)', outside: 'outside address: an EOA, multisig or contract', 'outside-contract': 'outside contract' };
   const NS = 'http://www.w3.org/2000/svg';
   const el = (tag, attrs, parent) => {
@@ -809,39 +1016,32 @@ function client() {
     return e;
   };
 
-  // Layout: lanes per chain (outside addresses, then one per script), creation order left to right, wrapped to
-  // the width at hand. Positions depend only on the whole deployment and the width, never on the step.
   const view = $('#mapwrap');
   const svg = el('svg', { role: 'img', 'aria-label': 'Deployment map; the table view lists the same transactions' });
   view.appendChild(svg);
   const nodeEls = new Map(), edgeEls = new Map();
-  let g = G;
+  const multiChain = new Set(D.nodes.map((n) => n.chain)).size > 1;
   const laneName = (k) => {
     const [chain, s] = k.split('|');
-    return `chain ${chain} · ${s === 'outside' ? 'outside addresses and senders' : s}`;
+    return `chain ${chain} · ${s}`;
+  };
+  const rounded = (pts) => {
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [px, py] = pts[i - 1], [x, y] = pts[i], [nx, ny] = pts[i + 1];
+      const r = Math.min(6, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+      const ax = x - Math.sign(x - px) * r, ay = y - Math.sign(y - py) * r, bx = x + Math.sign(nx - x) * r, by = y + Math.sign(ny - y) * r;
+      d += ` L${ax},${ay} Q${x},${y} ${bx},${by}`;
+    }
+    return d + ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
   };
 
   function draw() {
-    const avail = view.clientWidth || 1000;
-    g = avail < 560 ? { ...G, w: 150, gx: 20, pad: 10 } : G;
-    const cols = Math.max(1, Math.min(G.cols, Math.floor((avail - 2 * g.pad + g.gx) / (g.w + g.gx))));
-    const pos = new Map();
-    let y = g.pad;
-    const lanes = [];
-    for (const k of D.lanes) {
-      const ns = D.nodes.filter((n) => n.laneKey === k).sort((a, b) => a.ord - b.ord);
-      if (!ns.length) continue;
-      y += g.title;
-      ns.forEach((n, j) => pos.set(n.id, { x: g.pad + (j % cols) * (g.w + g.gx), y: y + Math.floor(j / cols) * (g.h + g.gy) }));
-      const rows = Math.ceil(ns.length / cols);
-      lanes.push({ k, y0: y - g.title, y1: y + rows * (g.h + g.gy) - g.gy + 10 });
-      y += rows * (g.h + g.gy) - g.gy + g.laneGap;
-    }
-    const W = Math.max(Math.min(avail, 440), g.pad * 2 + Math.min(cols, Math.max(...D.lanes.map((k) => D.nodes.filter((n) => n.laneKey === k).length), 1)) * (g.w + g.gx) - g.gx);
-    const H = y - g.laneGap + g.pad + 10;
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    svg.setAttribute('width', W);
-    svg.setAttribute('height', H);
+    const L = place(D, G, view.clientWidth || 1000);
+    const g = L.g;
+    svg.setAttribute('viewBox', `0 0 ${L.W} ${L.H}`);
+    svg.setAttribute('width', L.W);
+    svg.setAttribute('height', L.H);
     svg.replaceChildren();
     nodeEls.clear();
     edgeEls.clear();
@@ -850,69 +1050,70 @@ function client() {
       const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
       el('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }, m);
     }
-    const lanesG = el('g', {}, svg), edgesG = el('g', {}, svg), nodesG = el('g', {}, svg);
-    for (const l of lanes) {
+    const lanesG = el('g', {}, svg), edgesG = el('g', {}, svg), nodesG = el('g', {}, svg), labelsG = el('g', {}, svg);
+    for (const l of L.lanes) {
       const lg = el('g', { class: 'lane' }, lanesG);
-      el('rect', { x: g.pad / 3, y: l.y0, width: W - (2 * g.pad) / 3, height: l.y1 - l.y0, rx: 8 }, lg);
-      el('text', { x: g.pad / 3 + 10, y: l.y0 + 17 }, lg).textContent = laneName(l.k);
+      el('rect', { x: L.gridX0 - 12, y: l.y0, width: L.W - L.gridX0 + 12 - g.pad / 2, height: l.y1 - l.y0, rx: 8 }, lg);
+      el('text', { x: L.gridX0 - 2, y: l.y0 + 17 }, lg).textContent = laneName(l.key);
+    }
+    for (const s of L.sides) {
+      const lg = el('g', { class: 'lane side' }, lanesG);
+      el('rect', { x: g.pad - 8, y: s.y0, width: g.w + 16, height: s.y1 - s.y0, rx: 8 }, lg);
+      el('text', { x: g.pad, y: s.y0 + 17 }, lg).textContent = `chain ${s.chain} · shared outside`;
     }
 
     for (const n of D.nodes) {
-      const p = pos.get(n.id);
+      const p = L.box.get(n.id);
       const cls = ['node', n.kind];
       if (n.certified) cls.push('cert');
       const ng = el('g', { class: cls.join(' '), tabindex: 0, role: 'button', 'aria-label': `${title(n)} ${n.addr}` }, nodesG);
       const inner = el('g', { transform: `translate(${p.x},${p.y})` }, ng);
       el('rect', { width: g.w, height: g.h, rx: 7 }, inner);
-      const room = Math.floor(g.w / 7.4) - (n.controlledBy || n.certified ? 2 : 0);
+      const room = Math.floor((g.w - 14 - (multiChain ? String(n.chain).length * 6 + 6 : 0)) / 7.2);
       el('text', { x: 9, y: 18 }, inner).textContent = cut(title(n), room);
-      el('text', { x: 9, y: 35, class: 'addr' }, inner).textContent = short(n.addr) + (n.role && n.name ? ' · ' + cut(n.name, room - 14) : '');
+      const marks = (n.controlledBy ? 2 : 0) + (n.certified ? 2 : 0);
+      el('text', { x: 9, y: 35, class: 'addr' }, inner).textContent = short(n.addr) + (n.role && n.name ? ' · ' + cut(n.name, Math.floor(g.w / 7.2) - 14 - marks) : '');
+      if (multiChain) el('text', { x: g.w - 7, y: 15, class: 'chain', 'text-anchor': 'end' }, inner).textContent = n.chain;
       if (n.controlledBy) {
-        const m = el('text', { x: g.w - 16, y: 18, class: 'mark' }, inner);
+        const m = el('text', { x: g.w - (n.certified ? 30 : 16), y: 36, class: 'mark' }, inner);
         m.textContent = '⚑';
         el('title', {}, m).textContent = 'controlled by an outside address';
       }
       if (n.certified) el('text', { x: g.w - 16, y: 36, class: 'cert' }, inner).textContent = '✓';
-      el('title', {}, ng).textContent = `${title(n)}\n${n.addr}\n${kindText[n.kind]}`;
-      ng.addEventListener('mouseenter', () => hover(n.id));
+      el('title', {}, ng).textContent = `${title(n)}\n${n.addr}\nchain ${n.chain} · ${kindText[n.kind]}`;
+      ng.addEventListener('mouseenter', () => hover({ node: n.id }));
       ng.addEventListener('mouseleave', () => hover(null));
       ng.addEventListener('click', (e) => { e.stopPropagation(); select({ node: n.id }); });
       ng.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select({ node: n.id }); } });
       nodeEls.set(n.id, ng);
     }
 
-    // Edges leave from the side of the box facing the other end; parallel edges between one pair fan out.
-    const pairCount = new Map();
-    const order = [...D.edges].sort((a, b) => (a.rule ? 1 : 0) - (b.rule ? 1 : 0));
-    const port = (p, tx, ty) => {
-      const cx = p.x + g.w / 2, cy = p.y + g.h / 2, dx = tx - cx, dy = ty - cy;
-      if (Math.abs(dy) * g.w > Math.abs(dx) * g.h) return [cx + (dx * (g.h / 2)) / Math.abs(dy || 1), cy + Math.sign(dy) * (g.h / 2)];
-      return [cx + Math.sign(dx) * (g.w / 2), cy + (dy * (g.w / 2)) / Math.abs(dx || 1)];
-    };
-    for (const e of order) {
-      const a = pos.get(e.from), b = pos.get(e.to);
-      if (!a || !b) continue;
-      const pk = [e.from, e.to].sort().join('>');
-      const k = pairCount.get(pk) || 0;
-      pairCount.set(pk, k + 1);
-      const [x1, y1] = port(a, b.x + g.w / 2, b.y + g.h / 2), [x2, y2] = port(b, a.x + g.w / 2, a.y + g.h / 2);
-      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, len = Math.hypot(x2 - x1, y2 - y1) || 1;
-      const bend = 18 + 16 * k + (Math.abs(y2 - y1) < 4 || Math.abs(x2 - x1) < 4 ? 26 : 0);
-      const cx = mx + (-(y2 - y1) / len) * bend, cy = my + ((x2 - x1) / len) * bend;
-      const cls = ['edge', e.kind];
-      if (e.rule) cls.push('ctl');
-      if (D.sprue && e.verified) cls.push('verified');
+    // One drawn link per ordered pair; its style is its strongest edge's.
+    const rank = { deploy: 2, call: 1, created: 0 };
+    for (const r of [...L.routes].sort((a, b) => a.edges.some((e) => e.rule) - b.edges.some((e) => e.rule))) {
+      const kind = r.edges.reduce((a, e) => (rank[e.kind] > rank[a] ? e.kind : a), r.edges[0].kind);
+      const ctl = r.edges.some((e) => e.rule);
+      const cls = ['edge', kind];
+      if (ctl) cls.push('ctl');
+      if (D.sprue && r.edges.some((e) => e.verified)) cls.push('verified');
       const eg = el('g', { class: cls.join(' ') }, edgesG);
-      const d = `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`;
-      el('path', { d, 'marker-end': e.rule ? 'url(#arrc)' : 'url(#arr)' }, eg);
+      const d = rounded(r.pts);
+      el('path', { d, 'marker-end': ctl ? 'url(#arrc)' : 'url(#arr)' }, eg);
       el('path', { d, class: 'hit' }, eg);
-      el('text', { x: Math.min(W - 110, Math.max(110, (x1 + 2 * cx + x2) / 4)), y: (y1 + 2 * cy + y2) / 4, 'text-anchor': 'middle' }, eg).textContent =
-        cut(e.label, 34) + (e.rule ? ` [${e.rule}]` : '');
-      el('title', {}, eg).textContent = `${e.label}${e.rule ? `\ncontrol rule: ${e.rule}` : ''}${e.verified ? '\ncertificate-verified' : ''}`;
-      eg.addEventListener('mouseenter', () => hover(null, e.id));
+      const text = r.edges.length === 1 ? r.edges[0].label + (r.edges[0].rule ? ` [${r.edges[0].rule}]` : '') : `${r.edges.length} links: ${r.edges.map((e) => e.label).join(', ')}`;
+      const lt = el('text', { x: r.labelAt[0], y: r.labelAt[1] - 3, 'text-anchor': 'middle', class: 'elabel' }, labelsG);
+      lt.textContent = cut(text, 46);
+      el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${r.edges.map((e) => e.label + (e.rule ? ` (rule ${e.rule})` : '') + (e.verified ? ' (certificate-verified)' : '')).join('\n')}`;
+      eg.addEventListener('mouseenter', () => hover({ link: r.key }));
       eg.addEventListener('mouseleave', () => hover(null));
-      eg.addEventListener('click', (ev) => { ev.stopPropagation(); select({ edge: e.id }); });
-      edgeEls.set(e.id, { g: eg, e });
+      eg.addEventListener('click', (ev) => { ev.stopPropagation(); select({ link: r.key }); });
+      edgeEls.set(r.key, { g: eg, label: lt, r, firstStep: Math.min(...r.edges.map((e) => e.firstStep)) });
+    }
+    for (const b of L.badges) {
+      const bg = el('g', { class: 'badge' }, labelsG);
+      el('circle', { cx: b.x, cy: b.y, r: 8 }, bg);
+      el('text', { x: b.x, y: b.y + 3.5, 'text-anchor': 'middle' }, bg).textContent = b.n;
+      el('title', {}, bg).textContent = `${b.n} links merge here into ${title(byId.get(b.to))}`;
     }
   }
 
@@ -932,6 +1133,10 @@ function client() {
       ${detail && !x.args.some((a) => detail === `${a.name} = ${String(a.value).toLowerCase()}`) ? `<div>link: ${esc(detail)}</div>` : ''}${args ? `<div>${args}</div>` : ''}
       <div class="muted">${x.block !== null ? 'block ' + x.block + ' · ' : ''}${x.sig ? esc(x.sig) + ' · ' : ''}<code>${esc(x.hash || 'no hash')}</code></div></div>`;
   }
+  function linkBlock(key) {
+    const { r } = edgeEls.get(key);
+    return r.edges.map(edgeBlock).join('');
+  }
   function edgeBlock(e) {
     const a = byId.get(e.from), b = byId.get(e.to);
     return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by' }[e.kind]}: <code>${esc(e.label)}</code>
@@ -948,8 +1153,8 @@ function client() {
         ${n.certified ? '<div><span class="pill ok">certified in its journal</span></div>' : ''}
         ${n.controlledBy ? `<div><span class="pill ctl">controlled by an outside address</span> ${n.controlledBy.map((c) => esc(title(byId.get(c.by))) + ' (' + esc(c.rule) + ')').join(', ')}</div>` : ''}
         ${made ? `<h3>Created</h3>${txLine(made.i)}` : ''}${es.length ? es.map(edgeBlock).join('') : '<p class="muted">No links.</p>'}`;
-    } else if (S.sel && S.sel.edge) {
-      P.innerHTML = edgeBlock(D.edges.find((e) => e.id === S.sel.edge));
+    } else if (S.sel && S.sel.link) {
+      P.innerHTML = linkBlock(S.sel.link);
     } else {
       const s = D.stats;
       P.innerHTML = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} outside addresses, ${s.edges} links (${s.control} matched a control rule), ${s.steps} steps${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>
@@ -957,10 +1162,9 @@ function client() {
         ${D.warnings.map((w) => `<p class="rev">${esc(w)}</p>`).join('')}`;
     }
   }
-  function hover(nodeId, edgeId) {
-    const id = nodeId || edgeId;
-    if (!id && S.sel) return apply();
-    apply(nodeId ? { node: nodeId } : edgeId ? { edge: edgeId } : null);
+  function hover(focus) {
+    if (!focus && S.sel) return apply();
+    apply(focus);
   }
   function select(sel) {
     S.sel = sel && S.sel && JSON.stringify(sel) === JSON.stringify(S.sel) ? null : sel;
@@ -970,9 +1174,7 @@ function client() {
 
   function apply(focus = S.sel) {
     const s = S.step, last = s === D.steps.length - 1;
-    svg.classList.toggle('lens', S.lens);
-    // Past a few, always-on rule labels hide the graph; they stay on hover and in the panel.
-    svg.classList.toggle('few', D.edges.filter((e) => e.rule).length <= 8);
+    svg.classList.toggle('lens', S.lens && D.edges.some((e) => e.rule));
     const stepTx = new Set(D.steps[s].txs);
     const reverted = D.steps[s].txs.filter((i) => D.txs[i].status === 'reverted');
     for (const n of D.nodes) {
@@ -984,18 +1186,23 @@ function client() {
       g.classList.toggle('ctl', !!n.controlledBy && S.lens);
       g.classList.remove('hot');
     }
-    for (const { g, e } of edgeEls.values()) {
-      g.classList.toggle('future', e.firstStep > s);
-      g.classList.toggle('now', S.moved && e.txs.some((d) => stepTx.has(d.i)));
-      g.classList.remove('hot');
+    for (const { g, label, r, firstStep } of edgeEls.values()) {
+      const now = S.moved && r.edges.some((e) => e.txs.some((d) => stepTx.has(d.i)));
+      for (const x of [g, label]) {
+        x.classList.toggle('future', firstStep > s);
+        x.classList.toggle('now', now);
+        x.classList.remove('hot');
+      }
     }
     svg.classList.toggle('dim', !!focus);
     if (focus) {
       const hot = new Set();
-      for (const { g, e } of edgeEls.values())
-        if (focus.edge === e.id || e.from === focus.node || e.to === focus.node) {
+      for (const { g, label, r } of edgeEls.values())
+        if (focus.link === r.key || r.from === focus.node || r.to === focus.node) {
           g.classList.add('hot');
-          hot.add(e.from).add(e.to);
+          label.classList.add('hot');
+          g.parentNode.appendChild(g);
+          hot.add(r.from).add(r.to);
         }
       if (focus.node) hot.add(focus.node);
       for (const id of hot) nodeEls.get(id)?.classList.add('hot');
@@ -1079,17 +1286,18 @@ export function render(model, title) {
   const data = JSON.stringify({ ...model, geom: GEOM }).replace(/</g, '\\u003c').replace(/[\u2028\u2029]/g, (c) => '\\u' + c.charCodeAt(0).toString(16));
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const s = model.stats;
+  const scripts = [...new Set(model.txs.map((x) => x.script))];
   const legend = `<div class="legend" aria-hidden="true">
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="1 3" stroke-linecap="round" stroke-width="1.5"/></svg> created by</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-width="1.5"/></svg> set at deploy</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="6 3" stroke-width="1.5"/></svg> set by call</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-width="2"/></svg> control rule matched</span>
 <span>⚑ controlled by an outside address</span>${model.sprue ? '<span>✓ certified role; thick solid line: certificate-verified link</span>' : ''}
-<span>dashed box: not created by this deployment</span></div>`;
+<span>dashed box: not created by this deployment</span><span>a number: links merging into one entry</span><span>labels show on hover, on selection and for the current step</span></div>`;
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark"><title>${esc(title)}</title><style>${CSS}</style></head>
-<body><header><h1>${esc(title)}</h1><p>${s.contracts} contracts, ${s.nodes - s.contracts} outside addresses, ${s.edges} links, ${s.steps} steps, from ${s.records} broadcast record files. Built offline from forge's records; links show what the records say, not what the chain holds now.</p></header>
+<body><header><h1 title="${esc(scripts.join(', '))}">${esc(title)}</h1>${scripts.length > 1 ? `<p>Scripts: ${esc(scripts.join(', '))}.</p>` : ''}<p>${s.contracts} contracts, ${s.nodes - s.contracts} outside addresses, ${s.edges} links, ${s.steps} steps, from ${s.records} broadcast record files. Built offline from forge's records; links show what the records say, not what the chain holds now.</p></header>
 <div class="bar" id="topbar"><button class="tab" id="tab-map" aria-selected="true">Map</button><button class="tab" id="tab-table" aria-selected="false">Table</button>
 <span id="playbar" style="display:contents"><button id="first" aria-label="first step">⏮</button><button id="prev" aria-label="previous step">◀</button><span id="count" aria-live="polite"></span><button id="next" aria-label="next step">▶</button><button id="lastb" aria-label="last step">⏭</button>
 <input id="scrub" type="range" min="0" step="1" aria-label="step"><label class="chk"><input type="checkbox" id="lens" checked> control lens</label></span></div>
@@ -1097,7 +1305,7 @@ export function render(model, title) {
 <section id="tableview" class="hidden"><input id="filter" type="search" placeholder="Filter transactions" aria-label="Filter transactions">
 <table><caption class="muted" style="text-align:left">One row per transaction, in order.</caption><thead><tr><th>Step</th><th>Script</th><th>Type</th><th>Target</th><th>Function</th><th>Arguments</th><th>Status</th><th>Hash</th></tr></thead><tbody id="tbody"></tbody></table></section>
 <script type="application/json" id="data">${data}</script>
-<script>(${client.toString()})();</script></body></html>
+<script>(${client.toString()})(${place.toString()});</script></body></html>
 `;
 }
 
@@ -1125,7 +1333,9 @@ function main(argv) {
   for (const p of paths) if (!existsSync(p)) return fail(`${p} does not exist`);
   const model = build({ paths, project, sprue });
   if (!model.txs.length) return fail(`no broadcast records with transactions under ${paths.join(' ')}`);
-  process.stdout.write(render(model, title || `Deployment map: ${[...new Set(model.txs.map((x) => x.script))].join(', ')}`.slice(0, 120)));
+  const scripts = [...new Set(model.txs.map((x) => x.script))];
+  const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
+  process.stdout.write(render(model, title || `Deployment map: ${project ? `${basename(resolve(project))} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`));
   const s = model.stats;
   process.stderr.write(`deploy-map: ${s.nodes} nodes, ${s.edges} edges (${s.edgesDecoded} decoded, ${s.control} control), ${s.steps} steps, ${s.txs} transactions\n`);
   for (const w of model.warnings) process.stderr.write(`deploy-map: ${w}\n`);
