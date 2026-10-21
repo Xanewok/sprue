@@ -20,6 +20,13 @@ contract NoDefaultGraph is FileGraph {
     function _homeChain(string memory file) internal view override returns (string memory) {
         return defaultChainIn("{}", file);
     }
+
+    function planLines(string calldata network, string calldata target)
+        external
+        returns (string memory, string memory)
+    {
+        return _plan(network, target);
+    }
 }
 
 contract FileGraphChainsTest is Test, Declares {
@@ -52,8 +59,31 @@ contract FileGraphChainsTest is Test, Declares {
         unnamed.plan(NET, "fixture.notify.0");
         string memory out = named.plan(NET, "fixture.notify.0");
         vm.removeDir(string.concat("deployments/", NET), true);
-        assertTrue(vm.contains(out, "# not before 100 on alpha fixture.notify.0"), out);
+        assertTrue(vm.contains(out, "# not before 100 on alpha fixture.notify.0, movable until reached"), out);
         assertTrue(vm.contains(out, "--rpc-url alpha"), out);
+    }
+
+    function test_plan_logsEachLineAsOneObject_namingItsStep() public {
+        string memory net = "rehearsal-filegraph-chains-json";
+        string memory dir = string.concat("deployments/", net);
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"a":{"id":1,"rpc":"alpha"},"b":{"id":2}}}');
+        (, string memory json) = _graph(true).planLines(net, "fixture.notify.0");
+        vm.removeDir(dir, true);
+        assertEq(
+            json,
+            string.concat(
+                '{"type":"chain","name":"a","id":"1","kind":"live"}\n{"type":"chain","name":"b","id":"2","kind":"live"}\n',
+                '{"type":"not-before","step":"fixture.notify.0","time":"100","rpc":"alpha","movable":true}\n',
+                '{"type":"send","step":"fixture.notify.0","sender":"$DEPLOYER","rpc":"alpha","env":{"FOUNDRY_BROADCAST":"',
+                dir,
+                '/broadcast","FOUNDRY_CACHE_PATH":"',
+                dir,
+                '/cache"},"argv":["script","toy.s.sol:Toy","--sig","notify(string,uint8)","',
+                net,
+                '","0","--rpc-url","alpha","--sender","$DEPLOYER"]}\n'
+            )
+        );
     }
 
     /// @dev Neither refusal is the command's: a step not judged before its date prints only the date,
@@ -96,6 +126,28 @@ contract ProjectGraph is FileGraph {
 
     function _requireChain(string memory, uint256 id) internal pure override {
         require(id != 666, "the project refuses chain 666");
+    }
+
+    function planLines(string calldata network, string calldata target)
+        external
+        returns (string memory, string memory)
+    {
+        return _plan(network, target);
+    }
+}
+
+/// @dev A done step, and one whose `Due` view refuses with what JSON escapes.
+contract Refusing {
+    function deploy(string calldata) external {}
+
+    function deployDue(string calldata) external pure returns (bool) {
+        return false;
+    }
+
+    function fund(string calldata) external {}
+
+    function fundDue(string calldata) external pure returns (bool) {
+        revert('say "no" \\\n');
     }
 }
 
@@ -263,6 +315,57 @@ contract FileGraphProjectTest is Test, Declares {
 
     function _deploy(string memory by) private pure returns (Step memory) {
         return _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).by(by);
+    }
+
+    function test_plan_logsEachLineAsOneObject_namingItsStep() public {
+        _network("rehearsal-fgp-json", vm.toString(owner), "");
+        string memory chains = '{"type":"chain","name":"l2","id":"31337","kind":"local"}\n'
+            '{"type":"chain","name":"a","id":"11155111","kind":"test"}\n{"type":"chain","name":"b","id":"1","kind":"live"}\n'
+            '{"type":"chain","name":"c","id":"1337","kind":"local"}\n';
+        Step[] memory s = new Step[](2);
+        s[0] = _step("fixture.deploy", Refusing.deploy.selector).due(Refusing.deployDue.selector);
+        s[1] = _step("fixture.fund", Refusing.fund.selector)
+            .due(Refusing.fundDue.selector)
+            .needs("fixture.deploy")
+            .by("network.owner")
+            .on("c")
+            .reads("b")
+            .ownsForks()
+            .slow();
+        ProjectGraph g = new ProjectGraph(Registration(address(new Refusing()), "toy.s.sol:Toy"), s);
+        (, string memory json) = g.planLines(net, "fixture.fund");
+        (, string memory dated) =
+            _project(address(new StepFunctions()), _fund().notBefore("network.openAt")).planLines(net, "fixture.fund");
+        string memory sender = vm.toString(owner);
+        string memory dir = string.concat("deployments/", net);
+        vm.removeDir(dir, true);
+        assertEq(
+            json,
+            string.concat(
+                chains,
+                '{"type":"done","step":"fixture.deploy"}\n',
+                '{"type":"cannot-reach","step":"fixture.fund","reason":"say \\"no\\" \\\\\\u000a"}\n',
+                '{"type":"send","step":"fixture.fund","sender":"',
+                sender,
+                '","rpc":null,"env":{"FOUNDRY_BROADCAST":"',
+                dir,
+                '/broadcast","FOUNDRY_CACHE_PATH":"',
+                dir,
+                '/cache"},"argv":["script","toy.s.sol:Toy","--sig","fund(string)","',
+                net,
+                '","--sender","',
+                sender,
+                '","--slow"]}\n'
+            )
+        );
+        assertEq(
+            dated,
+            string.concat(
+                chains,
+                '{"type":"not-before","step":"fixture.fund","time":"100","rpc":null,"movable":false}\n',
+                '{"type":"then-plan-again","step":"fixture.fund"}\n'
+            )
+        );
     }
 
     function test_plan_aSlowStepEndsItsCommandWithTheFlag() public {

@@ -57,6 +57,12 @@ abstract contract Graph is Script {
         string until;
     }
 
+    struct ChainLine {
+        string name;
+        uint256 id;
+        string kind;
+    }
+
     struct Visit {
         uint256 node;
         Status status;
@@ -95,8 +101,7 @@ abstract contract Graph is Script {
         if (_executeTarget(net, target)) console.log(string.concat("reached ", target));
     }
 
-    /// @notice The commands that reach `target` and what it depends on, in order. Each line is
-    ///         printed behind `PLAN ` and the lines are returned together.
+    /// @notice The commands that reach `target` and what it depends on, in order, one per line.
     ///
     ///         Each command is a dry run. The same command with `--account <keystore> --broadcast`
     ///         sends it. Its `--rpc-url` is the chain's `rpc` alias, and `$DEPLOYER` the account that
@@ -115,46 +120,95 @@ abstract contract Graph is Script {
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
+    ///
+    ///         Each line is logged behind `PLAN `. For the runner, which renders the line from it, it is
+    ///         one JSON object instead: its `type` (`chain`, `done`, `not-before`, `cannot-reach`,
+    ///         `then-plan-again` or `send`), the node's id as `step`, and the line's fields. A `send`
+    ///         holds forge's `argv` and the `env` assignments before it. A chain's `id` and a `time` are
+    ///         decimal strings, and an `rpc` is null where the line names none.
     function plan(string calldata network, string calldata target) external returns (string memory out) {
-        string[] memory header = _chainLines(network);
+        (out,) = _plan(network, target);
+    }
+
+    /// @dev `plan`'s text, and its JSON objects, one per line.
+    function _plan(string memory network, string memory target)
+        internal
+        returns (string memory text, string memory json)
+    {
+        ChainLine[] memory chains = _chainLines(network);
         _home = _fork(type(uint256).max);
         (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length), false);
-        for (uint256 i; i < header.length; ++i) {
-            out = _line(out, header[i]);
+        for (uint256 i; i < chains.length; ++i) {
+            ChainLine memory c = chains[i];
+            (text, json) = _line(
+                text,
+                json,
+                string.concat("# chain ", c.name, " ", vm.toString(c.id), " ", c.kind),
+                string.concat(
+                    '{"type":"chain","name":',
+                    _escaped(c.name),
+                    ',"id":"',
+                    vm.toString(c.id),
+                    '","kind":',
+                    _escaped(c.kind),
+                    "}"
+                )
+            );
         }
         for (uint256 i; i < count; ++i) {
             Visit memory visit = visits[i];
             Node storage n = _nodes[visit.node];
             if (visit.notBefore != 0) {
-                out = _line(
-                    out,
+                string memory on = _clockOn(network, n);
+                // A date from an input file is fixed. A view's date may still move until the chain reaches it.
+                bool movable = !vm.contains(n.gate, ".");
+                (text, json) = _line(
+                    text,
+                    json,
                     string.concat(
                         "# not before ",
                         vm.toString(visit.notBefore),
-                        _clockOn(network, n),
+                        bytes(on).length == 0 ? "" : string.concat(" on ", on),
                         " ",
                         n.id,
-                        // A date from an input file is fixed. A view's date may still move until the chain
-                        // reaches it.
-                        vm.contains(n.gate, ".") ? "" : ", movable until reached"
+                        movable ? ", movable until reached" : ""
+                    ),
+                    _about(
+                        "not-before",
+                        n.id,
+                        string.concat(
+                            ',"time":"',
+                            vm.toString(visit.notBefore),
+                            '","rpc":',
+                            bytes(on).length == 0 ? "null" : _escaped(on),
+                            ',"movable":',
+                            movable ? "true" : "false"
+                        )
                     )
                 );
             }
             if (visit.status == Status.NotJudged) {
-                out = _line(out, string.concat("# then plan again ", n.id));
+                (text, json) =
+                    _line(text, json, string.concat("# then plan again ", n.id), _about("then-plan-again", n.id, ""));
                 break;
             }
             if (visit.status == Status.Done) {
                 if (bytes(n.step).length == 0 && bytes(n.until).length == 0) continue;
-                out = _line(out, string.concat("# done ", n.id));
+                (text, json) = _line(text, json, string.concat("# done ", n.id), _about("done", n.id, ""));
                 continue;
             }
             if (visit.status == Status.Waiting) {
-                out = _line(out, string.concat("# ", _cannotReach(n.id, visit.reason)));
+                (text, json) = _line(
+                    text,
+                    json,
+                    string.concat("# ", _cannotReach(n.id, visit.reason)),
+                    _about("cannot-reach", n.id, string.concat(',"reason":', _escaped(visit.reason)))
+                );
                 if (bytes(n.until).length != 0) continue;
             }
             if (bytes(n.step).length == 0) continue;
-            out = _line(out, _command(network, n));
+            (string memory command, string memory send) = _command(network, n);
+            (text, json) = _line(text, json, command, send);
         }
     }
 
@@ -613,15 +667,11 @@ abstract contract Graph is Script {
     ///      default chain.
     function _rpcFlag(string memory, string memory) internal view virtual returns (string memory);
 
-    /// @dev The variable assignments (`NAME=value `, each ending in a space) that start every command.
-    function _commandEnv(string memory) internal view virtual returns (string memory) {
-        return "";
-    }
+    /// @dev The variable assignments, as `[name, value]` in order, that start every command.
+    function _commandEnv(string memory) internal view virtual returns (string[2][] memory) {}
 
-    /// @dev The comment lines `plan` opens with. `FileGraph` prints one `# chain` line per chain.
-    function _chainLines(string memory) internal view virtual returns (string[] memory) {
-        return new string[](0);
-    }
+    /// @dev The chains `plan` opens with, one `# chain` line each. `FileGraph` lists `network.json`'s.
+    function _chainLines(string memory) internal view virtual returns (ChainLine[] memory) {}
 
     /// @dev Reverts if the step names a chain that network `net` lacks. Runs for each command
     ///      `plan` prints. A done node prints no command, so its chains are not checked.
@@ -650,28 +700,60 @@ abstract contract Graph is Script {
         return _callStep(n.unit, _calldata(n, n.step, network));
     }
 
-    function _command(string memory network, Node storage n) private view returns (string memory) {
+    function _command(string memory network, Node storage n)
+        private
+        view
+        returns (string memory text, string memory json)
+    {
         _requireChains(network, n);
         string memory sender =
             bytes(n.sender).length == 0 ? "$DEPLOYER" : vm.toString(_senderAddress(network, n.sender));
-        return string.concat(
-            _commandEnv(network),
-            "forge script ",
+        string memory rpc = n.ownForks ? "" : _rpcFlag(network, n.on);
+        string[2][] memory env = _commandEnv(network);
+        string memory vars;
+        for (uint256 i; i < env.length; ++i) {
+            text = string.concat(text, env[i][0], "=", env[i][1], " ");
+            vars = string.concat(vars, i == 0 ? "" : ",", _escaped(env[i][0]), ":", _escaped(env[i][1]));
+        }
+        // An empty argument is absent. The signature is quoted for the shell.
+        string[11] memory args = [
+            string("script"),
             n.script,
-            " --sig '",
+            "--sig",
             _signature(n, n.step),
-            "' ",
             network,
-            bytes(n.arg).length == 0 ? "" : string.concat(" ", n.arg),
-            n.ownForks ? "" : string.concat(" --rpc-url ", _rpcFlag(network, n.on)),
-            " --sender ",
+            n.arg,
+            n.ownForks ? "" : "--rpc-url",
+            rpc,
+            "--sender",
             sender,
-            n.slow ? " --slow" : ""
+            n.slow ? "--slow" : ""
+        ];
+        text = string.concat(text, "forge");
+        string memory argv = "[";
+        for (uint256 i; i < args.length; ++i) {
+            if (bytes(args[i]).length == 0) continue;
+            text = string.concat(text, " ", i == 3 ? string.concat("'", args[i], "'") : args[i]);
+            argv = string.concat(argv, i == 0 ? "" : ",", _escaped(args[i]));
+        }
+        argv = string.concat(argv, "]");
+        json = _about(
+            "send",
+            n.id,
+            string.concat(
+                ',"sender":',
+                _escaped(sender),
+                ',"rpc":',
+                n.ownForks ? "null" : _escaped(rpc),
+                ',"env":{',
+                vars,
+                '},"argv":',
+                argv
+            )
         );
     }
 
-    /// @dev ` on <rpc>` for the chain whose clock the date is read against. Empty for the default
-    ///      chain.
+    /// @dev The rpc whose clock the date is read against. Empty for the default chain.
     function _clockOn(string memory network, Node storage n) private view returns (string memory) {
         string memory flag = _rpcFlag(network, n.on);
         require(
@@ -679,7 +761,7 @@ abstract contract Graph is Script {
             string.concat(n.id, " has no chain: add .on(...) to it or set chains.default in sprue.json")
         );
         if (_onDefaultChain(network, n)) return "";
-        return string.concat(" on ", flag);
+        return flag;
     }
 
     function _onDefaultChain(string memory network, Node storage n) private view returns (bool) {
@@ -737,9 +819,19 @@ abstract contract Graph is Script {
         return string.concat("cannot reach ", id, ": ", reason);
     }
 
-    function _line(string memory out, string memory line) private pure returns (string memory) {
-        console.log(string.concat("PLAN ", line));
-        return string.concat(out, line, "\n");
+    function _line(string memory text, string memory json, string memory line, string memory object)
+        private
+        view
+        returns (string memory, string memory)
+    {
+        // Internal plumbing, not a setting: only the runner sets it, so a person running the plan
+        // command reads the text.
+        console.log(string.concat("PLAN ", vm.envOr("SPRUE_PLAN_DATA", false) ? object : line));
+        return (string.concat(text, line, "\n"), string.concat(json, object, "\n"));
+    }
+
+    function _about(string memory kind, string memory id, string memory fields) private pure returns (string memory) {
+        return string.concat('{"type":"', kind, '","step":', _escaped(id), fields, "}");
     }
 
     function _call(address target, bytes memory callData) internal returns (bytes memory ret) {
@@ -836,13 +928,24 @@ abstract contract Graph is Script {
         return bytes(n.step).length != 0 ? "step" : "predicate";
     }
 
-    /// @dev The graph's author writes every value, so refusing the characters JSON would escape is
-    ///      enough to keep the export valid, and no escaping code is needed.
-    function _quote(string memory value) private pure returns (string memory) {
+    /// @dev The graph's author writes every value, so the export refuses what JSON would escape and
+    ///      stays the author's own text.
+    function _quote(string memory value) private pure returns (string memory quoted) {
+        quoted = _escaped(value);
+        require(bytes(quoted).length == bytes(value).length + 2, string.concat("not JSON-safe: ", value));
+    }
+
+    /// @dev The plan's JSON escapes what `_quote` refuses: the text plan prints any value, a revert reason
+    ///      among them.
+    function _escaped(string memory value) private pure returns (string memory out) {
         bytes memory raw = bytes(value);
+        out = '"';
         for (uint256 i; i < raw.length; ++i) {
-            require(raw[i] >= 0x20 && raw[i] != '"' && raw[i] != "\\", string.concat("not JSON-safe: ", value));
+            bytes memory c = abi.encodePacked(raw[i]);
+            if (raw[i] < 0x20) c = bytes(vm.replace(vm.toString(c), "0x", "\\u00"));
+            else if (raw[i] == '"' || raw[i] == "\\") c = bytes.concat("\\", c);
+            out = string.concat(out, string(c));
         }
-        return string.concat('"', value, '"');
+        return string.concat(out, '"');
     }
 }

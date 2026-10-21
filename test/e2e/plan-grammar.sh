@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# `run` sends every command line that Graph._command prints, as one `forge script` argv, and runs
-# nothing else. Usage: plan-grammar.sh <file of real command lines>. Needs node and git; forge and cast
-# are stubs.
+# `run` sends every command that Graph._command logs, as one `forge script` argv, and runs nothing
+# else. Usage: plan-grammar.sh <file of real send objects, one per line>. Needs node, git and jq; forge
+# and cast are stubs.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 CORPUS=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -18,7 +18,7 @@ cat >sprue.json <<'JSON'
 JSON
 # A chain for each alias the corpus reads: a line may name only its network's chains.
 { printf '{"chains":{"l2":{"id":31337,"rpc":"local"}'; i=0
-  for a in $(grep -Eoh -- '--rpc-url [a-z][a-z0-9_-]*' "$CORPUS" | awk '{print $2}' | sort -u | grep -vx local); do
+  for a in $(jq -r '.rpc // empty' "$CORPUS" | sort -u | grep -vx local); do
     i=$((i + 1)); printf ',"c%d":{"id":31337,"rpc":"%s"}' "$i" "$a"
   done; printf '}}\n'; } >deployments/net/network.json
 echo '{"nodes":[{"id":"t","unit":"u"}]}' >script/graph.generated.json
@@ -37,12 +37,12 @@ STUB
 chmod +x bin/forge bin/cast
 export PATH=$W/bin:$PATH PLAN_FILE=$W/plan CALLS=$W/calls DEPLOYER=0x1111111111111111111111111111111111111111 MARK=$W/MARK
 
-# run_line <line>: whether `run` sent it to forge, as exactly one `forge script` call. A hostile line
+# run_line <object>: whether `run` sent it to forge, as exactly one `forge script` call. A hostile one
 # may also leave $MARK.
 run_line() {
   local net=net
   # A rehearsal network's line runs on that network, the only one whose records it may move.
-  if [[ $1 =~ ^FOUNDRY_BROADCAST=deployments/(rehearsal-[a-z0-9-]+)/broadcast\ FOUNDRY_CACHE_PATH= ]]; then
+  if [[ $(jq -r '.env.FOUNDRY_BROADCAST // empty' <<<"$1") =~ ^deployments/(rehearsal-[a-z0-9-]+)/broadcast$ ]]; then
     net=${BASH_REMATCH[1]}; mkdir -p "deployments/$net"; cp deployments/net/network.json "deployments/$net/"
   fi
   printf '%s\n' "$1" >plan; : >calls; rm -f MARK
@@ -58,8 +58,12 @@ while IFS= read -r line; do
   run_line "$line" && [ ! -e MARK ] || { fail=$((fail + 1)); echo "FAIL not sent: $line" >&2; }
 done <"$CORPUS"
 
-# Each payload is added to a real line at two of five places, rotating through the corpus.
+# Each payload is added to a field of a real line at two of five places, rotating through the corpus.
 lines=(); while IFS= read -r line; do lines+=("$line"); done <"$CORPUS"
+# A line whose network is not a rehearsal one, which has no assignments of its own.
+plain=$(jq -c 'select(.env == {})' "$CORPUS" | head -1)
+# mutate <object> <jq filter> [jq args...]: the object, changed.
+mutate() { jq -c "${@:3}" "$2" <<<"$1"; }
 payloads=(
   "; touch \$MARK" ";touch \$MARK" "&& touch \$MARK" "|| touch \$MARK" "| touch \$MARK" "& touch \$MARK"
   "\$(touch \$MARK)" '`touch $MARK`' "> \$MARK" "' ; touch \$MARK ; '" '"' '\' ' --broadcast'
@@ -69,8 +73,10 @@ payloads=(
 i=0
 for p in "${payloads[@]}"; do
   l=${lines[i % ${#lines[@]}]}
-  places=("$l$p" "$p$l" "${l/ --sender/$p --sender}" "${l/forge script/forge script$p}" "${l/forge script/forge$p script}")
-  for hostile in "${places[i % 5]}" "${places[(i + 2) % 5]}"; do
+  places=('.argv[-1] += $p' '.argv[1] = $p + .argv[1]' '.argv[(.argv | index("--sender")) - 1] += $p' '.argv[0] += $p'
+    '.argv[0] = $p + .argv[0]')
+  for place in "${places[i % 5]}" "${places[(i + 2) % 5]}"; do
+    hostile=$(mutate "$l" "$place" --arg p "$p")
     total=$((total + 1))
     if run_line "$hostile" || [ -e MARK ]; then
       fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
@@ -80,32 +86,33 @@ for p in "${payloads[@]}"; do
 done
 # An environment assignment other than a chain's RPC variable could redirect `forge` itself, and only
 # a rehearsal network's lines move its records and resume data, both of them.
-for prefix in 'PATH=$PWD ' 'FOO_RPC=$PATH ' 'X_RPC=$X ' 'L2_RPC=$L2_RPC PATH=$PWD ' \
-  'FOUNDRY_BROADCAST=deployments/net/broadcast FOUNDRY_CACHE_PATH=deployments/net/cache '; do
+for env in '{"PATH":"$PWD"}' '{"FOO_RPC":"$PATH"}' '{"X_RPC":"$X"}' '{"L2_RPC":"$L2_RPC","PATH":"$PWD"}' \
+  '{"FOUNDRY_BROADCAST":"deployments/net/broadcast","FOUNDRY_CACHE_PATH":"deployments/net/cache"}'; do
   total=$((total + 1))
-  if run_line "$prefix${lines[0]}" || [ -e MARK ]; then
-    fail=$((fail + 1)); echo "FAIL ran hostile: $prefix${lines[0]}" >&2
+  hostile=$(mutate "$plain" '.env = $e' --argjson e "$env")
+  if [ -z "$plain" ] || run_line "$hostile" || [ -e MARK ]; then
+    fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
   fi
 done
-rehearsalLine=$(grep -m1 '^FOUNDRY_BROADCAST=' "$CORPUS" || true)
-cacheAssignment=$(grep -o 'FOUNDRY_CACHE_PATH=[^ ]* ' <<<"$rehearsalLine" || true)
-for hostile in "${rehearsalLine/"$cacheAssignment"/}" "${rehearsalLine/\/cache /\/elsewhere }"; do
+rehearsalLine=$(jq -c 'select(.env.FOUNDRY_CACHE_PATH)' "$CORPUS" | head -1)
+for place in 'del(.env.FOUNDRY_CACHE_PATH)' '.env.FOUNDRY_CACHE_PATH |= sub("/cache$"; "/elsewhere")'; do
   total=$((total + 1))
-  if [ -z "$cacheAssignment" ] || run_line "$hostile" || [ -e MARK ]; then
+  hostile=$(mutate "$rehearsalLine" "$place")
+  if [ -z "$rehearsalLine" ] || run_line "$hostile" || [ -e MARK ]; then
     fail=$((fail + 1)); echo "FAIL ran hostile: $hostile" >&2
   fi
 done
 # A line reads only its network's chains: another alias, or a fork's URL, is refused.
 for other in mainnet http://127.0.0.1:1; do
   total=$((total + 1))
-  hostile=$(grep -m1 -e '--rpc-url local ' "$CORPUS" | sed "s|--rpc-url local |--rpc-url $other |")
+  hostile=$(jq -c --arg o "$other" 'select(.rpc == "local") | .rpc = $o | .argv[(.argv | index("--rpc-url")) + 1] = $o' "$CORPUS" | head -1)
   if [ -z "$hostile" ] || run_line "$hostile" || [ -e MARK ]; then
     fail=$((fail + 1)); echo "FAIL ran a line that reads another endpoint: $hostile" >&2
   fi
 done
 for other in mainnet http://127.0.0.1:1; do
   total=$((total + 1))
-  printf '# not before 2000000000 on %s\n' "$other" >plan
+  printf '{"type":"not-before","step":"t","time":"2000000000","rpc":"%s","movable":false}\n' "$other" >plan
   rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
   { [ "$rc" = 2 ] && grep -q 'which no chain of net names' out; } || { fail=$((fail + 1)); echo "FAIL a date line on $other exited $rc: $(<out)" >&2; }
 done

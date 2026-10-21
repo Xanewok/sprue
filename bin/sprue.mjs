@@ -15,8 +15,8 @@ const NAME = "sprue";
 const PROJECT = "sprue.json";
 // Anvil's published dev key, which signs on a local chain when KEY is unset.
 const DEV_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-// The one shape of a command line, as Graph._command prints it. Forge's output also carries the
-// console.log of every contract the plan calls, so a line is run only if it matches whole.
+// The one shape of a command line, as `render` writes a Graph._command object. Forge's output also carries
+// the console.log of every contract the plan calls, so a line is run only if it matches whole.
 const COMMAND =
   /^(FOUNDRY_BROADCAST=[A-Za-z0-9_./-]+ FOUNDRY_CACHE_PATH=[A-Za-z0-9_./-]+ )?forge script [A-Za-z0-9_./][A-Za-z0-9_./-]*(:[A-Za-z0-9_]+)? --sig '[A-Za-z_][A-Za-z0-9_]*\((string|string,uint8)\)' [a-z0-9][a-z0-9-]*( [0-9]+)?( --rpc-url ([a-z][a-z0-9_-]*|http:\/\/127\.0\.0\.1:[0-9]+))? --sender (\$DEPLOYER|0x[0-9a-fA-F]{40})( --slow)?$/;
 // A chain's rpc: a foundry.toml [rpc_endpoints] alias, or, only in a rehearsal copy, its fork's URL.
@@ -28,7 +28,7 @@ const WIN = process.platform === "win32";
 // Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
 const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
-const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
+const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan [--json] <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
 
 Flags may appear anywhere after the command.
@@ -37,6 +37,7 @@ Flags may appear anywhere after the command.
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
+                            --json prints {network, target, planned (unix time), lines}, each line an object
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -253,6 +254,19 @@ function ask(prompt) {
   return WIN ? answer.replace(/\r$/, "") : answer;
 }
 
+// A plan line as Graph.plan returns it, from the JSON object the graph logs under SPRUE_PLAN_DATA; undefined
+// for no known type.
+function render(l) {
+  switch (l.type) {
+    case "chain": return `# chain ${l.name} ${l.id} ${l.kind}`;
+    case "done": return `# done ${l.step}`;
+    case "then-plan-again": return `# then plan again ${l.step}`;
+    case "cannot-reach": return `# cannot reach ${l.step}: ${l.reason}`;
+    case "not-before": return `# not before ${l.time}${l.rpc == null ? "" : ` on ${l.rpc}`} ${l.step}${l.movable ? ", movable until reached" : ""}`;
+    case "send": return `${Object.entries(l.env).map(([k, v]) => `${k}=${v} `).join("")}forge ${l.argv.map((a, i) => (l.argv[i - 1] === "--sig" ? `'${a}'` : a)).join(" ")}`;
+  }
+}
+
 // COMMAND admits only literal assignments and $DEPLOYER, which stays one argument.
 function parse(line) {
   const toks = line.split(" ");
@@ -367,14 +381,14 @@ async function main(argv) {
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, dirtyOk = false, keep = false, stopOnly = false;
+  let wait = false, dirtyOk = false, keep = false, stopOnly = false, json = false;
   const signers = [], blocks = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
-    if (verb === "plan") pos.push(a);
+    if (verb === "plan") a === "--json" ? (json = true) : pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
     else if (a === "--account" || a === "--ledger" || a === "--trezor") {
       if (rehearsing) fail(2, `refusing ${a}: rehearse sends as each step's sender on its forks, and no key signs`);
@@ -600,10 +614,18 @@ async function main(argv) {
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
   const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
   const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
-  const plan = () =>
-    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
+  const planObjects = async () =>
+    (await graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], { SPRUE_PLAN_DATA: "true", ...(broadcastDir && { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir }) })).map((s) => {
+      try {
+        const l = JSON.parse(s);
+        if (typeof render(l) === "string") return l;
+      } catch {}
+      fail(2, `unknown plan line: ${s}`);
+    });
+  const plan = async () => (await planObjects()).map(render);
   if (verb === "plan") {
-    for (const l of await plan()) out(`${l}\n`);
+    if (json) out(`${JSON.stringify({ network, target, planned: Math.floor(Date.now() / 1000), lines: await planObjects() }, null, 2)}\n`);
+    else for (const l of await plan()) out(`${l}\n`);
     return 0;
   }
   const attended = !rehearsing && !(chains.length > 0 && chains.every((c) => isLocal(chainMap[c]?.id)));
