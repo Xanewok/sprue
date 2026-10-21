@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Added: `sprue plan --json <network> <target>` prints `{network, target, planned, lines}`, `planned` the unix
+time it ran: each plan line as the JSON object the graph logs behind `PLAN ` for the runner, with its `type`,
+the node's `step` and the line's fields, a command's `sender`, `rpc`, `env` and forge `argv` among them. The
+text plan, which the runner renders from these objects and `plan(string,string)` still returns and logs when
+run by hand, is unchanged.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

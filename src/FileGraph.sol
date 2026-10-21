@@ -13,7 +13,7 @@ import {
     noRpc,
     rehearsalPrefix
 } from "./Chains.sol";
-import {isRehearsalNetwork, outputsEnv, stageInputs, unitInputPath} from "./Journal.sol";
+import {isRehearsalNetwork, stageInputs, unitInputPath} from "./Journal.sol";
 import {Graph} from "./graph/Graph.sol";
 
 /// @notice Implements `Graph`'s hooks from the files in `<paths.deployments>/<network>/`. A project's
@@ -59,15 +59,20 @@ abstract contract FileGraph is Graph {
         require(bytes(rpc).length != 0, noRpc(named));
     }
 
-    function _commandEnv(string memory net) internal view override returns (string memory) {
-        return isRehearsalNetwork(net) ? outputsEnv(string.concat(deploymentsDir(), "/", net)) : "";
+    /// @dev As `outputsEnv`, which a unit's `next:` line prints.
+    function _commandEnv(string memory net) internal view override returns (string[2][] memory env) {
+        if (!isRehearsalNetwork(net)) return env;
+        string memory dir = string.concat(deploymentsDir(), "/", net);
+        env = new string[2][](2);
+        env[0] = ["FOUNDRY_BROADCAST", string.concat(dir, "/broadcast")];
+        env[1] = ["FOUNDRY_CACHE_PATH", string.concat(dir, "/cache")];
     }
 
     function _same(string memory a, string memory b) private pure returns (bool) {
         return keccak256(bytes(a)) == keccak256(bytes(b));
     }
 
-    function _chainLines(string memory net) internal view override returns (string[] memory lines) {
+    function _chainLines(string memory net) internal view override returns (ChainLine[] memory lines) {
         require(
             vm.exists(string.concat(deploymentsDir(), "/", net, "/network.json")),
             string.concat("unknown network ", net, ": ", deploymentsDir(), "/", net, "/network.json is missing")
@@ -76,11 +81,11 @@ abstract contract FileGraph is Graph {
         _homeChain(file);
         if (!vm.keyExistsJson(file, ".chains")) return lines;
         string[] memory chains = vm.parseJsonKeys(file, ".chains");
-        lines = new string[](chains.length);
+        lines = new ChainLine[](chains.length);
         for (uint256 i; i < chains.length; ++i) {
             uint256 id = chainId(file, chains[i]);
             _requireChain(chains[i], id);
-            lines[i] = string.concat("# chain ", chains[i], " ", vm.toString(id), " ", chainKind(id));
+            lines[i] = ChainLine(chains[i], id, chainKind(id));
         }
     }
 

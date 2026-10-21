@@ -693,11 +693,23 @@ scenario_tag() {
 
 # `run` sends the command lines that the FileGraph tests and the example's plan print, and nothing hostile.
 scenario_grammar() {
-  { (cd "$ROOT" && forge test --match-path 'test/FileGraph*' -vv 2>&1) | sed -n 's/^ *PLAN //p'
-    G plan local vault.check; } | grep -E '^([A-Z][A-Z0-9_]*=|forge script )' | sort -u >"$W/corpus"
+  { (cd "$ROOT" && SPRUE_PLAN_DATA=true forge test --match-path 'test/FileGraph*' -vv 2>&1) | sed -n 's/^ *PLAN //p'
+    G plan --json local vault.check | jq -c '.lines[]'; } | jq -c 'select(.type == "send")' | sort -u >"$W/corpus"
   [ "$(wc -l <"$W/corpus")" -ge 6 ] || die "grammar: too few command lines in $W/corpus"
   bash "$HERE/plan-grammar.sh" "$W/corpus" 2>>"$W/log" || die "grammar: see $W/log"
-  echo "ok  run sends every command line the tests and the example print, and no hostile mutation"
+  # The text is the graph's own, rendered from one object per line, and each send names its step. Run
+  # by hand, without the runner's variable, the plan logs that text.
+  G plan local vault.check >"$W/plan.txt" 2>>"$W/log"
+  forge script script/deploy/DeployGraph.s.sol --sig 'plan(string,string)' local vault.check --rpc-url local --json 2>>"$W/log" \
+    | grep '^{' | jq 'select(.returned)' >"$W/plan.forge"
+  jq -r .returned "$W/plan.forge" | xargs cast abi-decode --input 'f(string)' | jq -j . >"$W/plan.sol"
+  cmp -s "$W/plan.txt" "$W/plan.sol" || die "grammar: sprue plan is not the graph's text plan; see $W/plan.txt and $W/plan.sol"
+  jq -r '.logs[] | select(startswith("PLAN ")) | .[5:]' "$W/plan.forge" | cmp -s "$W/plan.txt" - \
+    || die "grammar: forge script plan without SPRUE_PLAN_DATA does not log the text plan; see $W/plan.forge"
+  G plan --json local vault.check 2>>"$W/log" | jq -e --argjson n "$(grep -c . "$W/plan.txt")" --slurpfile g script/deploy/graph.generated.json \
+    '(.lines | length) == $n and ([.lines[] | select(.type == "send")] | length > 0 and all(. as $l | $g[0].nodes | any(.id == $l.step and .signature == $l.argv[3])))' >/dev/null \
+    || die "grammar: plan --json is not one object per line, each send naming its step"
+  echo "ok  run sends every command line the tests and the example print, and no hostile mutation; plan --json types each line"
 }
 
 # The chart is for mermaid, which this script cannot run: check its shape against the export.
