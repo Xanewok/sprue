@@ -18,6 +18,12 @@ end-to-end scenario for each invariant.
   not seen; a status line names a path and its state, not its contents, so an edit to a file already
   modified or untracked is not seen either. A clean checkout at the start keeps that list short;
   `--allow-dirty` waives it, and is refused when any chain of the network is live.
+- One `run` or `rehearse` of a network, or `plan` of a rehearsal copy, runs at a time: a second
+  refuses while the first, or a forge the first started, runs. Each holds a file named by its pid in
+  the git directory, and writes it before it reads the other files, so two runs that start together
+  may both refuse but never both go on. A file whose process has exited is removed; if a new process
+  gets that pid first, the run refuses and names the file to remove. A signal to the runner stops the
+  forge that runs and waits for it to exit before the lock is released.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its
