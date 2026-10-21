@@ -733,7 +733,7 @@ function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
 // ---------- layout ----------
 
 // Lane and rank only; the page places them for its width.
-export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 8, pad: 24, title: 26 };
+export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 8, pad: 24, title: 22 };
 
 function layout(list, out) {
   const lanes = [];
@@ -910,8 +910,10 @@ export function place(D, G, avail) {
         const above = prev || chan('b' + k++, y, g.laneGap);
         const y0 = above.y + above.w / 2;
         if (top === null) top = y0;
+        // The title band sits above the shelf's top channel, so only links between shelves cross it, in the gaps.
+        const tc = chan('t' + k, y0 + g.title, 12);
         const rowTop = [], inner = [];
-        let ry = y0 + g.title;
+        let ry = tc.y + tc.w / 2;
         for (let r = 0; r < l.rows; r++) {
           rowTop.push(ry);
           ry += g.h;
@@ -923,7 +925,7 @@ export function place(D, G, avail) {
         const y1 = ry + 10;
         const below = chan('b' + k++, y1, g.laneGap);
         Object.assign(l, { y0, y1 });
-        l.above = (r) => (r === 0 ? above : inner[r - 1]);
+        l.above = (r) => (r === 0 ? tc : inner[r - 1]);
         l.below = (r) => (r === l.rows - 1 ? below : inner[r]);
         for (const n of l.lanes.flatMap((m) => m.nodes)) {
           const { c, r } = cell.get(n.id);
@@ -1038,10 +1040,30 @@ export function place(D, G, avail) {
     const W = Math.max(Math.min(avail, 440), gapC[maxUsed] + vw[maxUsed] / 2 + g.pad);
     const H = Math.max(prev ? prev.y + prev.w / 2 : y, ...sides.map((s) => s.y1 + 10)) + g.pad / 2;
     const counts = new Map([...tracks].map(([key, l]) => [key, l.length]));
-    return { g, W, H, cols, box, routes, badges, lanes: laneList.map((l) => {
+    // A lane's title goes in the leftmost stretch of its band that no link crosses and that holds it whole, else
+    // in the widest one, where the page shortens it.
+    const lanes = laneList.map((l) => {
       const cs = l.nodes.map((n) => cell.get(n.id).c);
-      return { key: l.key, x0: colX[Math.min(...cs)] - 12, x1: colX[Math.max(...cs)] + g.w + 12, y0: l.shelf.y0, y1: l.shelf.y1 };
-    }), sides, counts, width };
+      const x0 = colX[Math.min(...cs)] - 12, x1 = colX[Math.max(...cs)] + g.w + 12, y0 = l.shelf.y0;
+      const [chain, script] = l.key.split('|'), text = `chain ${chain} · ${script}`;
+      const band = [y0 + 3, y0 + g.title - 3];
+      const cuts = routes.flatMap((r) => r.pts.slice(1).map((p, i) => [r.pts[i], p]))
+        .filter(([a, b]) => Math.max(a[1], b[1]) > band[0] && Math.min(a[1], b[1]) < band[1])
+        .map(([a, b]) => [Math.min(a[0], b[0]) - 4, Math.max(a[0], b[0]) + 4])
+        .concat(badges.filter((b) => b.y + 9 > band[0] && b.y - 9 < band[1]).map((b) => [b.x - 13, b.x + 13]))
+        .sort((a, b) => a[0] - b[0]);
+      const free = [];
+      let at = x0 + 10;
+      for (const [a, b] of cuts) {
+        if (a > at) free.push([at, Math.min(a, x1 - 10)]);
+        at = Math.max(at, b);
+      }
+      if (at < x1 - 10) free.push([at, x1 - 10]);
+      const need = text.length * 6.8;
+      const spot = free.find(([a, b]) => b - a >= need) || free.reduce((m, f) => (f[1] - f[0] > m[1] - m[0] ? f : m), [x0 + 10, x0 + 10]);
+      return { key: l.key, x0, x1, y0, y1: l.shelf.y1, title: { text, x: spot[0], y: band[0], w: spot[1] - spot[0], h: band[1] - band[0] } };
+    });
+    return { g, W, H, cols, box, routes, badges, lanes, sides, counts, width };
   }
 }
 
@@ -1096,7 +1118,6 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .edge path{stroke-linejoin:round}
 .badge circle{fill:var(--panel);stroke:var(--edge)}.badge.future{opacity:.18}.badge text{font-size:10px;font-weight:600}
 .node .chain{fill:var(--muted);font-size:10px}
-.lane text{paint-order:stroke;stroke:var(--lane);stroke-width:4px;stroke-linejoin:round}
 .dim .node:not(.hot){opacity:.15}.dim .edge:not(.hot){opacity:.08}.dim .badge{opacity:.15}
 @keyframes pop{0%{transform:scale(.6)}60%{transform:scale(1.08)}100%{transform:scale(1)}}
 .anim .node.now>g{animation:pop .35s ease-out;transform-box:fill-box;transform-origin:center}
@@ -1135,9 +1156,13 @@ function client(place) {
   view.appendChild(svg);
   const nodeEls = new Map(), edgeEls = new Map();
   const multiChain = new Set(D.nodes.map((n) => n.chain)).size > 1;
-  const laneName = (k) => {
-    const [chain, s] = k.split('|');
-    return `chain ${chain} · ${s}`;
+  // Shortens an SVG text to a width, keeping the whole text as its tooltip.
+  const fit = (t, text, w) => {
+    t.textContent = text;
+    if (t.getComputedTextLength() <= w) return;
+    let n = text.length;
+    while (n > 1 && (t.textContent = text.slice(0, --n) + '…') && t.getComputedTextLength() > w);
+    el('title', {}, t).textContent = text;
   };
   const rounded = (pts) => {
     let d = `M${pts[0][0]},${pts[0][1]}`;
@@ -1169,12 +1194,12 @@ function client(place) {
     for (const l of L.lanes) {
       const lg = el('g', { class: 'lane' }, lanesG);
       el('rect', { x: l.x0, y: l.y0, width: l.x1 - l.x0, height: l.y1 - l.y0, rx: 8 }, lg);
-      el('text', { x: l.x0 + 10, y: l.y0 + 17 }, lg).textContent = laneName(l.key);
+      fit(el('text', { x: l.title.x, y: l.y0 + 16 }, lg), l.title.text, l.title.w);
     }
     for (const s of L.sides) {
       const lg = el('g', { class: 'lane side' }, lanesG);
       el('rect', { x: g.pad - 8, y: s.y0, width: g.w + 16, height: s.y1 - s.y0, rx: 8 }, lg);
-      el('text', { x: g.pad, y: s.y0 + 17 }, lg).textContent = `chain ${s.chain} · shared outside`;
+      fit(el('text', { x: g.pad, y: s.y0 + 16 }, lg), `chain ${s.chain} · shared outside`, g.w);
     }
 
     for (const n of D.nodes) {

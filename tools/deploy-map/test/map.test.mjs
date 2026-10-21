@@ -124,3 +124,20 @@ test('short lanes of one chain share a row, each as wide as its boxes', () => {
   assert.ok(a.x1 <= b.x0, 'lanes on one row do not overlap');
   assert.equal(new Set([...box.values()].map((p) => p.y)).size, 2);
 });
+
+test('no link crosses a lane title', () => {
+  const lanes = ['1|outside', '1|First.s.sol', '1|Second.s.sol', '1|Third.s.sol'];
+  const nodes = [];
+  for (let k = 0; k < 15; k++) nodes.push({ id: `1:n${k}`, chain: 1, kind: 'contract', laneKey: lanes[1 + Math.floor(k / 5)], ord: k });
+  const edges = [];
+  for (let k = 0; k < 15; k++) edges.push({ from: `1:n${k}`, to: `1:n${(k * 4 + 7) % 15}` }, { from: `1:n${k}`, to: `1:n${(k + 5) % 15}` });
+  for (const width of [1060, 390]) {
+    const { lanes: placed, routes } = place({ nodes, edges: edges.filter((e) => e.from !== e.to), lanes }, GEOM, width);
+    assert.equal(placed.length, 3);
+    for (const { key, title: t } of placed) {
+      assert.ok(t.w > 40, `${key} has room for its title`);
+      for (const s of segments(routes))
+        assert.ok(!(s.x1 < t.x + t.w && s.x2 > t.x && s.y1 < t.y + t.h && s.y2 > t.y), `${s.r.key} crosses the title of ${key} at width ${width}`);
+    }
+  }
+});
