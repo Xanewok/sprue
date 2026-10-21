@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Fixed: an attended `run` refuses a send when a file in the network's directory, such as a journal,
+changed while the `Type yes` question waited. git status shows no new line for an edit to a journal
+already modified or ignored, so the send could read a journal whose contents differ from the dry run's.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

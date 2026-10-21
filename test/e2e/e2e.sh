@@ -639,6 +639,13 @@ scenario_tag() {
   git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: not pushed"
   ! git ls-remote --tags origin refs/tags/unrelated | grep -q . || die "tag: the push took another tag"
   git add -A; git commit -qm journals
+  # An edit to a journal while the question waits, which the status comparison leaves out as the run's own
+  # write: here it names a token of the same code from another key, which the send would build the vault on.
+  local twin; twin=$(forge create script/deploy/units/token/Token.sol:Token --rpc-url prod --unlocked --broadcast --json \
+    --from "$(cast rpc eth_accounts --rpc-url "$prod" | jq -r '.[1]')" --constructor-args 1000 | jq -r .deployedTo)
+  PTY_HOOK="jq --arg t $twin '.checked.token = \$t' deployments/prod/token.json >$W.j && mv $W.j deployments/prod/token.json" \
+    refused 'changed since the dry run' tty yes G run prod vault.deploy --account e2e
+  git checkout -q deployments/prod/token.json
   out=$(tty no "${run[@]}" 2>&1) || die "tag: the rerun failed: $(tail -c 600 <<<"$out")"
   ! grep -q "Type yes\|$tag" <<<"$out" || die "tag: a finished rerun asked or reported: $(tail -c 600 <<<"$out")"
   git push -q origin ":refs/tags/$tag"
