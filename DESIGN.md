@@ -15,8 +15,9 @@ What sprue assumes, what it guarantees, and the decisions behind it. [GUIDE.md](
   its own forks and its own dry run. A separate `forge script` per step is the unit the person approves, and
   the graph's `rehearse` only simulates for the same reason. Every line is a plain command a person can paste.
 - **Why does an attended run compare state around the question?** After `yes`, forge runs the command again.
-  The run refuses if what it compares ([SECURITY.md](SECURITY.md)) changed, because that would make the
-  second run differ from the dry run the person read.
+  The run refuses if what it compares ([SECURITY.md](SECURITY.md)) changed, or if the dry run, run again
+  after `yes`, would send other transactions, because the send would then differ from the dry run the
+  person read.
 - **Why does a rerun send nothing?** The graph plans again and skips every step its done rule calls done,
   so an interrupted run is finished by running it again; a step's own idempotence is the unit author's.
 - **Why does `run` stop at a future date instead of waiting?** A person at a terminal should not hold a
@@ -68,7 +69,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
 | `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; two rehearses of one network do not run at once; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
-| An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
+| An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended`, `scenario_tag` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 
 ## Decisions
@@ -174,8 +175,9 @@ Sphinx asks before a proposal; forge has no general confirmation for public netw
 
 Planned work is in [ROADMAP.md](ROADMAP.md).
 
-- **Bind the approval to the previewed transactions.** The run compares state around the question and then
-  reruns the command. Sending exactly the dry run's transactions (`forge script --resume` on its sequence, or
+- **Bind the approval to the previewed transactions.** The run compares a second dry run's transactions
+  with the previewed ones and then reruns the command, so a change in the seconds before the send is not
+  seen. Sending exactly the dry run's transactions (`forge script --resume` on its sequence, or
   `cast` per transaction) would change the "same command with `--broadcast`" contract.
 - **Why journals carry `<role>Commit`.** They copy forge's commit and receipt facts. Open: reuse more of
   forge's records, or keep a vendor-neutral schema and adapters. Forge records `HEAD` without dirtiness, so

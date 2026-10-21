@@ -17,7 +17,11 @@ end-to-end scenario for each invariant.
   network's `<unit>.json` and `*.metadata.json` files, which the run writes, so a new file there is
   not seen; a status line names a path and its state, not its contents, so an edit to a file already
   modified or untracked is not seen either. A clean checkout at the start keeps that list short;
-  `--allow-dirty` waives it, and is refused when any chain of the network is live.
+  `--allow-dirty` waives it, and is refused when any chain of the network is live. After the answer
+  the dry run runs again, and the send is refused unless it would send the same transactions: the
+  same chain, from, to, input, value and nonce, in the same order (gas is not compared). This covers
+  what the comparison above leaves out, such as an edited journal or a change on chain, up to that
+  second dry run; the send's own simulation follows it within seconds and is not compared.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its

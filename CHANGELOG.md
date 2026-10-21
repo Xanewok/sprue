@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed: an attended `run` runs a step's dry run again after `yes` and refuses the send unless it would
+send the same transactions as the preview (chain, from, to, input, value, nonce). Before, a journal
+edited or a chain changed while the question waited could make the send differ from what was approved.
+Each attended step now takes a second dry run.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

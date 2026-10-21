@@ -51,7 +51,8 @@ Anvil or a chains.local id on every chain; any other network refuses a developme
 interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
-.env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
+.env and ~/.foundry/foundry.toml unchanged since before the dry run, and only if the dry run, run again
+after yes, would send the same transactions. Nothing skips the question.
 
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
@@ -722,8 +723,7 @@ async function main(argv) {
       })
       .join("");
   // The working-tree changes that matter while the person is asked to confirm: git status, minus the
-  // journals and metadata the run itself writes (<unit>.json and *.metadata.json). Known gap: the send
-  // runs forge again, so any other state that forge reads may differ from the dry run the person saw.
+  // journals and metadata the run itself writes (<unit>.json and *.metadata.json).
   const changes = () => {
     const dir = `${DEPLOYMENTS}/${network}/`;
     return porcelain().filter((l) => {
@@ -769,6 +769,30 @@ async function main(argv) {
     if (code !== 0) stop(log, code);
   };
 
+  // The transactions of a dry run, from the records its output names. If the output says it has
+  // transactions but names no record, they cannot be shown, so refuse.
+  const sends = (dry) => {
+    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
+    if (!records.length && /^SIMULATION COMPLETE/m.test(dry.text)) fail(2, "refusing: the dry run has transactions but names no record to show");
+    const show = (v) => (v == null ? "null" : typeof v === "string" ? v : JSON.stringify(v));
+    return records.flatMap((f) => {
+      try {
+        const rec = readJson(f);
+        return (rec.deployments ?? [rec]).flatMap(({ chain, transactions }) =>
+          transactions.map((t) => {
+            const x = t.transaction;
+            return {
+              text: `chain ${show(chain)} nonce ${show(x.nonce)}: ${show(t.transactionType)} ${t.contractName ?? ""} ${show(t.contractAddress ?? x.to)} value ${show(x.value)} ${t.function ?? ""} ${JSON.stringify(t.arguments ?? [])}`,
+              // Gas is left out: forge estimates it again at the send.
+              sent: Object.fromEntries(Object.entries({ chain, from: x.from, to: x.to, input: x.input, value: x.value, nonce: x.nonce }).map(([k, v]) => [k, show(v)])),
+            };
+          }),
+        );
+      } catch {
+        fail(2, `refusing: cannot show the dry run's record ${f}`);
+      }
+    });
+  };
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
   async function attend(line, cmd) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
@@ -783,30 +807,21 @@ async function main(argv) {
     const dry = forge(cmd.args, cmd.env);
     out(`${dry.text}\n`);
     if (dry.status !== 0) stop(dry.text, dry.status);
-    // Forge saves a dry run that has transactions and names the file. If the output says it has
-    // transactions but names no file, they cannot be shown, so refuse.
-    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
-    const show = (v) => (v == null ? "null" : typeof v === "string" ? v : JSON.stringify(v));
-    for (const f of records) {
-      try {
-        const rec = readJson(f);
-        for (const d of rec.deployments ?? [rec]) {
-          for (const t of d.transactions) {
-            out(`  chain ${show(d.chain)} nonce ${show(t.transaction.nonce)}: ${show(t.transactionType)} ${t.contractName ?? ""} ${show(t.contractAddress ?? t.transaction.to)} value ${show(t.transaction.value)} ${t.function ?? ""} ${JSON.stringify(t.arguments ?? [])}\n`);
-          }
-        }
-      } catch {
-        fail(2, `refusing: cannot show the dry run's record ${f}`);
-      }
-    }
-    if (!records.length) {
-      if (/^SIMULATION COMPLETE/m.test(dry.text)) fail(2, "refusing: the dry run has transactions but names no record to show");
-      out("  no transactions in the dry run\n");
-    }
+    const was = sends(dry);
+    for (const { text } of was) out(`  ${text}\n`);
+    if (!was.length) out("  no transactions in the dry run\n");
     if (ask(`${line}\nSend this as ${sender}? Type yes: `) !== "yes") fail(6, "not sent: the answer was not yes");
     if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
     if (head() !== sha) fail(2, "refusing: HEAD moved since before the dry run; run again");
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
+    // Anything else forge reads, a journal or the chain, can change while the question waits: the dry run
+    // again must send what was shown.
+    const again = forge(cmd.args, cmd.env);
+    const now = again.status === 0 ? sends(again) : [];
+    const changed = again.status !== 0 ? [`the dry run exits ${again.status}`]
+      : now.length !== was.length ? [`now ${now.length} transactions, not ${was.length}`]
+      : was.flatMap((w, i) => Object.keys(w.sent).filter((k) => w.sent[k] !== now[i].sent[k]).map((k) => `transaction ${i + 1}'s ${k}`));
+    if (changed.length) fail(2, `refusing: what the step would send changed while the question waited (${changed.join(", ")}); run again to see a new preview`);
     const pre = new Set(porcelain());
     await step(cmd);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
