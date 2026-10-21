@@ -57,8 +57,12 @@ recover.
 ## Quick start
 
 sprue needs Node 18 or later, `git`, `cast`, `forge` 1.8 or later (CI pins v1.8.5), and `anvil` for
-`rehearse`; Windows without WSL is not yet tested. This runs
-[`examples/token-vault`](examples/token-vault), a complete project that CI runs:
+`rehearse`. On Windows without WSL, `plan`, an unattended `run` and `rehearse` were checked in
+PowerShell, cmd and Git Bash. An attended run asks on the console, so it needs PowerShell, cmd or
+Windows Terminal; under Git Bash's mintty, start it with `winpty node …`. The plan's lines are bash
+syntax. A deep checkout needs `git config core.longpaths true`.
+
+This runs [`examples/token-vault`](examples/token-vault), a complete project that CI runs:
 
 ```sh
 git clone https://github.com/Xanewok/sprue && cd sprue
