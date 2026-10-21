@@ -1436,20 +1436,42 @@ function client(place) {
     apply();
     if (!S.sel) panel();
   };
-  // Sections: runs of steps from one script, or one sprue unit.
+  // Sections: runs of steps from one script. Every step has a script, while only some have a sprue unit.
   const sections = [];
   D.steps.forEach((st, k) => {
-    const name = D.sprue && st.id ? st.id.split('.')[0] : D.txs[st.txs[0]].script;
+    const name = D.txs[st.txs[0]].script;
     const last = sections[sections.length - 1];
     if (last && last.name === name) last.end = k;
     else sections.push({ name, start: k, end: k });
   });
   const secOf = (k) => sections.findIndex((x) => k >= x.start && k <= x.end);
+  // A section shows its script without what every script shares (`Deploy`, `MU01-`, `.s.sol`), else its
+  // first words, else its initials, else nothing; the tooltip has the whole name.
+  const bare = (n) => n.replace(/(\.s)?\.sol$/, '');
+  const names = [...new Set(sections.map((x) => bare(x.name)))];
+  const wordStart = (n, i) => /[-_. ]/.test(n[i - 1]) || (/[A-Z]/.test(n[i]) && /[a-z0-9]/.test(n[i - 1]));
+  let pre = 0;
+  if (names.length > 1) {
+    while (names.every((n) => pre < n.length - 1 && n[pre] === names[0][pre])) pre++;
+    while (pre > 0 && !names.every((n) => wordStart(n, pre))) pre--;
+  }
+  const forms = (label) => {
+    const starts = [...label].map((_, i) => i).filter((i) => i > 0 && wordStart(label, i));
+    const words = label.match(/[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+/g) || [];
+    return [label, ...starts.slice(1).reverse().map((i) => label.slice(0, i).replace(/[-_. ]+$/, '') + '…'),
+      words.map((w) => (/^\d/.test(w) ? w : w[0].toUpperCase())).join(''), ''];
+  };
+  const fitSections = () => document.querySelectorAll('.sec').forEach((b) => {
+    for (const t of forms(b.dataset.label)) {
+      b.textContent = t;
+      if (b.scrollWidth <= b.clientWidth) break;
+    }
+  });
   $('#sections').append(...sections.map((x) => {
     const b = document.createElement('button');
     b.className = 'sec';
     b.style.flexGrow = x.end - x.start + 1;
-    b.textContent = x.name;
+    b.dataset.label = bare(x.name).slice(pre);
     b.title = `${x.name}: steps ${x.start + 1}–${x.end + 1}`;
     b.onclick = () => go(x.start);
     return b;
@@ -1463,7 +1485,7 @@ function client(place) {
   let resizing;
   window.addEventListener('resize', () => {
     clearTimeout(resizing);
-    resizing = setTimeout(() => { draw(); apply(); }, 120);
+    resizing = setTimeout(() => { draw(); apply(); fitSections(); }, 120);
   });
   svg.addEventListener('click', () => select(null));
   $('#panel').addEventListener('click', (e) => {
@@ -1515,11 +1537,12 @@ function client(place) {
     $('#tableview').classList.toggle('hidden', which !== 'table');
     for (const id of ['#playbar']) $(id).classList.toggle('hidden', which !== 'map');
   };
-  tabs.map.onclick = () => show('map');
+  tabs.map.onclick = () => { show('map'); fitSections(); };
   tabs.table.onclick = () => show('table');
   draw();
   apply();
   panel();
+  fitSections();
 }
 
 export function render(model, title) {
