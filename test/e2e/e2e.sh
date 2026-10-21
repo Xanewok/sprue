@@ -76,6 +76,9 @@ setup() {
   [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W.home/.local/share/svm"
   [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W.home/Library/Application Support"
     ln -s "$HOME/Library/Application Support/svm" "$W.home/Library/Application Support/svm"; }
+  # The attended and tag scenarios sign with this keystore, in the runner's home.
+  HOME=$W.home cast wallet import e2e --mnemonic 'test test test test test test test test test test test junk' \
+    --unsafe-password "$KEYSTORE_PW" >/dev/null
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
@@ -507,10 +510,6 @@ scenario_rehearse() {
 scenario_attended() {
   command -v python3 >/dev/null || { echo "skip attended: it needs python3"; return; }
   local net=rehearsal-live out rc n0 account=e2e
-  # The keystore lives in the runner's home.
-  export HOME=$W.home
-  cast wallet import "$account" --mnemonic 'test test test test test test test test test test test junk' \
-    --unsafe-password "$KEYSTORE_PW" >/dev/null
   network "$net" 1; network livenet 1
   git add -A; git commit -qm networks
   unset CI
@@ -617,6 +616,7 @@ scenario_attended() {
 # push. A rerun offers only what is missing; a failed push keeps the run's status; a tag never moves.
 scenario_tag() {
   command -v python3 >/dev/null || { echo "skip tag: it needs python3"; return; }
+  unset CI
   local tag=deploy/prod/token out first commit prod=http://127.0.0.1:$((PORT + 5))
   # A chain of its own: the deployer's CREATEs on chain 1 would trip the nonce fence.
   live_node $((PORT + 5)) 10
@@ -714,6 +714,7 @@ scenario_mermaid() {
   echo "ok  mermaid starts with flowchart TD and has one subgraph per unit"
 }
 
+for s in ${E2E_ONLY:-}; do declare -F "scenario_$s" >/dev/null || die "E2E_ONLY: no scenario $s"; done
 setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
