@@ -9,7 +9,7 @@ import {
   statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -48,12 +48,13 @@ run, on a network whose chains sprue.json lists all as local, sends unattended, 
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
 terminal and no CI variable. A rehearsal network (the name that paths.rehearsal ends in, or it and -<suffix>) requires
 Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
-interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
+interrupted run included: commit them). It refuses a build source that git tracks whose bytes on disk
+differ from the commit's, and warns of one that git does not track. Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
 .env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
 
---allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
+--allow-dirty skips only the clean-checkout and build-source checks, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
 
 --unsafe-unexpected-deployer lets the steps of network.json's \`deployer\` send as DEPLOYER, or as the
@@ -742,6 +743,32 @@ async function main(argv) {
   const digest = (f) => (isFile(f) ? [`${f} ${createHash("sha256").update(readFileSync(f)).digest("hex")}`] : []);
   const tree = () => [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
   const head = () => must("git", ["rev-parse", "HEAD"], "refusing: git rev-parse failed");
+  // solc builds the bytes on disk, which git status does not compare for a file it skips (assume-unchanged,
+  // skip-worktree) or converts (core.autocrlf, a filter, an encoding), nor for one outside git. The sources
+  // are the last build's, in forge's cache: out/build-info keeps earlier builds' too. git is asked each time:
+  // the plan's forge may have just installed a submodule. With the cache off, the file is an earlier build's.
+  let warned = "";
+  const requireCommittedBuild = (config) => {
+    const cache = `${config.cache_path}/solidity-files-cache.json`;
+    if (config.cache === false) fail(2, "refusing: forge's cache is off (cache = false, FOUNDRY_CACHE), which lists the build's sources; turn it on");
+    const sources = Object.keys(readJson(cache)?.files ?? {})
+      .map((p) => relative(root, resolve(p)))
+      .map((p) => (WIN ? p.replaceAll("\\", "/") : p));
+    if (!sources.length) fail(2, `refusing: ${cache} names no source of the build; turn on forge's cache (cache = true in foundry.toml)`);
+    const blobs = new Map(must("git", ["ls-files", "-s", "-z", "--recurse-submodules", ":/"], "refusing: git ls-files failed").split("\0").map((e) => [e.slice(e.indexOf("\t") + 1), e.split(" ")[1]]));
+    const some = (fs) => `${fs.slice(0, 3).join(", ")}${fs.length > 3 ? ` and ${fs.length - 3} more` : ""}`;
+    const untracked = sources.filter((p) => !blobs.has(p));
+    // A person's choice of dependency manager, so only reported, once per list.
+    if (untracked.length && untracked.join() !== warned) {
+      warned = untracked.join();
+      out(`warning: the build compiles files that git does not track, so no commit records them: ${some(untracked)} (a dependency outside git, as in node_modules, or an ignored or linked file)\n`);
+    }
+    const tracked = sources.filter((p) => blobs.has(p));
+    const hashed = spawnSync("git", ["hash-object", "--no-filters", "--stdin-paths"], { input: tracked.join("\n"), encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] });
+    const got = hashed.status === 0 ? hashed.stdout.split("\n") : [];
+    const differ = tracked.filter((p, i) => got[i] !== blobs.get(p));
+    if (differ.length) fail(2, `refusing: the build compiles ${some(differ)}, whose bytes on disk differ from the commit's, which git status does not show (core.autocrlf, assume-unchanged or skip-worktree, a .gitattributes filter or encoding); undo that setting, then delete the file and run git checkout -- <file>`);
+  };
 
   // Repeats forge's last `Error:` line, where a long run buries it, and exits with forge's code.
   const stop = (text, code) => {
@@ -773,7 +800,7 @@ async function main(argv) {
   };
 
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
-  async function attend(line, cmd) {
+  async function attend(line, cmd, config) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
     if (sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
     const snap = nonces(sender);
@@ -810,6 +837,8 @@ async function main(argv) {
     if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
     if (head() !== sha) fail(2, "refusing: HEAD moved since before the dry run; run again");
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
+    // git status misses an edit to a file it skips, and the send builds again.
+    if (!dirtyOk) requireCommittedBuild(config);
     const pre = new Set(porcelain());
     await step(cmd);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
@@ -891,11 +920,6 @@ async function main(argv) {
   let sent = "";
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
-    // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
-    // After each plan: its forge may have just installed a submodule.
-    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(must("git", ["ls-files", "--eol", "--recurse-submodules", ":/"], "refusing: git ls-files failed"))) {
-      fail(2, "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again");
-    }
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);
@@ -969,8 +993,9 @@ async function main(argv) {
         if (cacheDir && config.cache_path !== cacheDir) {
           fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
         }
+        if (attended && !dirtyOk) requireCommittedBuild(config);
         sent = text;
-        await (attended ? attend(line, cmd) : step(cmd));
+        await (attended ? attend(line, cmd, config) : step(cmd));
       }
     }
     // Judge what the sends left: a plan with nothing to send, even an empty one, ends the run.

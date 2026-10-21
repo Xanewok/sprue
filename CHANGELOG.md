@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed: `run` refuses a line whose forge build goes elsewhere than `out/`, or whose `chain_id` is not the
+line's chain. An attended run refuses a tracked build source whose bytes differ from the commit's (a CRLF
+checkout, `assume-unchanged`, a filter), and names the sources git does not track; this replaces the
+line-ending check.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

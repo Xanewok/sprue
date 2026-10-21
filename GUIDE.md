@@ -120,6 +120,13 @@ other than the chain of the line's `--rpc-url`, which forge would simulate inste
 build directory other than `out` (any spelling of it), since the units read each artifact and its
 metadata there.
 
+An attended `run` without `--allow-dirty` also checks each source that forge's cache lists for the
+build. It refuses a source that git tracks whose bytes on disk are not the committed ones: one that git
+checks out converted (`core.autocrlf`, a filter or encoding in `.gitattributes`) or skips
+(`assume-unchanged`, `skip-worktree`). It warns of a source that git does not track (`node_modules`, an
+ignored or linked directory), which no commit records, and goes on. It refuses `cache = false` (in
+`foundry.toml`, or `FOUNDRY_CACHE`), since then forge lists no current sources.
+
 ## When a run refuses
 
 Each refusal names its remedy. These need a person:

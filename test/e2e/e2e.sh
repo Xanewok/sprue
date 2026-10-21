@@ -58,7 +58,9 @@ setup() {
   cp -R "$ROOT/examples/token-vault/." "$W/"
   mkdir -p "$W/lib/sprue"
   cp -R "$ROOT/src" "$ROOT/bin" "$W/lib/sprue/"
-  ln -s "$FORGE_STD" "$W/lib/forge-std"
+  # A submodule, as forge install adds it, so that the attended runs build from tracked sources.
+  git init -q "$W/lib/forge-std"; cp -R "$FORGE_STD/src" "$W/lib/forge-std/"
+  git -C "$W/lib/forge-std" add -A; git -C "$W/lib/forge-std" -c user.email=t@t -c user.name=t commit -qm forge-std
   cp "$HERE/pty.py" "$W/../$(basename "$W").pty.py"
   PTY=$W/../$(basename "$W").pty.py
   cd "$W"
@@ -82,6 +84,7 @@ setup() {
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
+  git submodule add -q --force ./lib/forge-std lib/forge-std >/dev/null 2>&1; git add -f lib/sprue
   node lib/sprue/bin/sprue.mjs json | diff - script/deploy/graph.generated.json || die "graph.generated.json is stale"
   # The attended scenario sends to an Anvil posing as chain 1; those records are not evidence.
   echo 'broadcast/Deploy*/1/' >>.gitignore
@@ -547,9 +550,20 @@ scenario_attended() {
   refused 'not clean' tty no "${run[@]}"
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
-  git config core.autocrlf true; rm README.md; git checkout -q README.md
-  refused 'other line endings than the commit' tty no "${run[@]}"
-  git config --unset core.autocrlf; rm README.md; git checkout -q README.md
+  # solc builds the bytes on disk, which git status does not compare for a file git skips, converts or lacks.
+  local src=script/deploy/units/token/Token.sol
+  git update-index --assume-unchanged "$src"; echo '// edited' >>"$src"
+  refused "the build compiles $src, whose bytes on disk differ from the commit's" tty no "${run[@]}"
+  git checkout -q "$src"
+  local n1; n1=$(nonce "$LIVE")
+  PTY_HOOK="echo // edited >>$src" refused "the build compiles $src, whose bytes on disk differ from the commit's" tty yes "${run[@]}"
+  [ "$(nonce "$LIVE")" = "$n1" ] || die "attended: an edit of a skipped file during the question was sent"
+  git update-index --no-assume-unchanged "$src"; git checkout -q "$src"
+  git config core.autocrlf true; rm "$src"; git checkout -q "$src"
+  refused "the build compiles $src, whose bytes on disk differ from the commit's" tty no "${run[@]}"
+  git config --unset core.autocrlf; rm "$src"; git checkout -q "$src"
+  # Without its cache, forge leaves an earlier build's list of sources.
+  FOUNDRY_CACHE=false refused "forge's cache is off" tty no "${run[@]}"
   DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
   # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
   local plain; plain=$(<"deployments/$net/network.json")
@@ -586,8 +600,12 @@ scenario_attended() {
   grep -aq 'Estimated amount required' <<<"$out" || die "attended: the preview does not show the cost"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
   # Every step is asked, the check too.
-  # Without DEPLOYER the run sends as its signer.
-  out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
+  # Without DEPLOYER the run sends as its signer. A dependency outside git, here forge-std, is only reported.
+  mkdir -p node_modules/forge-std; cp -R lib/forge-std/src node_modules/forge-std/; echo node_modules/ >>.git/info/exclude
+  out=$( (unset DEPLOYER; FOUNDRY_REMAPPINGS=forge-std/=node_modules/forge-std/src/ tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
+  rm -rf node_modules
+  [ "$(grep -ac '^warning: the build compiles files that git does not track, so no commit records them: node_modules/forge-std/src/' <<<"$out")" = 1 ] \
+    || die "attended: an untracked dependency was not reported once: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   grep -aq 'no transactions in the dry run' <<<"$out" || die "attended: the check's empty dry run was not shown as such"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
