@@ -10,7 +10,8 @@ failing CREATE again.
 `run` refuses a second run of a network while one or its step runs (exit 2), by a lock in the git
 directory, and `rehearse` refuses while a run of its copy does; a lock whose pids have exited is taken
 over. Before, two runs raced: the later one failed inside forge or stopped at exit 3. A signal to `run`
-while a step sends stops the step and waits for it.
+while a step sends stops the step and waits for it. A takeover file, or `rehearse`'s own lock, that a crash
+left with a pid that has exited is removed with a note; before, a person removed it.
 
 A role whose journaled address has no code yet is refused with "has no code yet: run again once the RPC
 shows its deployment", not "its code differs", as from an RPC that answers from a lagging node.

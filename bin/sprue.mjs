@@ -134,6 +134,34 @@ const alive = (pid) => {
     return e.code === "EPERM";
   }
 };
+// Removes `file`, read as `content`, when the pid that it names has exited, as after a crash. It is moved
+// aside first and put back unless it still holds `content`, so a file that another run wrote meanwhile
+// stays. Returns whether it is gone.
+function removeStale(file, content) {
+  const pid = Number(content);
+  try {
+    if (!(Number.isInteger(pid) && pid > 0)) return false;
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    if (e.code !== "ESRCH") return false;
+  }
+  const aside = `${file}.${process.pid}.stale`;
+  try {
+    renameSync(file, aside);
+  } catch (e) {
+    if (e.code === "ENOENT") return true;
+    throw e;
+  }
+  const same = readFileSync(aside, "utf8") === content;
+  if (!same) {
+    try { linkSync(aside, file); } catch (e) { if (e.code !== "EEXIST") throw e; }
+  }
+  rmSync(aside, { force: true });
+  if (same) err(`${NAME}: removed ${file}, left by pid ${pid}, which has exited\n`);
+  return same;
+}
+
 // Exclusive, naming its holder's pid and, while one runs, its step's, and released at exit. A lock whose
 // pids have all exited is taken over under a second exclusive file, so two runs never both take it.
 // Returns the setter of the step's pid.
@@ -159,6 +187,9 @@ function lock(file, what) {
         linkSync(mine, `${file}.takeover`);
       } catch (e) {
         if (e.code !== "EEXIST") throw e;
+        let taker;
+        try { taker = readFileSync(`${file}.takeover`, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
+        if (taker === undefined || removeStale(`${file}.takeover`, taker)) continue;
         fail(2, `refusing: ${file}.takeover exists; remove it if no ${what} runs`);
       }
       try {
@@ -524,14 +555,20 @@ async function main(argv) {
     if (existsSync(dir) && !existsSync(dirname(recordFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
     mkdirSync(dirname(recordFile), { recursive: true });
     // Exclusive, and read under it: two rehearses of one network would share its journals over different
-    // forks. A stale lock is not taken over, since two runs could both take it.
-    try {
-      writeFileSync(lock, String(process.pid), { flag: "wx" });
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      const pid = Number(readFileSync(lock, "utf8"));
-      if (alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
-      fail(2, `refusing: ${lock} names pid ${pid}, which has exited; remove it if no rehearse of ${source} runs`);
+    // forks.
+    for (;;) {
+      try {
+        writeFileSync(lock, String(process.pid), { flag: "wx" });
+        break;
+      } catch (e) {
+        if (e.code !== "EEXIST") throw e;
+      }
+      let held;
+      try { held = readFileSync(lock, "utf8"); } catch (e) { if (e.code !== "ENOENT") throw e; }
+      if (held === undefined || removeStale(lock, held)) continue;
+      const pid = Number(held);
+      if (pid > 0 && alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
+      fail(2, `refusing: ${lock} names ${pid > 0 ? `pid ${pid}` : "no pid"}; remove it if no rehearse of ${source} runs`);
     }
     atExit = () => rmSync(lock, { force: true });
     // Before it stops a kept fork or replaces a file: a run of the copy may be using them.

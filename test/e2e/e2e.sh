@@ -427,6 +427,15 @@ scenario_concurrent() {
   [ -f "$lock" ] || die "concurrent: the killed run left no lock"
   out=$(G run conc token.check 2>&1) || die "concurrent: a dead run's lock was not taken over: $(tail -c 600 <<<"$out")"
   [ ! -e "$lock" ] || die "concurrent: the run left its lock"
+  # A takeover file that a crash left, naming a pid that has exited, is removed with a note; one that
+  # names no pid is refused.
+  sh -c 'echo $$' >"$lock"; sh -c 'echo $$' >"$lock.takeover"
+  out=$(G run conc token.check 2>&1) || die "concurrent: a crash's takeover file was not removed: $(tail -c 600 <<<"$out")"
+  grep -q "removed .*\.lock\.takeover, left by pid [0-9]*, which has exited" <<<"$out" || die "concurrent: no note of the removed takeover: $(tail -c 600 <<<"$out")"
+  [ ! -e "$lock" ] && [ ! -e "$lock.takeover" ] || die "concurrent: the run left its lock or the takeover file"
+  sh -c 'echo $$' >"$lock"; : >"$lock.takeover"
+  refused "takeover exists; remove it" G run conc token.check
+  rm "$lock" "$lock.takeover"
   rm -f "$W.a"
   echo "ok  concurrent a second run of a network refuses while the first runs; a signal stops the step, then the lock; a dead run's lock is taken over"
 }
@@ -680,8 +689,12 @@ scenario_rehearse() {
   rm -rf "$W.noanvil" deployments/rehearsal-hand
   echo $$ >"$d/.sprue/lock"
   refused 'is running, as pid' "${go[@]}" main token.check
+  # A crash's lock, naming a pid that has exited, is removed with a note; one that names no pid is refused.
   sh -c 'echo $$' >"$d/.sprue/lock"
-  refused 'which has exited; remove it' "${go[@]}" main token.check
+  out=$("${go[@]}" main token.check 2>&1) || die "rehearse: a lock of an exited pid was not removed: $(tail -c 600 <<<"$out")"
+  grep -q "removed $d/.sprue/lock, left by pid [0-9]*, which has exited" <<<"$out" || die "rehearse: no note of the removed lock: $(tail -c 600 <<<"$out")"
+  : >"$d/.sprue/lock"
+  refused 'names no pid; remove it' "${go[@]}" main token.check
   rm "$d/.sprue/lock"
   echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
 }
