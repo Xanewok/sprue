@@ -36,6 +36,12 @@ function unitInputPath(string memory network, string memory unit) view returns (
     return inputPath(deploymentsDir(), network, unit);
 }
 
+/// @dev A `vm.readDir` entry's path with `/` throughout. On Windows readDir joins each name below the root
+///      with `\`; on Unix a `\` is a name's own character, so the path stays as it is.
+function slashed(string memory path) view returns (string memory) {
+    return bytes(cheats.projectRoot())[0] == "/" ? path : cheats.replace(path, "\\", "/");
+}
+
 /// @dev Replaces the deployments directory's `<to>` with a copy of the files of its `<from>`, inputs
 ///      included. Subdirectories are not copied.
 function stageInputs(string memory from, string memory to) {
@@ -46,7 +52,7 @@ function stageInputs(string memory from, string memory to) {
     cheats.createDir(dir, true);
     VmSafe.DirEntry[] memory files = cheats.readDir(string.concat(root, "/", from));
     for (uint256 i; i < files.length; ++i) {
-        string[] memory path = cheats.split(files[i].path, "/");
+        string[] memory path = cheats.split(slashed(files[i].path), "/");
         if (!files[i].isDir) cheats.copyFile(files[i].path, string.concat(dir, "/", path[path.length - 1]));
     }
 }

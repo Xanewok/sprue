@@ -5,7 +5,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, chainRpc, deploymentsDir, graphScript, isFencedChainId, isTestChain, unitsDir} from "./Chains.sol";
 import {Deployment} from "./Deployment.sol";
-import {isRehearsalNetwork} from "./Journal.sol";
+import {isRehearsalNetwork, slashed} from "./Journal.sol";
 import {Declares} from "./graph/Step.sol";
 
 /// @notice The base of a deploy unit. It reads the network's `network.json`, keeps the unit's journal
@@ -27,7 +27,7 @@ abstract contract Unit is Deployment, Declares {
         VmSafe.DirEntry[] memory files = vm.readDir(dir);
         uint256 found;
         for (uint256 i; i < files.length; ++i) {
-            string[] memory parts = vm.split(files[i].path, "/");
+            string[] memory parts = vm.split(slashed(files[i].path), "/");
             string memory name = parts[parts.length - 1];
             if (vm.indexOf(name, "Deploy") == 0 && _endsWith(name, ".s.sol")) {
                 script = string.concat(dir, name);

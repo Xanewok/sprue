@@ -224,6 +224,9 @@ contract FileGraphProjectTest is Test, Declares {
         vm.writeFile(string.concat(dir, "/sub/inner.json"), "{}");
         vm.createDir(staged, true);
         vm.writeFile(string.concat(staged, "/stale.json"), "{}");
+        // On Unix a `\` is part of a name, not a separator.
+        bool unix = bytes(vm.projectRoot())[0] == "/";
+        if (unix) vm.writeFile(string.concat(dir, "/back\\slash.json"), "{}");
 
         Counting own = new Counting();
         _project(address(own), _deploy("network.owner")).rehearse(net, "fixture.deploy");
@@ -233,6 +236,7 @@ contract FileGraphProjectTest is Test, Declares {
         );
         assertFalse(vm.exists(string.concat(staged, "/sub")), "a directory is not staged");
         assertFalse(vm.exists(string.concat(staged, "/stale.json")), "the stage starts empty");
+        if (unix) assertTrue(vm.exists(string.concat(staged, "/back\\slash.json")), "a name keeps its backslash");
 
         _network("filegraph-rehearse", vm.toString(owner), "");
         Counting foreign = new Counting();
