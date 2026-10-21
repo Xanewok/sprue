@@ -27,7 +27,8 @@ start_anvil() { # start_anvil <port> <chain id>
   for _ in $(seq 1 100); do cast chain-id --rpc-url "http://127.0.0.1:$1" >/dev/null 2>&1 && return; sleep 0.1; done
   die "no anvil at port $1"
 }
-# live_node <port> <chain id>: an Anvil behind a proxy at <port> that answers web3_clientVersion as Geth.
+# live_node <port> <chain id>: an Anvil behind a proxy at <port> that answers web3_clientVersion as Geth,
+# and with $LAG reports a head that many blocks behind.
 # The units ask the node in process, so a cast stub would not pass for a live node.
 live_node() {
   local log=$W.node-$1.log upstream=""
@@ -46,9 +47,10 @@ geth = \"$GETH\"
 receiver = \"http://127.0.0.1:$((PORT + 3))\"
 wide = \"http://127.0.0.1:$((PORT + 4))\"
 prod = \"http://127.0.0.1:$((PORT + 5))\"
-stage = \"http://127.0.0.1:$((PORT + 6))\""
+stage = \"http://127.0.0.1:$((PORT + 6))\"
+old = \"http://127.0.0.1:$((PORT + 8))\""
 alias_of() {
-  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; *) die "no alias for chain $1" ;; esac
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 1337) echo old ;; *) die "no alias for chain $1" ;; esac
 }
 endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
   sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
@@ -809,6 +811,30 @@ scenario_grammar() {
   echo "ok  run sends every command line the tests and the example print, and no hostile mutation"
 }
 
+# An RPC that answers from a node a block behind the one that took each send: each run stops at a step
+# that cannot see the last send yet, and says why, and the reruns end done with no transaction twice.
+scenario_lag() {
+  local up out rc nodes i seen=no
+  nodes=$PIDS; LAG=1 live_node $((PORT + 8)) 1337; nodes=${PIDS#"$nodes"}
+  up=$(sed -n 's/^Listening on \(.*\)$/http:\/\/\1/p' "$W.node-$((PORT + 8)).log")
+  fresh "$up"; network lag 1337
+  for i in 1 2 3 4 5 6; do
+    rc=0; out=$(env -u DEPLOYER G run lag vault.check 2>&1) || rc=$?
+    [ "$rc" = 0 ] && break
+    ! grep -aq "token at 0x[0-9a-fA-F]* has no code yet" <<<"$out" || seen=yes
+    grep -aq "token at 0x[0-9a-fA-F]* has no code yet: run again\|its plan is unchanged after sending it\|the vault is not funded" <<<"$out" \
+      || die "lag: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
+    cast rpc evm_mine --rpc-url "$up" >/dev/null
+  done
+  [ "$rc" = 0 ] || die "lag: not done after $i runs"
+  [ "$seen" = yes ] || die "lag: no run said a role has no code yet, so the node did not lag"
+  [ "$(cast nonce "$OPS" --rpc-url "$up")" = 3 ] || die "lag: $(cast nonce "$OPS" --rpc-url "$up") transactions, not 3"
+  [ "$(cast call "$(jq -r .token deployments/lag/token.json)" 'balanceOf(address)(uint256)' "$(jq -r .vault deployments/lag/vault.json)" --rpc-url "$up")" = 1 ] \
+    || die "lag: the vault was not funded once"
+  for p in $nodes; do kill "$p" 2>/dev/null || true; done
+  echo "ok  lag a lagging RPC stops each run at what it cannot see yet, and the reruns end done, each transaction once"
+}
+
 # The chart is for mermaid, which this script cannot run: check its shape against the export.
 scenario_mermaid() {
   local m; m=$(G mermaid)
@@ -823,7 +849,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
+for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
