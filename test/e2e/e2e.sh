@@ -69,15 +69,16 @@ setup() {
   # The forks that rehearse starts cache what they read under ~/.foundry, so the runner gets a home of
   # its own, outside the repository, that shares only the compilers.
   mkdir -p "$W.home/.foundry" "$W.home/.local/share"
-  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W.home/.svm"
-  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W.home/.local/share/svm"
-  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W.home/Library/Application Support"
-    ln -s "$HOME/Library/Application Support/svm" "$W.home/Library/Application Support/svm"; }
   # A command of its own, so that the pseudo-terminal can run it.
   # A version manager's node shim cannot survive another HOME: name the binary.
   mkdir -p bin; printf '#!/bin/sh\nHOME=%s; export HOME\nexec %s %s/lib/sprue/bin/sprue.mjs "$@"\n' "$W.home" "$(node -p process.execPath)" "$W" >bin/G; chmod +x bin/G
   export PATH=$W/bin:$PATH
   forge build -q >"$W/build.log" 2>&1 || { cat "$W/build.log" >&2; die "the example does not build"; }
+  # Linked after the build, which may be the one that downloads solc.
+  [ ! -e "$HOME/.svm" ] || ln -s "$HOME/.svm" "$W.home/.svm"
+  [ ! -e "$HOME/.local/share/svm" ] || ln -s "$HOME/.local/share/svm" "$W.home/.local/share/svm"
+  [ ! -e "$HOME/Library/Application Support/svm" ] || { mkdir -p "$W.home/Library/Application Support"
+    ln -s "$HOME/Library/Application Support/svm" "$W.home/Library/Application Support/svm"; }
   # Offline after the build that may download solc: online, each forge command looks up the network.
   export FOUNDRY_OFFLINE=true
   git init -q; git config user.email t@t; git config user.name t
