@@ -57,8 +57,13 @@ recover.
 ## Quick start
 
 sprue needs Node 18 or later, `git`, `cast`, `forge` 1.8 or later (CI pins v1.8.5), and `anvil` for
-`rehearse`; Windows without WSL is not yet tested. This runs
-[`examples/token-vault`](examples/token-vault), a complete project that CI runs:
+`rehearse`. On Windows without WSL, CI runs the library's tests, `rehearse`, `run` and a rerun in
+PowerShell, and a one-off check found cmd and Git Bash the same. An attended run asks its question on
+the console: run it in PowerShell or cmd, or under Git Bash's mintty as
+`winpty node lib/sprue/bin/sprue.mjs run …`. The lines that `plan` prints are bash syntax: run one by
+hand in Git Bash. For a deep checkout, run `git config --global core.longpaths true` before you clone.
+
+This runs [`examples/token-vault`](examples/token-vault), a complete project that CI runs:
 
 ```sh
 git clone https://github.com/Xanewok/sprue && cd sprue
