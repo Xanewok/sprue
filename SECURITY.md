@@ -25,6 +25,10 @@ end-to-end scenario for each invariant.
   or a role whose recorded deployment can no longer land, is also refused while a known deployer (the
   sender, the pin, any journal's deployer) has used more than 256 nonces, or has a CREATE with code
   no journal records. An address in the journal's `retired` list passes both checks.
+- `run` and `rehearse` do not send a step again while its dry run repeats, unchanged, a transaction of
+  the last send of its function on that chain whose receipt shows status 0: the chain ran it otherwise
+  than forge's simulation (its EVM version, its gas rules), and a resend would most likely revert too.
+  A person fixes the cause, or removes the record that the refusal names to send it anyway.
 - A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
   `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
 
@@ -47,7 +51,11 @@ end-to-end scenario for each invariant.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
   reads the role through `_checked` re-reads its certified code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.
-- A failing RPC stops the runner. A receipt that cannot be read while a step journals its deployment
-  is left out of the journal, and the step goes on.
+- forge keeps one last send per script, chain and function, `<fn>-latest.json`, so the next send of that
+  function on the chain, by any network's step, replaces the evidence of a revert, and the step that
+  reverted is sent once more. A line run by hand, and a step that makes its own forks, are not checked.
+- A failing RPC stops the runner, except when it cannot show a receipt of a step's last send: that
+  check then passes. A receipt that cannot be read while a step journals its deployment is left out of
+  the journal, and the step goes on.
 
 An external security audit is not part of this project.

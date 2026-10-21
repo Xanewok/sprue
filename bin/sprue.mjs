@@ -769,6 +769,36 @@ async function main(argv) {
     if (code !== 0) stop(log, code);
   };
 
+  const saved = (text) => text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
+  // A transaction that forge's simulation passes and the chain reverts (another EVM version, gas rules)
+  // reverts again when sent again unchanged, at every rerun while its step is due. forge keeps the last
+  // send of a function in <broadcast>/<script file>/<chain id>/<fn>-latest.json, with receipts only for
+  // what landed; any script file counts, as a bare contract target names none. That record is shared by
+  // every network's and argument's step of the function, so the step's dry run says whose a revert is.
+  // An RPC without the receipt passes.
+  const refuseRepeat = (broadcast, rpc, cmd, line) => {
+    const id = Object.values(chainMap).find((c) => c.rpc === rpc).id;
+    const fn = cmd.args[cmd.args.indexOf("--sig") + 1].split("(")[0];
+    const failed = [];
+    for (const dir of existsSync(broadcast) ? readdirSync(broadcast) : []) {
+      const record = `${broadcast}/${dir}/${id}/${fn}-latest.json`;
+      const r = readJson(record);
+      const landed = new Set((Array.isArray(r?.receipts) ? r.receipts : []).filter((x) => x?.status === "0x1").map((x) => x.transactionHash));
+      for (const t of Array.isArray(r?.transactions) ? r.transactions : []) {
+        if (typeof t?.hash !== "string" || landed.has(t.hash)) continue;
+        let status;
+        try { status = JSON.parse(exec("cast", ["rpc", "eth_getTransactionReceipt", t.hash, "--rpc-url", rpc], ["ignore", "pipe", "ignore"]).out)?.status; } catch {}
+        if (status === "0x0") failed.push({ record, t });
+      }
+    }
+    if (!failed.length) return;
+    const dry = forge(cmd.args, cmd.env);
+    const key = (t) => ["from", "to", "input", "value"].map((k) => String(t?.transaction?.[k] ?? "").toLowerCase()).join(" ");
+    const sends = new Set(saved(dry.text).flatMap((f) => { const rec = readJson(f); return (rec?.deployments ?? [rec]).flatMap((d) => d?.transactions ?? []); }).map(key));
+    const f = failed.find(({ t }) => sends.has(key(t)));
+    if (f) fail(2, `refusing: ${f.t.hash} of ${f.record} passed forge's simulation and reverted on chain, and this step would send it again unchanged: fix what makes the chain differ (the build's evm_version, the gas), or remove ${f.record} to send it anyway (forge keeps a run-<timestamp>.json copy): ${line}`);
+  };
+
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
   async function attend(line, cmd) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
@@ -785,7 +815,7 @@ async function main(argv) {
     if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
     // transactions but names no file, they cannot be shown, so refuse.
-    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
+    const records = saved(dry.text);
     const show = (v) => (v == null ? "null" : typeof v === "string" ? v : JSON.stringify(v));
     for (const f of records) {
       try {
@@ -950,6 +980,7 @@ async function main(argv) {
         if (cacheDir && config.cache_path !== cacheDir) {
           fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
         }
+        if (rpc) refuseRepeat(config.broadcast, rpc, cmd, line);
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
       }

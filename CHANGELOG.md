@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed: a CREATE or a call that passes forge's simulation and reverts on chain (on an older hardfork
+without PUSH0, or under other gas rules) is no longer sent again at every rerun. `run` and `rehearse`
+refuse a step whose dry run would send it again unchanged, and name its record: fix the cause, or remove
+the record to send it anyway.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from

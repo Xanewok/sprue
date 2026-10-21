@@ -22,8 +22,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-start_anvil() { # start_anvil <port> <chain id>
-  anvil --port "$1" --chain-id "$2" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
+start_anvil() { # start_anvil <port> <chain id> [anvil flags...]
+  anvil --port "$1" --chain-id "$2" "${@:3}" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
   for _ in $(seq 1 100); do cast chain-id --rpc-url "http://127.0.0.1:$1" >/dev/null 2>&1 && return; sleep 0.1; done
   die "no anvil at port $1"
 }
@@ -46,9 +46,10 @@ geth = \"$GETH\"
 receiver = \"http://127.0.0.1:$((PORT + 3))\"
 wide = \"http://127.0.0.1:$((PORT + 4))\"
 prod = \"http://127.0.0.1:$((PORT + 5))\"
-stage = \"http://127.0.0.1:$((PORT + 6))\""
+stage = \"http://127.0.0.1:$((PORT + 6))\"
+old = \"http://127.0.0.1:$((PORT + 8))\""
 alias_of() {
-  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; *) die "no alias for chain $1" ;; esac
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 1337) echo old ;; *) die "no alias for chain $1" ;; esac
 }
 endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
   sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
@@ -332,6 +333,60 @@ scenario_kill() {
   [ "$(jq -r .token $d/token.json)" != "$intent" ] || die "kill: kept a spent-nonce intent"
   [ "$(cast code "$(jq -r .token $d/token.json)" --rpc-url "$RPC")" != 0x ] || die "kill: the replacement has no code"
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
+}
+
+# Chain 1337's Anvil at <hardfork>. Before Shanghai it runs the example's cancun build otherwise than
+# forge's simulation: PUSH0 does not exist.
+old_anvil() { start_anvil $((PORT + 8)) 1337 --hardfork "$1"; OLD=${PIDS##* }; }
+
+# A CREATE that forge's simulation passes and the chain reverts: the rerun refuses instead of sending it
+# again, and a build that differs is sent.
+scenario_reverted() {
+  local old=http://127.0.0.1:$((PORT + 8)) out rc
+  fresh "$old"; old_anvil paris; network reverted 1337
+  rc=0; out=$(G run reverted token.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && grep -aq '^Error: Transaction Failure' <<<"$out" || die "reverted: the first run exited $rc: $(tail -c 600 <<<"$out")"
+  [ "$(nonce "$old")" = 1 ] || die "reverted: the first send did not revert"
+  rc=0; out=$(G run reverted token.check 2>&1) || rc=$?
+  [ "$(nonce "$old")" = 1 ] || die "reverted: the rerun sent the CREATE again (exit $rc): $(tail -c 600 <<<"$out")"
+  [ "$rc" = 2 ] && grep -aq "broadcast/DeployToken.s.sol/1337/deploy-latest.json" <<<"$out" || die "reverted: the rerun exited $rc: $(tail -c 600 <<<"$out")"
+  out=$(FOUNDRY_EVM_VERSION=paris G run reverted token.check 2>&1) || die "reverted: the paris build failed: $(tail -c 600 <<<"$out")"
+  [ "$(cast codesize "$(jq -r .token deployments/reverted/token.json)" --rpc-url "$old")" != 0 ] || die "reverted: the paris build has no code"
+  kill "$OLD"; wait "$OLD" 2>/dev/null || true
+  echo "ok  reverted a CREATE that reverted on chain is not sent again; another build is"
+}
+
+# A call that forge's simulation passes and the chain reverts, the token's PUSH0 once its chain's state
+# moves to a node before Shanghai: the rerun refuses until its record is removed. The same step of another
+# network on that chain, built for it, is not refused. The vault is named by its contract alone, and forge
+# still names the record after its file.
+scenario_reverted_call() {
+  local old=http://127.0.0.1:$((PORT + 8)) out rc state n rec=broadcast/DeployVault.s.sol/1337/fund-latest.json
+  sed -i.bak 's|"script/deploy/units/vault/DeployVault.s.sol:DeployVault"|"DeployVault"|' script/deploy/DeployGraph.s.sol
+  fresh "$old"; old_anvil cancun
+  # Each network's records are removed after its deploys, so neither sees the other's as strays.
+  network paris 1337
+  FOUNDRY_EVM_VERSION=paris G run paris vault.deploy >/dev/null 2>>log || die "reverted_call: the paris deploys failed"
+  fresh "$old"; network revcall 1337
+  G run revcall vault.deploy >/dev/null 2>>log || die "reverted_call: the deploys failed"
+  state=$(cast rpc anvil_dumpState --rpc-url "$old" | tr -d '"')
+  kill "$OLD"; wait "$OLD" 2>/dev/null || true
+  old_anvil paris
+  cast rpc anvil_loadState "$state" --rpc-url "$old" >/dev/null
+  n=$(nonce "$old")
+  rc=0; out=$(G run revcall vault.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && grep -aq '^Error: Transaction Failure' <<<"$out" || die "reverted_call: the first fund exited $rc: $(tail -c 600 <<<"$out")"
+  [ "$(nonce "$old")" = $((n + 1)) ] || die "reverted_call: the fund was not sent once"
+  rc=0; out=$(G run revcall vault.check 2>&1) || rc=$?
+  [ "$(nonce "$old")" = $((n + 1)) ] || die "reverted_call: the rerun sent the call again (exit $rc): $(tail -c 600 <<<"$out")"
+  [ "$rc" = 2 ] && grep -aq "forge script DeployVault --sig 'fund(string)'" <<<"$out" && grep -aq "remove $rec" <<<"$out" || die "reverted_call: the rerun exited $rc: $(tail -c 600 <<<"$out")"
+  rm "$rec"
+  rc=0; out=$(G run revcall vault.check 2>&1) || rc=$?
+  [ "$rc" = 1 ] && [ "$(nonce "$old")" = $((n + 2)) ] || die "reverted_call: without its record the call was not sent: $(tail -c 600 <<<"$out")"
+  out=$(FOUNDRY_EVM_VERSION=paris G run paris vault.check 2>&1) || die "reverted_call: another network's fund was refused: $(tail -c 600 <<<"$out")"
+  kill "$OLD"; wait "$OLD" 2>/dev/null || true
+  mv script/deploy/DeployGraph.s.sol.bak script/deploy/DeployGraph.s.sol
+  echo "ok  reverted_call a call that reverted on chain is not sent again until its record is removed; another network's is"
 }
 
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
@@ -720,7 +775,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill two_chain rehearse attended tag; do
+for s in mermaid refuses grammar failure rerun recover wait kill reverted reverted_call two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
