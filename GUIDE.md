@@ -115,7 +115,17 @@ top-level `"deployer": "0x..."` pins the deploy key.
 Before each send, `run` refuses what would make forge run a line otherwise than printed: a
 `foundry.toml` setting or inherited variable that moves forge's records; `FOUNDRY_ETH_RPC_URL`,
 `FOUNDRY_SENDER` or `FOUNDRY_RPC_ENDPOINTS` (or a `DAPP_` or `DAPP_TEST_` form) in the environment or
-`.env`; and an `eth_rpc_url` or a non-default `sender` in `foundry.toml`.
+`.env`; an `eth_rpc_url` or a non-default `sender` in `foundry.toml`; a `chain_id` from any of them
+other than the chain of the line's `--rpc-url`, which forge would simulate instead of the node's; and a
+build directory other than `out` (any spelling of it), since the units read each artifact and its
+metadata there.
+
+An attended `run` without `--allow-dirty` also checks each source that forge's cache lists for the
+build. It refuses a source that git tracks whose bytes on disk are not the committed ones: one that git
+checks out converted (`core.autocrlf`, a filter or encoding in `.gitattributes`) or skips
+(`assume-unchanged`, `skip-worktree`). It warns of a source that git does not track (`node_modules`, an
+ignored or linked directory), which no commit records, and goes on. It refuses `cache = false` (in
+`foundry.toml`, or `FOUNDRY_CACHE`), since then forge lists no current sources.
 
 ## When a run refuses
 
