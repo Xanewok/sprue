@@ -131,6 +131,8 @@ scenario_refuses() {
   (cd "$d/p" && refused "exactly paths and chains" node "$gs" list)
   echo "{${p/d\/fork/d\/Fork},\"chains\":{}}" >"$d/p/sprue.json"
   (cd "$d/p" && refused "paths.rehearsal is not" node "$gs" list)
+  echo "{${p/d\/fork/d\/con},\"chains\":{}}" >"$d/p/sprue.json"
+  (cd "$d/p" && refused "a name Windows reserves" node "$gs" list)
   # Only the prefix itself is ignored, not <prefix>-*.
   git init -q "$d/p"; echo "d/fork/" >"$d/p/.gitignore"
   echo "{$p,\"chains\":{}}" >"$d/p/sprue.json"
@@ -139,6 +141,7 @@ scenario_refuses() {
 
   network refuse 31337
   refused "not a plain name" G plan Bad_name vault.check
+  refused "Windows reserves the name" G plan com1 vault.check
   local n=deployments/refuse/network.json
   echo '[]' >$n; refused "not a plain lower-case name" G run refuse vault.check
   echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" G run refuse vault.check
@@ -526,6 +529,9 @@ scenario_attended() {
   refused 'not clean' tty no "${run[@]}"
   refused 'has a live chain' tty no G run --allow-dirty "$net" token.check --account "$account"
   git checkout -q README.md
+  git config core.autocrlf true; rm README.md; git checkout -q README.md
+  refused 'other line endings than the commit' tty no "${run[@]}"
+  git config --unset core.autocrlf; rm README.md; git checkout -q README.md
   DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
   # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
   local plain; plain=$(<"deployments/$net/network.json")

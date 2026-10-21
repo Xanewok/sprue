@@ -22,7 +22,11 @@ const COMMAND =
 // A chain's rpc: a foundry.toml [rpc_endpoints] alias, or, only in a rehearsal copy, its fork's URL.
 const ALIAS = /^[a-z][a-z0-9_-]*$/;
 const LOOPBACK = /^http:\/\/127\.0\.0\.1:[0-9]+$/;
+// A network names a directory, and Windows reserves these names in any case.
+const DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const WIN = process.platform === "win32";
+// Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
+const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
 const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
@@ -115,7 +119,7 @@ const isFile = (f) => {
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
 function exec(bin, args, stdio = ["ignore", "pipe", "inherit"]) {
-  const r = spawnSync(bin, args, { encoding: "utf8", stdio });
+  const r = spawnSync(bin, args, { encoding: "utf8", stdio, maxBuffer: 1 << 28 });
   if (r.error) fail(1, `cannot run ${bin}: ${r.error.message}`);
   return { status: r.status ?? 1, out: (r.stdout ?? "").replace(/[\r\n]+$/, "") };
 }
@@ -156,7 +160,7 @@ function forge(args, env) {
     closeSync(fd);
   }
   const text = readFileSync(file, "utf8");
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, RM_TREE);
   if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
   return { status: r.status ?? 1, text: text.replace(/\n+$/, "") };
 }
@@ -197,7 +201,7 @@ function forgeShowingCompile(args, env) {
       clearInterval(timer);
       const text = follow();
       closeSync(fd);
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, RM_TREE);
       resolve({ status: status ?? 1, text: text.replace(/\n+$/, ""), shown, error });
     };
     child.on("error", (e) => end(1, e));
@@ -220,9 +224,10 @@ async function graph(GRAPH, tag, sig, rest = [], env = {}) {
 }
 
 // The question goes to the terminal, never to stdin or stdout, so a pipe cannot answer it. A terminal
-// that cannot open or has no more input is no answer.
+// that cannot open or has no more input is no answer. Windows documents OPEN_EXISTING for a console
+// handle, and "w" asks for CREATE_ALWAYS.
 function openTty() {
-  try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", "w")]; } catch {}
+  try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", WIN ? "r+" : "w")]; } catch {}
 }
 function ask(prompt) {
   const tty = openTty();
@@ -328,6 +333,7 @@ async function main(argv) {
   // directly bypasses this check.
   const rehearsal = REHEARSAL.startsWith(`${DEPLOYMENTS}/`) ? REHEARSAL.slice(DEPLOYMENTS.length + 1) : "";
   if (!/^[a-z0-9][a-z0-9-]*$/.test(rehearsal)) fail(2, `refusing: ${PROJECT}'s paths.rehearsal is not ${DEPLOYMENTS}/<lower-case name>`);
+  if (DEVICE.test(rehearsal)) fail(2, `refusing: ${PROJECT}'s paths.rehearsal ends in the directory ${rehearsal}, a name Windows reserves; rename it`);
   const ignored = (d) => exec("git", ["check-ignore", "-q", d], ["ignore", "ignore", "ignore"]).status === 0;
   if (!(ignored(`${REHEARSAL}/`) && ignored(`${REHEARSAL}-x/`))) {
     fail(2, "refusing: git does not ignore the directories <paths.rehearsal> and <paths.rehearsal>-*, where a rehearsal writes");
@@ -387,6 +393,7 @@ async function main(argv) {
   let [network, target] = pos;
   // The network name is printed into every command, so a space or a newline in it would add flags.
   if (!/^[a-z0-9][a-z0-9-]*$/.test(network)) fail(2, `refusing network '${network}': not a plain name`);
+  if (DEVICE.test(network)) fail(2, `refusing network '${network}': Windows reserves the name; rename its directory`);
   const netfile = `${DEPLOYMENTS}/${network}/network.json`;
   if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
   if (!stopOnly) known(target);
@@ -510,7 +517,7 @@ async function main(argv) {
     if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`);
 
     // .sprue/ holds the lock.
-    for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, { recursive: true, force: true });
+    for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, RM_TREE);
     const forks = [];
     const record = (kept = forks) => ({ source, forks: kept.map(({ child, ...f }) => f) });
     save(record());
@@ -541,7 +548,7 @@ async function main(argv) {
       const fd = openSync(log, "w");
       const args = ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])];
       if (limit) args.push("--code-size-limit", String(limit));
-      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd] });
+      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
       closeSync(fd);
       child.unref();
       const fork = { chains: group.chains, pid: child.pid, url: "", instanceId: "", child };
@@ -881,6 +888,11 @@ async function main(argv) {
   let sent = "";
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
+    // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
+    // After each plan: its forge may have just installed a submodule.
+    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(must("git", ["ls-files", "--eol", "--recurse-submodules", ":/"], "refusing: git ls-files failed"))) {
+      fail(2, "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again");
+    }
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);

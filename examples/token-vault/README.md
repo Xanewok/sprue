@@ -21,11 +21,11 @@ Copy this directory out of the sprue checkout, then:
 ```sh
 git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
 anvil &                                  # chain 31337 on :8545
-G="node lib/sprue/bin/sprue.mjs"
-$G plan local vault.check                # the next commands; sends nothing
-$G run local vault.check                 # deploys, checks, funds, checks
+sprue() { node lib/sprue/bin/sprue.mjs "$@"; }
+sprue plan local vault.check             # the next commands; sends nothing
+sprue run local vault.check              # deploys, checks, funds, checks
 rm deployments/local/token.json          # lose a journal
-$G run local vault.check                 # refused: prints the `recover` command
+sprue run local vault.check              # refused: prints the `recover` command
 ```
 
 1. `plan` prints the commands that reach `vault.check`. Only the token's appear: `vault.deploy` needs the
