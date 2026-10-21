@@ -366,6 +366,7 @@ abstract contract Graph is Script {
             Step memory s = steps[i];
             require(s.kind != StepKind.Empty && bytes(s.id).length != 0, EmptyStep(i));
             _requirePlain(s.fn, "");
+            _requireNoDevice(vm.split(s.id, ".")[0]);
             require(_find(s.id) == _nodes.length, DuplicateId(s.id));
             string memory signature = s.hasArg ? "(string,uint8)" : "(string)";
             bytes4 selector = bytes4(keccak256(bytes(string.concat(s.fn, signature))));
@@ -436,6 +437,18 @@ abstract contract Graph is Script {
                 ok = c == allowed[j];
             }
             require(ok, UnsafeName(name));
+        }
+    }
+
+    /// @dev A unit names a directory and files, and Windows reserves these names in any case and with any
+    ///      extension.
+    function _requireNoDevice(string memory unit) private pure {
+        bytes memory name = bytes(vm.toLowercase(unit));
+        // com1-com9 and lpt1-lpt9 compare as their first.
+        if (name.length == 4 && name[3] >= "1" && name[3] <= "9") name[3] = "1";
+        string[6] memory devices = ["con", "prn", "aux", "nul", "com1", "lpt1"];
+        for (uint256 i; i < devices.length; ++i) {
+            require(keccak256(name) != keccak256(bytes(devices[i])), UnsafeName(unit));
         }
     }
 

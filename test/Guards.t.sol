@@ -251,6 +251,12 @@ contract GuardsTest is Test, Declares {
             vm.expectRevert(abi.encodeWithSelector(Graph.UnsafeName.selector, bad[i]));
             g.add(Registration(target, bad[i]), s);
         }
+        string[3] memory devices = ["con", "LPT1", "Nul"];
+        for (uint256 i; i < devices.length; ++i) {
+            s[0] = _step(string.concat(devices[i], ".deploy"), StepFunctions.deploy.selector);
+            vm.expectRevert(abi.encodeWithSelector(Graph.UnsafeName.selector, devices[i]));
+            g.add(Registration(target, "u.s.sol:U"), s);
+        }
         s[0].fn = "deploy$";
         vm.expectRevert(abi.encodeWithSelector(Graph.UnsafeName.selector, "deploy$"));
         g.add(Registration(target, "u.s.sol:U"), s);
