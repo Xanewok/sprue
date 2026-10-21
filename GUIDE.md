@@ -22,7 +22,8 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 1. Copy `sprue.json` and `.gitignore` from the example, and merge its `foundry.toml` into yours: the
    `fs_permissions` and the `[rpc_endpoints]` aliases (its `src = "script"` suits only the example).
    `sprue` runs from any directory below `sprue.json`, and refuses unless git ignores
-   `<paths.rehearsal>/` and `<paths.rehearsal>-x/`.
+   `<paths.rehearsal>/` and `<paths.rehearsal>-x/`. Add a `.gitattributes` of `* text=auto eol=lf`:
+   Git for Windows otherwise checks sources out with CRLF, and their recorded hashes differ from Linux's.
 2. Add `deployments/<network>/network.json`, which gives each chain its id and an `rpc` alias from
    `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's
