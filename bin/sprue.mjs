@@ -9,7 +9,7 @@ import {
   statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const NAME = "sprue";
@@ -119,6 +119,9 @@ const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJson = (file) => {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch {}
+};
+const real = (p) => {
+  try { return realpathSync(p); } catch {}
 };
 const isFile = (f) => {
   try { return statSync(f).isFile(); } catch { return false; }
@@ -462,7 +465,6 @@ async function main(argv) {
   // The units compile against the library that `sprue/` names, in any context, which must be this
   // runner's own: a runner and a library of other versions each assume guards the other may lack.
   if (!stopOnly) {
-    const real = (p) => { try { return realpathSync(p); } catch {} };
     const mine = fileURLToPath(new URL("../src/", import.meta.url));
     for (const r of JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")).remappings ?? []) {
       const lib = /^(?:[^:=]*:)?sprue\/=(.*)$/.exec(String(r))?.[1];
@@ -1052,7 +1054,8 @@ async function main(argv) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }
         // The units read each artifact and its metadata from out/: a build elsewhere would journal a stale one.
-        if (typeof config.out !== "string" || relative(root, config.out) !== "out") {
+        const built = typeof config.out === "string" && real(resolve(config.out));
+        if (!built || built !== real("out")) {
           fail(2, `refusing: forge would build into ${config.out}, not out, where the units read artifacts; check foundry.toml, FOUNDRY_PROFILE and FOUNDRY_OUT: ${line}`);
         }
         if (cacheDir && config.cache_path !== cacheDir) {

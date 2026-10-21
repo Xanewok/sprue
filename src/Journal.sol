@@ -124,15 +124,15 @@ abstract contract Journal is Script {
         if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
     }
 
-    /// @dev `out` however forge spells it: forge keeps a path as given.
+    /// @dev `out` however `path` spells it, through a symbolic link too: readDir lists entries under the
+    ///      directory's real path, and the build has written into out/ before a script runs.
     function _isOut(string memory path) private view returns (bool) {
-        string memory root = vm.projectRoot();
-        string[6] memory spellings =
-            ["out", "./out", "out/", "./out/", string.concat(root, "/out"), string.concat(root, "/out/")];
-        for (uint256 i; i < spellings.length; ++i) {
-            if (keccak256(bytes(path)) == keccak256(bytes(spellings[i]))) return true;
+        try vm.readDir(path) returns (VmSafe.DirEntry[] memory got) {
+            VmSafe.DirEntry[] memory out = vm.readDir("out");
+            return got.length != 0 && out.length != 0 && keccak256(bytes(got[0].path)) == keccak256(bytes(out[0].path));
+        } catch {
+            return false;
         }
-        return false;
     }
 
     /// @dev Reads only the environment, which cannot see `foundry.toml`: the runner checks
