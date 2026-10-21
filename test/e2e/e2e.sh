@@ -17,7 +17,7 @@ W=$(mktemp -d)
 cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
-  for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
+  for n in main mute wide rl; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
   [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home"
 }
 trap cleanup EXIT
@@ -334,6 +334,72 @@ scenario_kill() {
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
 }
 
+# Two runs of one network, a rehearse's of its copy included: the second refuses while the first, or a
+# forge it started, runs. A signal to the runner alone stops its forge before the lock is released.
+scenario_concurrent() {
+  local a rc n0 step fork
+  pending() { for _ in $(seq 1 600); do [ "$(cast rpc txpool_status --rpc-url "${1:-$RPC}" | jq -r .pending)" != 0x0 ] && return; sleep 0.1; done; die "concurrent: no transaction became pending"; }
+  mine() { cast rpc evm_setAutomine true --rpc-url "${1:-$RPC}" >/dev/null; cast rpc evm_mine --rpc-url "${1:-$RPC}" >/dev/null; }
+  # forge_of <pid> <text>: sets step to the forge child of <pid> whose command line holds <text>.
+  forge_of() {
+    for _ in $(seq 1 1500); do
+      step=$(ps -eo pid=,ppid=,args= | awk -v p="$1" -v t="$2" '$2 == p && / forge script / && index($0, t) && !x {x = $1} END {if (x) print x}')
+      [ -n "$step" ] && return; sleep 0.02
+    done
+    die "concurrent: no forge with $2 under pid $1"
+  }
+  fresh "$RPC"; network conc 31337; n0=$(nonce)
+  cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
+  G run conc vault.check >"$W.a" 2>&1 & a=$!
+  pending
+  refused "a run of conc is running, as pid $a" G run conc vault.check
+  mine
+  rc=0; wait "$a" || rc=$?
+  [ "$rc" = 0 ] || die "concurrent: the first run exited $rc: $(tail -c 600 "$W.a")"
+  [ "$(nonce)" = $((n0 + 3)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions, not 3"
+
+  # A step whose runner was killed alone holds the lock until it exits.
+  fresh "$RPC"; network conc 31337; n0=$(nonce)
+  cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
+  G run conc token.check >"$W.a" 2>&1 & a=$!
+  pending; forge_of "$a" --broadcast
+  kill -9 "$a"; wait "$a" 2>/dev/null || true
+  refused "a run of conc is running, as pid $step" G run conc token.check
+  mine
+  for _ in $(seq 1 300); do kill -0 "$step" 2>/dev/null || break; sleep 0.1; done
+  exits 0 G run conc token.check
+  [ "$(nonce)" = $((n0 + 1)) ] || die "concurrent: $(( $(nonce) - n0 )) transactions after a killed runner, not 1"
+  [ -z "$(ls .git/sprue-locks/conc/)" ] || die "concurrent: a lock file outlived its runs: $(ls .git/sprue-locks/conc/)"
+
+  # The plan's forge, which on a rehearsal network writes journals, is stopped too. Paused, it cannot end
+  # on its own before the check.
+  G run conc token.check >"$W.a" 2>&1 & a=$!
+  forge_of "$a" "plan(string,string)"
+  kill -STOP "$step"; kill -HUP "$a"; sleep 1
+  kill -0 "$a" 2>/dev/null || { kill -CONT "$step"; die "concurrent: SIGHUP ended the runner before the plan's forge"; }
+  kill -CONT "$step"; rc=0; wait "$a" || rc=$?
+  [ "$rc" = 129 ] || die "concurrent: SIGHUP while planning exited $rc, not 129: $(tail -c 600 "$W.a")"
+  ! kill -0 "$step" 2>/dev/null || die "concurrent: the plan's forge outlived its runner"
+
+  # rehearse refuses before it stops a kept fork or restages a copy that a run is using.
+  network rl 31337
+  exits 0 G rehearse --keep rl token.check
+  fork=$(jq -r .chains.l2.rpc deployments/rehearsal-rl/network.json)
+  cast rpc evm_setAutomine false --rpc-url "$fork" >/dev/null
+  G run rehearsal-rl vault.check >"$W.a" 2>&1 & a=$!
+  pending "$fork"
+  refused "a run of rehearsal-rl is running, as pid $a" G rehearse rl token.check
+  refused "a run of rehearsal-rl is running, as pid $a" G rehearse --stop rl
+  refused "a run of rehearsal-rl is running, as pid $a" G plan rehearsal-rl vault.check
+  [ -f deployments/rehearsal-rl/token.json ] && cast chain-id --rpc-url "$fork" >/dev/null || die "concurrent: rehearse touched a copy in use"
+  mine "$fork"
+  rc=0; wait "$a" || rc=$?
+  [ "$rc" = 0 ] || die "concurrent: the run of the copy exited $rc: $(tail -c 600 "$W.a")"
+  exits 0 G rehearse --stop rl
+  rm -f "$W.a"
+  echo "ok  concurrent a second run of a network refuses while the first or its forge runs; a signal stops the forge, then the lock"
+}
+
 # examples/two-chain on two Anvils. A date of a step on the second chain is that chain's: the runner sets the
 # second node's clock, one window at a time, and leaves the first node's alone.
 scenario_two_chain() {
@@ -416,7 +482,7 @@ scenario_rehearse() {
   [ -n "$step" ] || die "rehearse: no step was seen to interrupt"
   kill -TERM "$pid"; wait "$pid" || rc=$?
   ! kill -0 "$step" 2>/dev/null || die "rehearse: the runner exited before its step"
-  [ "$rc" = 130 ] || die "rehearse: a signal exited $rc, not 130"
+  [ "$rc" = 143 ] || die "rehearse: SIGTERM exited $rc, not 143"
   exits 0 G rehearse --stop main
   # A fork still starting, here from an upstream that never answers, is stopped even with --keep: no
   # record could stop it later.
@@ -499,11 +565,6 @@ scenario_rehearse() {
   mkdir -p "$W.noanvil"; ln -sf "$(command -v forge)" "$(command -v cast)" "$(command -v git)" "$W.noanvil/"
   refused 'anvil, which is not on PATH' /usr/bin/env PATH="$W/bin:$W.noanvil" DEPLOYER="$dead" G rehearse main token.check
   rm -rf "$W.noanvil" deployments/rehearsal-hand
-  echo $$ >"$d/.sprue/lock"
-  refused 'is running, as pid' "${go[@]}" main token.check
-  sh -c 'echo $$' >"$d/.sprue/lock"
-  refused 'which has exited; remove it' "${go[@]}" main token.check
-  rm "$d/.sprue/lock"
   echo "ok  rehearse runs on forks it starts and stops as keyless senders; the real chain and network stay as they were"
 }
 
@@ -572,6 +633,9 @@ scenario_attended() {
   grep -aqE 'chain 1 nonce [0-9a-fx]+: CREATE Token 0x[0-9a-fA-F]{40} value 0x0' <<<"$out" || die "attended: the preview does not show the CREATE's chain, nonce, address and value: ${out: -600}"
   grep -aq 'Estimated amount required' <<<"$out" || die "attended: the preview does not show the cost"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: an answer of no sent"
+  # Ctrl-C at the question ends the run at once: no listener holds the signal until Enter.
+  rc=0; tty ^C "${run[@]}" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 130 ] && [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: Ctrl-C at the question exited $rc, not 130, or sent"
   # Every step is asked, the check too.
   # Without DEPLOYER the run sends as its signer.
   out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
@@ -720,7 +784,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses grammar failure rerun recover wait kill two_chain rehearse attended tag; do
+for s in mermaid refuses grammar failure rerun recover wait kill concurrent two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done
