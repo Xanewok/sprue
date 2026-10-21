@@ -52,3 +52,39 @@ jobs:
           version: v1.8.5
           cache: false
       - run: bash test/e2e/e2e.sh
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: examples/token-vault
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.8.5
+          cache: false
+      - run: forge test
+        working-directory: .
+      - name: Link the library into the example and start its chain
+        run: |
+          New-Item -ItemType Directory lib/sprue | Out-Null
+          New-Item -ItemType Junction lib/forge-std -Target $env:GITHUB_WORKSPACE/lib/forge-std | Out-Null
+          foreach ($d in 'src', 'bin') { New-Item -ItemType Junction lib/sprue/$d -Target $env:GITHUB_WORKSPACE/$d | Out-Null }
+          Start-Process anvil --silent
+          while (!(cast chain-id 2>$null)) { Start-Sleep 0.2 }
+      - name: Rehearse, run and rerun the example
+        env:
+          DEPLOYER: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          node lib/sprue/bin/sprue.mjs rehearse local vault.check
+          node lib/sprue/bin/sprue.mjs run local vault.check
+          $block = cast block-number
+          node lib/sprue/bin/sprue.mjs run local vault.check
+          if ((cast block-number) -ne $block) { throw 'the rerun sent a transaction' }
+          if ((Get-Process anvil).Count -ne 1) { throw 'a fork outlived the rehearsal' }

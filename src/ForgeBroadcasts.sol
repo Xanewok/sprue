@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {Journal} from "./Journal.sol";
+import {Journal, slashed} from "./Journal.sol";
 
 /// @dev A cheatcode that forge 1.8 provides and the forge-std this library builds against does not
 ///      declare.
@@ -81,20 +81,19 @@ abstract contract ForgeBroadcasts is Journal {
                 string.concat("cannot rule out a stray ", artifact, ": ", files[i].errorMessage)
             );
             if (files[i].isDir || files[i].depth != 3 || !_endsWith(files[i].path, ".json")) continue;
-            string memory record = vm.readFile(files[i].path);
+            string memory path = slashed(files[i].path);
+            string memory record = vm.readFile(path);
             if (_has(record, ".chain")) {
-                found = _createsIn(found, artifact, files[i].path, record, "");
+                found = _createsIn(found, artifact, path, record, "");
                 continue;
             }
             // A multi-chain run's record holds one run per chain.
             require(
                 _has(record, ".deployments"),
-                string.concat("cannot rule out a stray ", artifact, ": ", files[i].path, " names no chain")
+                string.concat("cannot rule out a stray ", artifact, ": ", path, " names no chain")
             );
             for (uint256 k; _has(record, string.concat(".deployments[", vm.toString(k), "]")); ++k) {
-                found = _createsIn(
-                    found, artifact, files[i].path, record, string.concat(".deployments[", vm.toString(k), "]")
-                );
+                found = _createsIn(found, artifact, path, record, string.concat(".deployments[", vm.toString(k), "]"));
             }
         }
     }
