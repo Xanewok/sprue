@@ -131,6 +131,8 @@ scenario_refuses() {
   (cd "$d/p" && refused "exactly paths and chains" node "$gs" list)
   echo "{${p/d\/fork/d\/Fork},\"chains\":{}}" >"$d/p/sprue.json"
   (cd "$d/p" && refused "paths.rehearsal is not" node "$gs" list)
+  echo "{${p/d\/fork/d\/con},\"chains\":{}}" >"$d/p/sprue.json"
+  (cd "$d/p" && refused "a name Windows reserves" node "$gs" list)
   # Only the prefix itself is ignored, not <prefix>-*.
   git init -q "$d/p"; echo "d/fork/" >"$d/p/.gitignore"
   echo "{$p,\"chains\":{}}" >"$d/p/sprue.json"
@@ -139,6 +141,7 @@ scenario_refuses() {
 
   network refuse 31337
   refused "not a plain name" G plan Bad_name vault.check
+  refused "Windows reserves the name" G plan com1 vault.check
   local n=deployments/refuse/network.json
   echo '[]' >$n; refused "not a plain lower-case name" G run refuse vault.check
   echo '{"chains":{"L2":{"id":31337}}}' >$n; refused "not a plain lower-case name" G run refuse vault.check
