@@ -5,8 +5,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync,
-  writeFileSync, writeSync,
+  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync,
+  statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -112,6 +112,9 @@ const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJson = (file) => {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch {}
+};
+const real = (p) => {
+  try { return realpathSync(p); } catch {}
 };
 const isFile = (f) => {
   try { return statSync(f).isFile(); } catch { return false; }
@@ -944,6 +947,22 @@ async function main(argv) {
         if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
         const over = overriding(config, process.env);
         if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
+        // forge puts it in place of the node's chain id in the simulation. forge config names a chain it knows
+        // ("mainnet"), so the line's chain is named by forge config too, where no spelling of it, nor a
+        // FOUNDRY_CONFIG relative to the project, is set.
+        const named = (id) => {
+          const dir = mkdtempSync(join(tmpdir(), "sprue-"));
+          const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^((foundry|dapp|dapp_test)_chain_id|foundry_config)$/i.test(k)));
+          try { return String(JSON.parse(spawnSync("forge", ["config", "--json"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: { ...env, FOUNDRY_CHAIN_ID: id } }).stdout).chain_id); } catch {} finally { rmSync(dir, RM_TREE); }
+        };
+        const id = rpc && String(Object.values(chainMap).find((c) => c.rpc === rpc).id);
+        if (id && config.chain_id != null && String(config.chain_id) !== named(id)) {
+          fail(2, `refusing: forge would take chain_id ${config.chain_id} (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the line's chain ${id}: unset it: ${line}`);
+        }
+        // The units read each artifact and its metadata from out/: a build elsewhere would journal another's.
+        if (real(config.out) !== real("out")) {
+          fail(2, `refusing: forge would build into ${config.out}, not out, where the units read artifacts; check foundry.toml, FOUNDRY_PROFILE and FOUNDRY_OUT: ${line}`);
+        }
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }

@@ -26,7 +26,7 @@ cat >bin/forge <<'STUB'
 #!/bin/sh
 case " $* " in
   *" plan(string,string) "*) sed 's/^/PLAN /' "$PLAN_FILE" ;;
-  " config --json ") printf '{"broadcast":"%s","cache_path":"%s"}\n' "${FOUNDRY_BROADCAST:-broadcast}" "${FOUNDRY_CACHE_PATH:-cache}" ;;
+  " config --json ") printf '{"broadcast":"%s","cache_path":"%s","out":"out"}\n' "${FOUNDRY_BROADCAST:-broadcast}" "${FOUNDRY_CACHE_PATH:-cache}" ;;
   *) for a in "$@"; do printf '[%s]' "$a"; done >>"$CALLS"; echo >>"$CALLS" ;;
 esac
 STUB

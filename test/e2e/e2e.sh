@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link"
 }
 trap cleanup EXIT
 
@@ -174,6 +174,10 @@ scenario_refuses() {
   # Set to forge's default sender, it shows no difference in forge config, yet still beats --sender.
   FOUNDRY_SENDER=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take FOUNDRY_SENDER (" G run refuse vault.check
   dapp_test_sender=0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38 refused "forge would take dapp_test_sender (" G run refuse vault.check
+  # forge puts it in place of the node's chain id in the simulation.
+  FOUNDRY_CHAIN_ID=1 refused "forge would take chain_id mainnet (FOUNDRY_CHAIN_ID, .env or foundry.toml) over the line's chain 31337" G run refuse vault.check
+  foundry_chain_id=1 refused "forge would take chain_id mainnet" G run refuse vault.check
+  echo foundry_chain_id=1 >.env; refused "forge would take chain_id mainnet" G run refuse vault.check; rm .env
   echo "export FOUNDRY_SENDER=$OPS" >.env
   refused "forge would take FOUNDRY_SENDER, sender" G run refuse vault.check
   # It overrides the foundry.toml aliases it names, so it could point the line's alias at any node.
@@ -226,8 +230,16 @@ scenario_failure() {
   mv foundry.toml foundry.toml.ok; { echo '[profile.default]'; echo 'broadcast = "elsewhere"'; tail -n +2 foundry.toml.ok; } >foundry.toml
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
-  [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
-  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
+  # The units read each artifact and its metadata from out/, so a build elsewhere would journal an earlier one.
+  refused 'forge would build into elsewhere, not out' env FOUNDRY_OUT=elsewhere G run elsewhere token.check
+  rm -rf elsewhere
+  [ "$(nonce)" = "$n0" ] || die "failure: a send with records or build elsewhere sent"
+  # Each spelling of out/ is out/, through a symbolic link too.
+  ln -s "$(pwd -P)" "$W.link"; local o i=0
+  for o in ./out/ "$(pwd -P)/out" "$W.link/out"; do
+    fresh "$RPC"; network "spelled$((i += 1))" 31337; exits 0 env FOUNDRY_OUT="$o" G run "spelled$i" token.check
+  done
+  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -249,7 +261,8 @@ scenario_rerun() {
 scenario_recover() {
   fresh "$RPC"; git clean -fdXq deployments/local
   local out cmd
-  env -u DEPLOYER G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
+  # A chain_id that names the line's chain is none.
+  env -u DEPLOYER FOUNDRY_CHAIN_ID=31337 FOUNDRY_CONFIG=foundry.toml G run local vault.check >/dev/null 2>>log || die "recover: the first run failed"
   [ "$(jq -r .tokenDeployer deployments/local/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
     || die "recover: without DEPLOYER the run did not send as Anvil's dev key"
   rm deployments/local/token.json
