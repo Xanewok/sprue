@@ -20,7 +20,7 @@ anvil=$!
 until cast chain-id --rpc-url "http://127.0.0.1:$port" >/dev/null 2>&1; do sleep 0.2; done
 (cd "$work" && DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 node lib/sprue/bin/sprue.mjs run local vault.check >/dev/null)
 rm -rf "$out"
-(cd "$work" && find broadcast -name '*.json' -not -path '*/dry-run/*' | while read -r f; do
+(cd "$work" && find broadcast -name '*-latest.json' -not -path '*/dry-run/*' | while read -r f; do
   mkdir -p "$out/$(dirname "$f")"
   cp "$f" "$out/$f"
 done)

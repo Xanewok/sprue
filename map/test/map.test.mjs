@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build, keccak256, place, GEOM } from '../index.mjs';
+import { mergeTransactions, readRecords } from '../forge.mjs';
 import { sprueLayer } from '../sprue-layer.mjs';
 import { PROFILES, compile, matchRule, replayControl } from '../control.mjs';
 
@@ -57,6 +58,25 @@ test('a journal transaction hash names its step only on its own chain', () => {
     assert.deepEqual([...ids], [[0, 'vault.deploy']]);
   } finally {
     rmSync(dir, { recursive: true });
+  }
+});
+
+test('a run-<ts>.json merges into its <sig>-latest.json in either order, keeping the signature', () => {
+  const src = join(fixture, 'broadcast', 'DeployVault.s.sol', '31337', 'deploy-latest.json');
+  const latest = JSON.parse(readFileSync(src, 'utf8'));
+  for (const ts of [latest.timestamp - 1, latest.timestamp + 1]) {
+    const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+    try {
+      const d = join(dir, 'DeployVault.s.sol', '31337');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'deploy-latest.json'), JSON.stringify(latest));
+      writeFileSync(join(d, 'run-1.json'), JSON.stringify({ ...latest, timestamp: ts }));
+      const txs = mergeTransactions(readRecords([dir]));
+      assert.equal(txs.length, latest.transactions.length);
+      assert.ok(txs.every((e) => e.sig === 'deploy'));
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
   }
 });
 
