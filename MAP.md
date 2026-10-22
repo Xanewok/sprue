@@ -57,7 +57,8 @@ no step id.
   file with the data inlined; the page makes no network calls. The project is the nearest directory up
   with `foundry.toml` or `sprue.json`; its `broadcast/` holds the records and its `out/`, when present,
   the parameter names. A network adds the sprue layer from `<paths.deployments>/<network>`. Without a
-  project, `--records` alone is enough. `sprue map --help` has the exit codes.
+  project, `--records` alone is enough. The page goes to stdout, which must not be a terminal (exit 2):
+  redirect it or name a file with `--out`, which replaces that file. `sprue map --help` has the exit codes.
   `node --test map/test/*.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
   regenerates.
 - Arguments are decoded from the records' strings, recursively for tuples and arrays. Where a record

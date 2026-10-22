@@ -3,7 +3,8 @@
 ## Unreleased
 
 `sprue map` writes an HTML map of a deployment from forge's broadcast records, in any Foundry project; a
-network adds sprue's journals ([MAP.md](MAP.md)).
+network adds sprue's journals; the page goes to stdout or to the `--out` file, never to a terminal
+([MAP.md](MAP.md)).
 
 ## 0.1.4
 

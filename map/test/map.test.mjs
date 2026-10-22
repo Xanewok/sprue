@@ -263,11 +263,28 @@ test('map refuses what does not apply and names the fix', () => {
   refused(['nowhere'], fixture, /unknown network 'nowhere': no .*network\.json/);
   refused(['local', 'other'], fixture, /takes one network/);
   refused(['--out'], fixture, /--out needs a value/);
+  refused(['--out', '-'], fixture, /refusing --out -: .*sprue map > map\.html/);
   const empty = mkdtempSync(join(tmpdir(), 'deploy-map-'));
   try {
     refused([], empty, /no foundry\.toml or sprue\.json .*--records/);
   } finally {
     rmSync(empty, { recursive: true });
+  }
+});
+
+test('a terminal on stdout is refused with the fix; --out replaces the file it names', { skip: spawnSync('script', ['--version']).error && 'no script(1)' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    const tty = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
+    assert.equal(tty.status, 2, tty.stdout);
+    assert.match(tty.stdout, /--out map\.html.*> map\.html/s);
+    assert.ok(!tty.stdout.includes('<!doctype'));
+    writeFileSync(join(dir, 'm.html'), 'old');
+    const r = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map --out ${join(dir, 'm.html')}`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout);
+    assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
+  } finally {
+    rmSync(dir, { recursive: true });
   }
 });
 

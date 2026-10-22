@@ -19,14 +19,16 @@ It reads forge's broadcast records; sprue's journals are an add-in.
                     (<paths.deployments>/<network> of sprue.json); the project must have sprue.json
   --records <path>  a broadcast directory or record file, relative to the current directory; repeatable;
                     default: broadcast/ of the project, the nearest directory up with foundry.toml or sprue.json
-  --out <file>      write the page to file; \`-\` is stdout. Default: stdout when it is not a terminal, else map.html
+  --out <file>      write the page to file, replacing it; without --out the page goes to stdout, which must not
+                    be a terminal: redirect it (\`> map.html\`) or name a file
   --title <text>    the page title; default: the project's directory name
 
-Names come from out/ when the project has it. Nothing is sent or changed but --out.
+Names come from out/ when the project has it. Nothing is sent or changed but the --out file.
 
   0   the page was written
   1   no transaction in the records, or the page could not be written
-  2   usage error, or a refusal: a flag that does not apply, an unknown network, no project and no --records
+  2   usage error, or a refusal: a flag that does not apply, an unknown network, no project and no --records,
+      stdout is a terminal and there is no --out
 `;
 
 class Refusal extends Error {}
@@ -50,7 +52,8 @@ export function cli(argv, cwd = process.cwd()) {
       if (a === '-h' || a === '--help') { process.stdout.write(USAGE); return 0; }
       if (a === '--records' || a === '--out' || a === '--title') {
         const v = argv[++i];
-        if (v === undefined || (v.startsWith('-') && v !== '-')) refuse(`${a} needs a value: ${a} <${a === '--records' ? 'path' : a === '--out' ? 'file' : 'text'}>`);
+        if (a === '--out' && v === '-') refuse('refusing --out -: without --out the page goes to stdout; name a file, or redirect: sprue map > map.html');
+        if (v === undefined || v.startsWith('-')) refuse(`${a} needs a value: ${a} <${a === '--records' ? 'path' : a === '--out' ? 'file' : 'text'}>`);
         if (a === '--records') records.push(v);
         else if (a === '--out') outFile = v;
         else title = v;
@@ -71,12 +74,13 @@ export function cli(argv, cwd = process.cwd()) {
     }
     const paths = records.length ? records.map((r) => resolve(cwd, r)) : [join(root, 'broadcast')];
     for (const p of paths) if (!existsSync(p)) refuse(`${p} does not exist: run the deployment with --broadcast first, or name other records with --records`);
+    if (outFile === null && process.stdout.isTTY) refuse('refusing to write a page to the terminal: name a file with --out map.html, or redirect: sprue map > map.html');
     const model = build({ paths, project: root, sprue });
     if (!model.txs.length) { process.stderr.write(`sprue: no broadcast records with transactions under ${paths.join(' ')}: broadcast a script, or name other records with --records\n`); return 1; }
     const scripts = [...new Set(model.txs.map((x) => x.script))];
     const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
     const page = render(model, title || `Deployment map: ${root ? `${basename(root)} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`);
-    const target = outFile ?? (process.stdout.isTTY ? 'map.html' : '-');
+    const target = outFile ?? '-';
     const s = model.stats;
     process.stderr.write(`sprue: map of ${root ? `project ${root}` : 'the named records'}${sprue ? `, journals of ${network}` : ''}, records ${paths.join(' ')}, to ${target === '-' ? 'stdout' : target}\n`
       + `sprue: ${s.nodes} nodes, ${s.edges} links (${s.control} control, ${s.controlEvents} of them from events), ${s.steps} steps, ${s.txs} transactions\n`);
