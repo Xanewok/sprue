@@ -1,5 +1,5 @@
 // node --test map/test/map.test.mjs
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,6 +12,9 @@ import { mergeTransactions, readRecords } from '../forge.mjs';
 import { sprueLayer } from '../sprue-layer.mjs';
 import { PROFILES, compile, matchRule, replayControl } from '../control.mjs';
 
+const dirs = [];
+after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+const tmp = () => (dirs.push(mkdtempSync(join(tmpdir(), 'deploy-map-'))), dirs.at(-1));
 const here = dirname(fileURLToPath(import.meta.url));
 const sprue = join(here, '..', '..', 'bin', 'sprue.mjs');
 const fixture = join(here, 'token-vault');
@@ -48,59 +51,47 @@ test('the sprue layer adds roles, plan step ids and the certificate-verified lin
 });
 
 test('a journal transaction hash names its step only on its own chain', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    const hash = '0x' + '7'.repeat(64);
-    mkdirSync(join(dir, 'net'));
-    writeFileSync(join(dir, 'net', 'vault.json'), JSON.stringify({ vaultChainId: 1, vault: '0x' + 'a'.repeat(40), vaultTx: hash }));
-    const step = (i, chain) => ({ i, chain, hash, script: 'Deploy.s.sol', sig: 'deploy' });
-    const ids = sprueLayer({ dir, network: 'net' }, [step(0, 1), step(1, 2)], new Map(), new Map(), []);
-    assert.deepEqual([...ids], [[0, 'vault.deploy']]);
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  const hash = '0x' + '7'.repeat(64);
+  mkdirSync(join(dir, 'net'));
+  writeFileSync(join(dir, 'net', 'vault.json'), JSON.stringify({ vaultChainId: 1, vault: '0x' + 'a'.repeat(40), vaultTx: hash }));
+  const step = (i, chain) => ({ i, chain, hash, script: 'Deploy.s.sol', sig: 'deploy' });
+  const ids = sprueLayer({ dir, network: 'net' }, [step(0, 1), step(1, 2)], new Map(), new Map(), []);
+  assert.deepEqual([...ids], [[0, 'vault.deploy']]);
 });
 
 test('a run-<ts>.json merges into its <sig>-latest.json in either order, keeping the signature', () => {
   const src = join(fixture, 'broadcast', 'DeployVault.s.sol', '31337', 'deploy-latest.json');
   const latest = JSON.parse(readFileSync(src, 'utf8'));
   for (const ts of [latest.timestamp - 1, latest.timestamp + 1]) {
-    const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-    try {
-      const d = join(dir, 'DeployVault.s.sol', '31337');
-      mkdirSync(d, { recursive: true });
-      writeFileSync(join(d, 'deploy-latest.json'), JSON.stringify(latest));
-      writeFileSync(join(d, 'run-1.json'), JSON.stringify({ ...latest, timestamp: ts }));
-      const txs = mergeTransactions(readRecords([dir]));
-      assert.equal(txs.length, latest.transactions.length);
-      assert.ok(txs.every((e) => e.sig === 'deploy'));
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const dir = tmp();
+    const d = join(dir, 'DeployVault.s.sol', '31337');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'deploy-latest.json'), JSON.stringify(latest));
+    writeFileSync(join(d, 'run-1.json'), JSON.stringify({ ...latest, timestamp: ts }));
+    const txs = mergeTransactions(readRecords([dir]));
+    assert.equal(txs.length, latest.transactions.length);
+    assert.ok(txs.every((e) => e.sig === 'deploy'));
   }
 });
 
 test('a reverted CREATE is a step that creates nothing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    cpSync(join(fixture, 'broadcast'), join(dir, 'broadcast'), { recursive: true });
-    const vaultDir = join(dir, 'broadcast', 'DeployVault.s.sol', '31337');
-    const vaultTx = JSON.parse(readFileSync(join(vaultDir, 'deploy-latest.json'), 'utf8')).transactions[0].hash;
-    for (const f of readdirSync(vaultDir)) {
-      const j = JSON.parse(readFileSync(join(vaultDir, f), 'utf8'));
-      for (const r of j.receipts) if (r.transactionHash === vaultTx) r.status = '0x0';
-      writeFileSync(join(vaultDir, f), JSON.stringify(j));
-    }
-    const { data } = run(['--records', join(dir, 'broadcast')], dir);
-    assert.equal(data.steps.length, 3);
-    const x = data.txs.find((t) => t.hash === vaultTx);
-    assert.equal(x.status, 'reverted');
-    assert.deepEqual(x.created, []);
-    assert.equal(named(data, 'Vault'), undefined);
-    assert.ok(!data.edges.some((e) => e.kind === 'deploy'), 'a reverted CREATE binds nothing');
-  } finally {
-    rmSync(dir, { recursive: true });
+  const dir = tmp();
+  cpSync(join(fixture, 'broadcast'), join(dir, 'broadcast'), { recursive: true });
+  const vaultDir = join(dir, 'broadcast', 'DeployVault.s.sol', '31337');
+  const vaultTx = JSON.parse(readFileSync(join(vaultDir, 'deploy-latest.json'), 'utf8')).transactions[0].hash;
+  for (const f of readdirSync(vaultDir)) {
+    const j = JSON.parse(readFileSync(join(vaultDir, f), 'utf8'));
+    for (const r of j.receipts) if (r.transactionHash === vaultTx) r.status = '0x0';
+    writeFileSync(join(vaultDir, f), JSON.stringify(j));
   }
+  const { data } = run(['--records', join(dir, 'broadcast')], dir);
+  assert.equal(data.steps.length, 3);
+  const x = data.txs.find((t) => t.hash === vaultTx);
+  assert.equal(x.status, 'reverted');
+  assert.deepEqual(x.created, []);
+  assert.equal(named(data, 'Vault'), undefined);
+  assert.ok(!data.edges.some((e) => e.kind === 'deploy'), 'a reverted CREATE binds nothing');
 });
 
 test('no link crosses a box, at desktop and phone width', () => {
@@ -207,24 +198,7 @@ const TXS = [
   ['CALL', 'Proxy', X, [{ address: X, topics: [topic('Upgraded(address)'), word(U)], data: '0x' }]],
   ['CALL', 'Proxy', X, [{ address: X, topics: [topic('Upgraded(address)'), word(M)], data: '0x' }]],
 ];
-function controlModel() {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  const rec = join(dir, 'broadcast', 'Deploy.s.sol', '1');
-  const hash = (i) => '0x' + String(i + 1).padStart(64, '0');
-  const j = {
-    chain: 1, timestamp: 1,
-    transactions: TXS.map(([type, name, at], i) => ({ hash: hash(i), transactionType: type, contractName: name, contractAddress: at,
-      function: type === 'CALL' ? 'touch()' : null, arguments: null, transaction: { from: D, to: type === 'CALL' ? at : null, nonce: '0x' + i.toString(16), input: type === 'CALL' ? '0xa55526db' : '0x00' } })),
-    receipts: TXS.map(([, , , logs], i) => ({ transactionHash: hash(i), status: '0x1', blockNumber: '0x' + (i + 1).toString(16), logs: logs.map((l, k) => ({ ...l, logIndex: '0x' + k.toString(16) })) })),
-  };
-  try {
-    mkdirSync(rec, { recursive: true });
-    writeFileSync(join(rec, 'run-latest.json'), JSON.stringify(j));
-    return build({ paths: [join(dir, 'broadcast')] });
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
-}
+const controlModel = () => modelOf({ 1: [{ ts: 1, txs: TXS.map(([type, name, to, logs], i) => ({ type, name, to, logs, hash: H(i + 1), block: i + 1 })) }] });
 const at = (m, from, label) => m.edges.filter((e) => e.kind === 'event' && e.from === `1:${from}` && e.label === label);
 
 test('ownership events replay in order: a later owner replaces the last, a transfer to zero renounces', () => {
@@ -272,56 +246,40 @@ test('an ERC-1967 upgrade is an implementation link, replaced by the next, and n
 });
 
 test('a bare Foundry project maps from foundry.toml and broadcast/ alone', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    cpSync(join(fixture, 'broadcast'), join(dir, 'broadcast'), { recursive: true });
-    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\n');
-    const { data } = run([], dir);
-    assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
-    assert.ok(!data.sprue);
-    const r = exec(['local'], dir);
-    assert.equal(r.status, 2);
-    assert.match(r.stderr, /no sprue\.json: drop the network/);
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  cpSync(join(fixture, 'broadcast'), join(dir, 'broadcast'), { recursive: true });
+  writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\n');
+  const { data } = run([], dir);
+  assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
+  assert.ok(!data.sprue);
+  const r = exec(['local'], dir);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /no sprue\.json: drop the network/);
 });
 
 test('the out and broadcast paths come from forge, not from fixed names', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    cpSync(join(fixture, 'broadcast'), join(dir, 'chain-records'), { recursive: true });
-    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\nout = "build-out"\nbroadcast = "chain-records"\n');
-    mkdirSync(join(dir, 'build-out', 'Vault.sol'), { recursive: true });
-    writeFileSync(join(dir, 'build-out', 'Vault.sol', 'Vault.json'), JSON.stringify({ abi: [{ type: 'constructor', inputs: [{ name: 'asset', type: 'address', internalType: 'address' }] }] }));
-    const { data } = run([], dir);
-    assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
-    assert.ok(data.edges.some((e) => e.kind === 'deploy' && e.label === 'asset'), 'names come from the configured out');
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  cpSync(join(fixture, 'broadcast'), join(dir, 'chain-records'), { recursive: true });
+  writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\nout = "build-out"\nbroadcast = "chain-records"\n');
+  mkdirSync(join(dir, 'build-out', 'Vault.sol'), { recursive: true });
+  writeFileSync(join(dir, 'build-out', 'Vault.sol', 'Vault.json'), JSON.stringify({ abi: [{ type: 'constructor', inputs: [{ name: 'asset', type: 'address', internalType: 'address' }] }] }));
+  const { data } = run([], dir);
+  assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
+  assert.ok(data.edges.some((e) => e.kind === 'deploy' && e.label === 'asset'), 'names come from the configured out');
 });
 
 test('a project without a working forge is refused with the fix; --records alone needs no forge', () => {
-  const bin = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    writeFileSync(join(bin, 'forge'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-    const go = (args, cwd) => spawnSync(process.execPath, [sprue, 'map', ...args], { cwd, env, encoding: 'utf8' });
-    const r = go([], fixture);
-    assert.equal(r.status, 2, r.stderr);
-    assert.equal(r.stdout, '');
-    assert.match(r.stderr, /forge config --json failed.*install Foundry.*--records/);
-    const bare = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-    try {
-      const ok = go(['--records', join(fixture, 'broadcast')], bare);
-      assert.equal(ok.status, 0, ok.stderr);
-    } finally {
-      rmSync(bare, { recursive: true });
-    }
-  } finally {
-    rmSync(bin, { recursive: true });
-  }
+  const bin = tmp();
+  writeFileSync(join(bin, 'forge'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  const go = (args, cwd) => spawnSync(process.execPath, [sprue, 'map', ...args], { cwd, env, encoding: 'utf8' });
+  const r = go([], fixture);
+  assert.equal(r.status, 2, r.stderr);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /forge config --json failed.*install Foundry.*--records/);
+  const bare = tmp();
+  const ok = go(['--records', join(fixture, 'broadcast')], bare);
+  assert.equal(ok.status, 0, ok.stderr);
 });
 
 test('map refuses what does not apply and names the fix', () => {
@@ -336,69 +294,53 @@ test('map refuses what does not apply and names the fix', () => {
   refused(['local', 'other'], fixture, /takes one network/);
   refused(['--out'], fixture, /--out needs a value/);
   refused(['--out', '-'], fixture, /refusing --out -: .*sprue map > map\.html/);
-  const empty = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    refused([], empty, /no foundry\.toml or sprue\.json .*--records/);
-  } finally {
-    rmSync(empty, { recursive: true });
-  }
+  const empty = tmp();
+  refused([], empty, /no foundry\.toml or sprue\.json .*--records/);
 });
 
 test('a terminal on stdout is refused with the fix; --out replaces the file it names', { skip: spawnSync('script', ['--version']).error && 'no script(1)' }, () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    const tty = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
-    assert.equal(tty.status, 2, tty.stdout);
-    assert.match(tty.stdout, /--out map\.html.*> map\.html/s);
-    assert.ok(!tty.stdout.includes('<!doctype'));
-    writeFileSync(join(dir, 'm.html'), 'old');
-    const r = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map --out ${join(dir, 'm.html')}`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stdout);
-    assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  const tty = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
+  assert.equal(tty.status, 2, tty.stdout);
+  assert.match(tty.stdout, /--out map\.html.*> map\.html/s);
+  assert.ok(!tty.stdout.includes('<!doctype'));
+  writeFileSync(join(dir, 'm.html'), 'old');
+  const r = spawnSync('script', ['-qec', `${process.execPath} ${sprue} map --out ${join(dir, 'm.html')}`, '/dev/null'], { cwd: fixture, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout);
+  assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
 });
 
 test('--out writes the page to a file and leaves stdout empty; no transaction exits 1', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    const r = exec(['--out', join(dir, 'm.html')], fixture);
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout, '');
-    assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
-    writeFileSync(join(dir, 'foundry.toml'), '');
-    assert.equal(exec([], dir).status, 2, 'no broadcast/ is a refusal');
-    mkdirSync(join(dir, 'broadcast'));
-    const e = exec([], dir);
-    assert.equal(e.status, 1);
-    assert.match(e.stderr, /no broadcast records with transactions/);
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  const r = exec(['--out', join(dir, 'm.html')], fixture);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '');
+  assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
+  writeFileSync(join(dir, 'foundry.toml'), '');
+  assert.equal(exec([], dir).status, 2, 'no broadcast/ is a refusal');
+  mkdirSync(join(dir, 'broadcast'));
+  const e = exec([], dir);
+  assert.equal(e.status, 1);
+  assert.match(e.stderr, /no broadcast records with transactions/);
 });
 
 // Hand-written records: {chain: [{ts, txs: [{hash, to, input?, function?, arguments?, block, index, logs?}]}]}.
 function modelOf(chains) {
-  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
-  try {
-    let n = 0;
-    for (const [chain, files] of Object.entries(chains))
-      for (const f of files) {
-        const d = join(dir, 'broadcast', 'Deploy.s.sol', chain);
-        mkdirSync(d, { recursive: true });
-        writeFileSync(join(d, `run-${++n}.json`), JSON.stringify({
-          chain: Number(chain), timestamp: f.ts,
-          transactions: f.txs.map((t, i) => ({ hash: t.hash, transactionType: 'CALL', contractName: 'C', contractAddress: t.to, function: t.function ?? 'touch()', arguments: t.arguments ?? null,
-            transaction: { from: D, to: t.to, nonce: '0x' + (n * 10 + i).toString(16), input: t.input ?? '0xa55526db' } })),
-          receipts: f.txs.map((t) => ({ transactionHash: t.hash, status: '0x1', blockNumber: '0x' + t.block.toString(16), transactionIndex: '0x' + (t.index ?? 0).toString(16),
-            logs: (t.logs || []).map((l, k) => ({ ...l, logIndex: '0x' + k.toString(16) })) })),
-        }));
-      }
-    return build({ paths: [join(dir, 'broadcast')] });
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
+  const dir = tmp();
+  let n = 0;
+  for (const [chain, files] of Object.entries(chains))
+    for (const f of files) {
+      const d = join(dir, 'broadcast', 'Deploy.s.sol', chain);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, `run-${++n}.json`), JSON.stringify({
+        chain: Number(chain), timestamp: f.ts,
+        transactions: f.txs.map((t, i) => ({ hash: t.hash, transactionType: t.type ?? 'CALL', contractName: t.name ?? 'C', contractAddress: t.to, function: t.type === 'CREATE' ? null : t.function ?? 'touch()', arguments: t.arguments ?? null,
+          transaction: { from: D, to: t.type === 'CREATE' ? null : t.to, nonce: '0x' + (n * 10 + i).toString(16), input: t.input ?? (t.type === 'CREATE' ? '0x00' : '0xa55526db') } })),
+        receipts: f.txs.map((t) => ({ transactionHash: t.hash, status: '0x1', blockNumber: '0x' + t.block.toString(16), transactionIndex: '0x' + (t.index ?? 0).toString(16),
+          logs: (t.logs || []).map((l, k) => ({ ...l, logIndex: '0x' + k.toString(16) })) })),
+      }));
+    }
+  return build({ paths: [join(dir, 'broadcast')] });
 }
 const H = (i) => '0x' + String(i).padStart(64, '0');
 const replay = (logs, table) => {
