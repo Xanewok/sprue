@@ -247,7 +247,7 @@ export function build({ paths, project, sprue }) {
     if (into.length) {
       const e = into[0], src = nameOf(nodes.get(e.from));
       const m = /^(\w+)\((.*)\)$/.exec(e.label);
-      n.label = e.kind === 'event' ? `${e.label} of ${src}` : e.kind === 'deploy' ? (/^initcode/.test(e.label) ? `in ${src} initcode` : `${e.label} of ${src}`)
+      n.label = e.kind === 'event' || e.kind === 'impl' ? `${e.label} of ${src}` : e.kind === 'deploy' ? (/^initcode/.test(e.label) ? `in ${src} initcode` : `${e.label} of ${src}`)
         : m ? `${m[2]} via ${m[1]}` : `in ${e.label.split(' ')[0]} calldata`;
     } else if (made) n.label = `factory of ${nameOf(nodes.get(made.to))}`;
     else if (called) n.label = `target of ${called.fn.split('(')[0]}`;

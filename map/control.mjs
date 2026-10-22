@@ -24,7 +24,7 @@ export function matchRule(fnName, leaf) {
 
 // A standard is data: the events it emits, what each does, and which parameter (by position in the event's
 // declared order, indexed or not) holds the holder and the role. effect: owner | pendingOwner | proxyAdmin
-// (one holder per slot), roleGranted | roleRevoked (any number of holders per role).
+// (one holder per slot), implementation | beacon (one target per proxy; a link, not control), roleGranted | roleRevoked (any number of holders per role).
 export const PROFILES = [
   { name: 'Ownable', events: [{ sig: 'OwnershipTransferred(address,address)', effect: 'owner', holder: 1 }] },
   { name: 'Ownable2Step', events: [{ sig: 'OwnershipTransferStarted(address,address)', effect: 'pendingOwner', holder: 1 }] },
@@ -39,9 +39,16 @@ export const PROFILES = [
       'GOVERNOR_ROLE', 'MANAGER_ROLE', 'SNAPSHOT_ROLE', 'URI_SETTER_ROLE', 'TIMELOCK_ADMIN_ROLE', 'PROPOSER_ROLE', 'EXECUTOR_ROLE',
       'CANCELLER_ROLE'],
   },
-  { name: 'ERC-1967', events: [{ sig: 'AdminChanged(address,address)', effect: 'proxyAdmin', holder: 1 }] },
+  {
+    name: 'ERC-1967',
+    events: [
+      { sig: 'AdminChanged(address,address)', effect: 'proxyAdmin', holder: 1 },
+      { sig: 'Upgraded(address)', effect: 'implementation', holder: 0 },
+      { sig: 'BeaconUpgraded(address)', effect: 'beacon', holder: 0 },
+    ],
+  },
 ];
-const SLOT = { owner: 'owner', pendingOwner: 'pending owner', proxyAdmin: 'proxy admin' };
+const SLOT = { owner: 'owner', pendingOwner: 'pending owner', proxyAdmin: 'proxy admin', implementation: 'implementation', beacon: 'beacon' };
 
 export function compile(profiles) {
   const events = new Map(), roles = new Map();
@@ -86,6 +93,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
       const isRole = ev.effect === 'roleGranted' || ev.effect === 'roleRevoked';
       const revoke = ev.effect === 'roleRevoked';
       const pending = ev.effect === 'pendingOwner';
+      const link = ev.effect === 'implementation' || ev.effect === 'beacon';
       const label = isRole ? roleName('0x' + words[ev.role]) : SLOT[ev.effect];
       const detail = `${ev.name}${isRole ? ' ' + label : ''}: ${revoke ? 'revoked from' : isRole ? 'to' : 'now'} ${who} (log ${log.logIndex !== undefined ? Number(log.logIndex) : k})`;
       const key = `${from.id}|${label}${isRole ? '|' + who : ''}`;
@@ -103,7 +111,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
         end(cur, x, detail);
       }
       if (who === ZERO) {
-        if (pending) return;
+        if (pending || link) return;
         const r = { from: from.id, label, event: ev.name, holder: who, spansTx: [], txs: [] };
         renounced.push(r);
         begin(r, x, detail);
@@ -111,11 +119,11 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
         return;
       }
       const to = ref(x.chain, who, x.i);
-      const id = `event|${from.id}|${to}|${label}`;
+      const id = `${link ? 'impl' : 'event'}|${from.id}|${to}|${label}`;
       let r = edges.get(id);
       if (!r) {
         // A contract that holds its own slot gets no link, but its span still ends the last holder's.
-        r = { id, from: from.id, to, kind: 'event', label, rule: null, cls: pending ? 'pending' : 'authority', event: ev.name, decoded: true, txs: [], verified: false, spansTx: [], holder: who };
+        r = { id, from: from.id, to, kind: link ? 'impl' : 'event', label, rule: null, cls: link ? 'impl' : pending ? 'pending' : 'authority', [link ? 'impl' : 'event']: ev.name, decoded: true, txs: [], verified: false, spansTx: [], holder: who };
         if (to !== from.id) edges.set(id, r);
       }
       begin(r, x, detail);

@@ -163,6 +163,9 @@ const TXS = [
   ['CALL', 'Owned2Step', P, [{ address: P, topics: [topic('OwnershipTransferStarted(address,address)'), word(D), word(Q)], data: '0x' }]],
   // ERC-1967's AdminChanged indexes nothing: both addresses are data words.
   ['CREATE', 'Proxy', X, [{ address: X, topics: [topic('AdminChanged(address,address)')], data: word(ZERO) + word(B).slice(2) }]],
+  // Upgraded indexes its argument; the second upgrade replaces the first.
+  ['CALL', 'Proxy', X, [{ address: X, topics: [topic('Upgraded(address)'), word(U)], data: '0x' }]],
+  ['CALL', 'Proxy', X, [{ address: X, topics: [topic('Upgraded(address)'), word(M)], data: '0x' }]],
 ];
 function controlModel() {
   const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
@@ -219,4 +222,11 @@ test('a bespoke profile in the same shape drives the replay: Celo\'s OwnerSet(ad
   };
   assert.deepEqual(replay(compile(PROFILES)), [], 'unknown to the built-ins');
   assert.deepEqual(replay(compile([...PROFILES, celo])), [[`1:${A}`, `1:${D}`, 'owner', 'OwnerSet']]);
+});
+
+test('an ERC-1967 upgrade is an implementation link, replaced by the next, and not control', () => {
+  const m = controlModel();
+  const impl = m.edges.filter((e) => e.kind === 'impl' && e.from === `1:${X}`);
+  assert.deepEqual(impl.map((e) => [e.to, e.label, e.cls, e.spans]), [[`1:${U}`, 'implementation', 'impl', [[8, 9]]], [`1:${M}`, 'implementation', 'impl', [[9, null]]]]);
+  assert.equal(m.stats.control, 6, 'the implementation links add no control');
 });

@@ -82,7 +82,8 @@ no step id.
 
 ## Not in version 1
 
-Proxies and their implementations (need an RPC read or the `Upgraded` logs), a diff between two deploys
+A proxy's implementation read from the chain (the map follows ERC-1967 `Upgraded` and `BeaconUpgraded` logs only,
+so a proxy that emitted neither shows no implementation), a diff between two deploys
 or between a plan and the chain, token flows, and a full "who can call which function" matrix.
 
 ## Evidence (2026-10-21 survey)

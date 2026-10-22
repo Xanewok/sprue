@@ -16,7 +16,7 @@ export function client(place) {
   const ctlAt = (e, s) => isCtl(e) && shownAt(e, s);
   const outsideCtl = (e) => e.cls === 'authority' && isCtl(e) && byId.get(e.to).kind !== 'contract';
   const controllers = (id, s) => D.edges.filter((e) => e.from === id && outsideCtl(e) && shownAt(e, s));
-  const sources = (e) => [e.event ? `event ${e.event}` : null, ...(e.rule ? [e.rule] : []).concat((e.names || []).map((m) => m.rule)).map((r) => `name rule ${r}`)].filter(Boolean);
+  const sources = (e) => [e.event || e.impl ? `event ${e.event || e.impl}` : null, ...(e.rule ? [e.rule] : []).concat((e.names || []).map((m) => m.rule)).map((r) => `name rule ${r}`)].filter(Boolean);
   const spanText = (e) => e.spans.map(([a, b]) => (b === null ? `from step ${a + 1}` : b === a ? `set and ended in step ${a + 1}` : `steps ${a + 1}–${b}`)).join(', ');
   const title = (n) => n.role || n.name || n.label || { sender: 'deployer', outside: 'outside address', 'outside-contract': 'outside contract' }[n.kind] || 'unnamed';
   const kindText = { contract: 'created here', sender: 'sender (EOA)', outside: 'outside address: an EOA, multisig or contract', 'outside-contract': 'outside contract' };
@@ -157,7 +157,7 @@ export function client(place) {
   }
   function edgeBlock(e) {
     const a = byId.get(e.from), b = byId.get(e.to);
-    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by', event: 'emitted' }[e.kind]}: <code>${esc(e.label)}</code>
+    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by', event: 'emitted', impl: 'emitted' }[e.kind]}: <code>${esc(e.label)}</code>
       ${pills(e)}${D.sprue ? (e.verified ? '<span class="pill ok">certificate-verified</span>' : '<span class="pill">not certified</span>') : ''}
       ${e.decoded ? '' : '<span class="pill bad">found in raw calldata</span>'}</div>${e.names ? `<div class="muted">also ${e.names.map((m) => esc(m.label)).join(', ')}</div>` : ''}${e.spans ? `<div class="muted">holds ${spanText(e)}</div>` : ''}${e.txs.map((d) => txLine(d.i, d.detail)).join('')}`;
   }
@@ -171,9 +171,11 @@ export function client(place) {
       const es = D.edges.filter((e) => e.from === n.id || e.to === n.id);
       const made = D.txs.find((x) => x.created.includes(n.id));
       const ctlNow = controllers(n.id, S.step);
+      const impls = D.edges.filter((e) => e.kind === 'impl' && e.from === n.id && shownAt(e, S.step));
       P.innerHTML = `<h2>${esc(title(n))}</h2><div><code>${esc(n.addr)}</code></div><div class="muted">chain ${n.chain} · ${esc(kindText[n.kind])}${n.name && n.role ? ' · ' + esc(n.name) : ''}</div>
         ${n.certified ? '<div><span class="pill ok">certified in its journal</span></div>' : ''}
         ${ctlNow.length ? `<div><span class="pill ctl">controlled by an outside address</span> ${ctlNow.map((e) => `${esc(title(byId.get(e.to)))} (${esc(e.label)}; ${esc(sources(e).join(', '))})`).join(', ')}</div>` : ''}
+        ${impls.map((e) => `<div><span class="pill">${esc(e.label)}</span> <a href="#" data-node="${esc(e.to)}"><b>${nameOf(e.to)}</b></a> <code>${esc(short(byId.get(e.to).addr))}</code></div>`).join('')}
         ${D.renounced.filter((r) => r.from === n.id && inSpans(r, S.step)).map((r) => `<div><span class="pill">${esc(r.label)} renounced</span> ${spanText(r)} (event ${esc(r.event)})</div>`).join('')}
         ${made ? `<h3>Created</h3>${txLine(made.i)}` : ''}${es.length ? es.map(edgeBlock).join('') : '<p class="muted">No links.</p>'}`;
     } else if (S.sel && S.sel.link) {
@@ -252,7 +254,7 @@ export function client(place) {
       markEls.get(n.id)?.classList.toggle('hidden', !ctl);
       g.classList.remove('hot');
     }
-    const rank = { event: 3, deploy: 2, call: 1, created: 0 };
+    const rank = { event: 3, impl: 3, deploy: 2, call: 1, created: 0 };
     for (const { g, path, label, r } of edgeEls.values()) {
       const vis = r.edges.filter((e) => shownAt(e, s));
       const kind = vis.reduce((a, e) => (rank[e.kind] > rank[a] ? e.kind : a), (vis[0] || r.edges[0]).kind);

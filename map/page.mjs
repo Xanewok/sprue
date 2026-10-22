@@ -44,7 +44,7 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .edge path{fill:none;stroke:var(--edge);stroke-width:1.3;opacity:.75}.edge.created path{stroke-dasharray:1 3;stroke-linecap:round}
 .edge.call path{stroke-dasharray:6 3}.edge.verified path{stroke-dasharray:none;stroke-width:2}
 .lens .edge path{opacity:.45}.lens .edge.ctl path{opacity:1;stroke:var(--accent);stroke-width:2}
-.edge.event path{stroke:var(--accent);stroke-width:2}.edge.event.pending path{stroke-dasharray:2 3}
+.edge.impl path{stroke:var(--accent2);stroke-width:2;stroke-dasharray:9 3 2 3}.edge.event path{stroke:var(--accent);stroke-width:2}.edge.event.pending path{stroke-dasharray:2 3}
 .elabel{font-size:11px;fill:var(--fg);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round;display:none;pointer-events:none}
 .elabel.shown{display:block}
 .edge.now path{stroke:var(--new);stroke-width:2.6;opacity:1}.edge.future{display:none}
@@ -76,6 +76,7 @@ export function render(model, title) {
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="6 3" stroke-width="1.5"/></svg> set by call</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-width="2"/></svg> control: from an event (owner, role, proxy admin), else a name rule</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-dasharray="2 3" stroke-width="2"/></svg> pending owner</span>
+<span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent2)" stroke-dasharray="9 3 2 3" stroke-width="2"/></svg> implementation or beacon of a proxy, not control</span>
 <span>⚑ controlled by an outside address</span>${model.sprue ? '<span>✓ certified role; thick solid line: certificate-verified link</span>' : ''}
 <span>dashed box: not created by this deployment</span><span>a number: links merging into one entry</span><span>labels show on hover, on selection and for the current step</span></div></details>`;
   return `<!doctype html>
