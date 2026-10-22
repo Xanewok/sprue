@@ -3,9 +3,9 @@
 // nothing, from forge's broadcast records (see MAP.md).
 //
 // Guarantees: the page is built whole before anything is written; it goes to the `--out` file, replacing it,
-// or to stdout, never to a terminal; nothing else is created or changed. `cli` returns 0 when the page was
-// written, 1 when there was nothing to draw or the file could not be written, 2 for a usage error or refusal,
-// with the reason on stderr. A `sprue.json` that does not parse is a refusal too.
+// or to stdout, which it refuses when that is a terminal; nothing else is created or changed. `cli` returns 0 when the page was
+// written or usage was printed, 1 when there was nothing to draw or the file could not be written, 2 for a usage error or refusal,
+// with the reason on stderr. With a network requested, a `sprue.json` that does not parse is a refusal too.
 // Relies on `forge config --json` for the `out` and `broadcast` paths whenever a project is used.
 
 import { spawnSync } from 'node:child_process';

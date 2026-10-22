@@ -2,11 +2,11 @@
 // What forge recorded: broadcast records read into one ordered list of transactions with their receipts, and the
 // project's compiled ABIs from `out/`.
 //
-// Guarantees: `mergeTransactions` returns each transaction once per chain, and the mined transactions of one
-// chain in (blockNumber, transactionIndex) order, whatever record file holds them; unmined ones and other
-// chains keep their place. `replayControl` relies on this order.
+// Guarantees: `mergeTransactions` returns each transaction that has a hash once per chain, and the mined transactions of one
+// chain in (blockNumber, transactionIndex) order, whatever record file holds them; other chains keep their place, and so do unmined ones unless a mined
+// transaction of the same sender and nonce replaces them. `replayControl` relies on this order.
 // Relies on forge's record shape (`transactions`, `receipts`, `chain`, `timestamp`). A JSON file without the
-// first two is not a record and is dropped silently, as are the `dry-run` and `multi` directories.
+// first two is not a record and is dropped silently, as are the `dry-run` and `multi` directories met while searching a directory.
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, basename, dirname, resolve } from 'node:path';
@@ -144,8 +144,8 @@ function walkRecords(p, out) {
   } else if (p.endsWith('.json')) out.push(p);
 }
 
-// `sig` is the script function a `<sig>-latest.json` names; a `run-<ts>.json` has none. Timestamps are in
-// milliseconds whichever unit the record uses.
+// `sig` is the script function a `<sig>-latest.json` names; a `run-<ts>.json` has none. A timestamp below 1e12 is taken as
+// seconds.
 function readRecord(file) {
   let j;
   try {

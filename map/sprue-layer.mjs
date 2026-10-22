@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // What sprue's journals add to a map built from forge's records alone: role names, certified roles, links whose
-// constructor arguments a certificate vouches for, and a plan step id for each transaction.
+// constructor arguments a certificate vouches for, and a plan step id for each transaction a journal unit and a script signature identify.
 //
 // Guarantees: it only adds `role` and `certified` to nodes, `verified` to edges, and returns step ids; the map's
 // nodes, links and transactions are the records' either way. A journal address names a node only on the chains
-// that journal belongs to, and a transaction hash names its unit only on its own chain.
+// that journal belongs to.
 // Relies on the journal layout `<unit>.json`: an address field `k` is a role when `kTx`, `kCodeHash` or a
 // `checked.k` entry accompanies it, and `checked.k` equal to the address is the unit's own certificate of it.
 // An unreadable journal or `network.json` is skipped, not reported.
@@ -14,7 +14,7 @@ import { join, dirname } from 'node:path';
 
 import { ADDR, lc } from './abi.mjs';
 
-// Returns a map of transaction index to step id, or null (with a warning) when the network has no journals.
+// Returns a map of transaction index to step id, or null (with a warning) when the network has no journal directory.
 export function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
   const jdir = join(dir, network);
   if (!existsSync(jdir)) {

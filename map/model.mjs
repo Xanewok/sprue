@@ -4,11 +4,10 @@
 //
 // Maintains: a node is one address on one chain, with id `<chain>:<lowercase address>`, so the same address on two
 // chains is two nodes. A transaction is a step, unless a sprue plan step groups consecutive ones.
-// Guarantees: an address held by an argument becomes a node, an outside one when the deployment did not create
-// it. `decoded` is false on a link that was not read from a typed value: the record's argument strings used
-// after calldata failed to decode, or a 32-byte word that holds a known address (a selector with no known
+// Guarantees: an address held by an argument (other than zero) becomes a node, an outside one when the deployment did not create
+// it. `decoded` is false on a link read from the record's argument strings after calldata failed to decode, or from a 32-byte word that holds a known address (a selector with no known
 // signature, undecodable calldata, initcode). Calldata decides the arguments; the record's argument strings
-// are read only when there is none. A reverted transaction creates and binds nothing, but stays a step.
+// are read when there is none or it does not decode. A reverted transaction creates and binds nothing, but stays a step.
 // Relies on `mergeTransactions` for the replay order, and on `replayControl` for the spans of control events.
 
 import {
@@ -251,8 +250,7 @@ export function build({ paths, outDir, sprue }) {
 }
 
 // Reads a transaction's arguments, setting `x.fn` to the canonical signature (or the bare selector) when it
-// learns one. `mode` says how: abi (calldata decoded against the signature), record (forge's argument strings,
-// only when there is no calldata), positional (strings without types), raw (a selector with no known signature),
+// learns one. `mode` says how: abi (calldata decoded against the signature), record (forge's argument strings), positional (strings read by position), raw (a selector with no known signature),
 // failed (a signature that neither calldata nor strings could fill), none. `fallback` is set when positional
 // strings stand in for calldata that did not decode.
 function decode(x, isCreate, abis, knownSigs, nodeOf) {
@@ -300,7 +298,7 @@ function decode(x, isCreate, abis, knownSigs, nodeOf) {
       || COMMON.find((p) => commonSig(p) === x.fn)?.params,
   );
 
-  // Calldata is what ran; forge's argument strings are read only when there is none.
+  // Calldata is what ran; forge's argument strings are read when there is none or it does not decode.
   if (x.input) {
     try {
       trees = decTuple(params, x.input.slice(10), 0);

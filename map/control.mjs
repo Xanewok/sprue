@@ -6,10 +6,10 @@
 // transaction indices, end null while open. An owner or proxy admin slot has one holder, so a new holder ends the
 // last one's span. A role has any number of holders.
 // Guarantees: a revoke only ends spans and never starts one; no role is ever renounced; an owner or proxy admin
-// moved to the zero address is a renunciation, and a pending owner, implementation or beacon set to it is ignored.
+// moved to the zero address is a renunciation, and a pending owner, implementation or beacon set to it ends the earlier span and starts none.
 // Relies on `out` being in replay order, which `mergeTransactions` fixes: per chain, mined transactions by
 // (blockNumber, transactionIndex); here the logs of one transaction go by log index. Slots are keyed by chain
-// and address, so the order of transactions across chains does not matter.
+// and address, so control state is independent across chains; `edges` insertion order still follows `out`.
 
 import { lc, topicOf, ZERO } from './abi.mjs';
 
@@ -42,8 +42,7 @@ export function matchRule(fnName, leaf) {
 
 // A standard is data: the events it emits, what each does, which parameter (by position in the event's declared
 // order, indexed or not) holds the holder and the role, and which parameters are indexed (`indexed`, default all;
-// `alt` lists other layouts a log may use). A log that matches no declared layout, or whose holder is not an
-// address, is skipped and counted. effect: owner | pendingOwner | proxyAdmin (one holder per slot),
+// `alt` lists other layouts a log may use). A log that matches no declared layout is skipped and counted. effect: owner | pendingOwner | proxyAdmin (one holder per slot),
 // implementation | beacon (one target per proxy; a link, not control), roleGranted | roleRevoked (any number of
 // holders per role).
 export const PROFILES = [
@@ -101,7 +100,8 @@ const SLOT = {
   implementation: 'implementation', beacon: 'beacon',
 };
 
-// Adds each held slot as a link in `edges` (or a renunciation in the result) and counts logs in `stats`.
+// Adds each held slot as a link in `edges` (or a renunciation in the result), except a slot held by its own
+// contract, and counts logs in `stats`.
 export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BUILTIN) {
   const roleName = (id) => table.roles.get(id) || `role ${id.slice(0, 10)}…`;
   const skip = () => (stats.eventsSkipped = (stats.eventsSkipped || 0) + 1);
@@ -152,7 +152,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
         if (p && isOpen(p)) end(p, x, detail);
       }
 
-      // Keeps one open span per key: an open span of the same holder is recorded again, not reopened; another
+      // Keeps one open span per key: an open span of the same holder gains the transaction's detail once, not reopened; another
       // holder's is ended first. After this, begin() starts the only open span.
       if (cur && isOpen(cur)) {
         if (cur.holder === who) return void (cur.txs.some((d) => d.i === x.i) || cur.txs.push({ i: x.i, detail }));
@@ -206,7 +206,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
   return renounced;
 }
 
-// The event's parameters in declared order, as 64-hex words, read through the first declared layout the log
+// The event's parameters in declared order, as words (topics are taken as given; the holder is validated by the caller), read through the first declared layout the log
 // fits: its indexed parameters are topics, the rest are data words. Null when none fits.
 function eventWords(ev, log) {
   const data = String(log.data || '0x');

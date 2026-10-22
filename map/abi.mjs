@@ -7,8 +7,7 @@
 //
 // Guarantees: a decoder either returns the whole tree or throws; callers read a throw as "not decoded".
 //   Reading past the calldata, an address word with non-zero high bytes and an array of over 10000 elements throw.
-//   An array's head must fit in the calldata before anything is allocated for it, so a length taken from
-//   hostile calldata cannot allocate.
+//   An array's head must fit in the calldata before anything is allocated for it; the 10000 limit is per array.
 //   Decoded addresses are EIP-55 checksummed, as forge prints them.
 // Relies on: `decTuple` takes calldata hex without the `0x` and the selector.
 

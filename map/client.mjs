@@ -4,8 +4,8 @@
 // Serialised with `toString()` into every page, so it must use nothing outside its own body but `place`, which
 // the page passes in, and browser globals: no imports, no module-level helpers. Comments inside the body ship
 // in every page.
-// Maintains: `S` is all the UI state (step, selection, lens, whether the reader has moved, whether the step list
-// is open). `draw` places and rebuilds the SVG for the current width; `apply` restyles it for `S` and a focus
+// Maintains: `S` is the step, selection, lens, whether the reader has moved and whether the step list is open; tabs,
+// the filter and the panel toggle live in the DOM only. `draw` places and rebuilds the SVG for the current width; `apply` restyles it for `S` and a focus
 // without placing boxes or links again; `panel` rewrites the side panel. The layout depends on the width only,
 // so stepping never moves a box.
 // Relies on the model as JSON in `#data` and on the ids and classes of the markup in page.mjs.
