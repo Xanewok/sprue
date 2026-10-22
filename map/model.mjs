@@ -235,12 +235,11 @@ export function build({ paths, outDir, sprue }) {
   // An outside address is named by how the records use it: the deployer, the parameter it was passed as, the
   // factory of a child, or the call it received.
   const nameOf = (n) => n.role || n.name || n.label || n.addr.slice(0, 6) + '…' + n.addr.slice(-4);
-  const steps1 = (e) => e.firstStep;
   for (const n of nodes.values()) {
     if (n.kind === 'contract' || n.name) continue;
     if (n.kind === 'sender') { n.label = 'deployer'; continue; }
     const weight = (e) => (e.event && e.cls !== 'pending' ? 2 : e.rule ? 1 : 0);
-    const into = edgeList.filter((e) => e.to === n.id && e.kind !== 'created').sort((a, b) => weight(b) - weight(a) || steps1(a) - steps1(b));
+    const into = edgeList.filter((e) => e.to === n.id && e.kind !== 'created').sort((a, b) => weight(b) - weight(a) || a.firstStep - b.firstStep);
     const made = edgeList.find((e) => e.from === n.id && e.kind === 'created');
     const called = out.find((x) => x.type === 'CALL' && x.chain === n.chain && x.to === n.addr && x.fn);
     if (into.length) {
