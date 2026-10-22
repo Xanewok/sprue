@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // What sprue's journals add to a map built from forge's records alone: role names, certified roles, links whose
-// constructor arguments a certificate vouches for, and a plan step id for each transaction a journal unit and a script signature identify.
+// constructor arguments a certificate vouches for, and a plan step id for each transaction a journal unit and a script
+// signature identify.
 //
 // Guarantees: it only adds `role` and `certified` to nodes, `verified` to edges, and returns step ids; the map's
 // nodes, links and transactions are the records' either way. A journal address names a node only on the chains
