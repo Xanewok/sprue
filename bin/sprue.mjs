@@ -5,8 +5,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync,
-  writeFileSync, writeSync,
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -90,7 +101,7 @@ class Exit extends Error {
 // Blocking, so a full non-blocking pipe loses no output and nothing is reordered by exit.
 function write(fd, s) {
   const b = Buffer.from(s);
-  for (let off = 0; off < b.length; ) {
+  for (let off = 0; off < b.length;) {
     try {
       off += writeSync(fd, b, off);
     } catch (e) {
@@ -111,10 +122,16 @@ const usageError = () => {
 const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJson = (file) => {
-  try { return JSON.parse(readFileSync(file, "utf8")); } catch {}
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {}
 };
 const isFile = (f) => {
-  try { return statSync(f).isFile(); } catch { return false; }
+  try {
+    return statSync(f).isFile();
+  } catch {
+    return false;
+  }
 };
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
@@ -130,7 +147,8 @@ function must(bin, args, refusal, stdio) {
   if (refusal) fail(2, refusal);
   throw new Exit(r.status);
 }
-const clientVersion = (rpc) => exec("cast", ["rpc", "web3_clientVersion", "--rpc-url", rpc], ["ignore", "pipe", "ignore"]);
+const clientVersion = (rpc) =>
+  exec("cast", ["rpc", "web3_clientVersion", "--rpc-url", rpc], ["ignore", "pipe", "ignore"]);
 const isAnvil = (v) => v.status === 0 && v.out.replaceAll('"', "").startsWith("anvil/");
 const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot read the chain id at ${rpc}`);
 // forge and cast take a resolved eth_rpc_url or sender over a line's --rpc-url and --sender (a FOUNDRY_*
@@ -140,11 +158,16 @@ const chainId = (rpc) => must("cast", ["chain-id", "--rpc-url", rpc], `cannot re
 const OVERRIDE = /^(foundry|dapp|dapp_test)_(eth_rpc_url|sender|rpc_endpoints)$/i;
 const overriding = (config, env) => {
   const dotenv = isFile(".env") ? readFileSync(".env", "utf8") : "";
-  const names = [...Object.keys(env), ...[...dotenv.matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1])];
+  const names = [
+    ...Object.keys(env),
+    ...[...dotenv.matchAll(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]),
+  ];
   return [
     ...new Set(names.filter((v) => OVERRIDE.test(v))),
     ...(config.eth_rpc_url != null ? ["eth_rpc_url"] : []),
-    ...(config.sender != null && String(config.sender).toLowerCase() !== "0x1804c8ab1f12e6bbf3894d4083f33e07309d1f38" ? ["sender"] : []),
+    ...(config.sender != null && String(config.sender).toLowerCase() !== "0x1804c8ab1f12e6bbf3894d4083f33e07309d1f38"
+      ? ["sender"]
+      : []),
   ];
 };
 
@@ -227,7 +250,9 @@ async function graph(GRAPH, tag, sig, rest = [], env = {}) {
 // that cannot open or has no more input is no answer. Windows documents OPEN_EXISTING for a console
 // handle, and "w" asks for CREATE_ALWAYS.
 function openTty() {
-  try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", WIN ? "r+" : "w")]; } catch {}
+  try {
+    return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", WIN ? "r+" : "w")];
+  } catch {}
 }
 function ask(prompt) {
   const tty = openTty();
@@ -258,7 +283,9 @@ function parse(line) {
   const toks = line.split(" ");
   const at = toks.indexOf("forge");
   const env = Object.fromEntries(toks.slice(0, at).map((t) => t.split("=")));
-  const args = toks.slice(at + 1).map((t) => t === "$DEPLOYER" ? process.env.DEPLOYER : t[0] === "'" ? t.slice(1, -1) : t);
+  const args = toks
+    .slice(at + 1)
+    .map((t) => (t === "$DEPLOYER" ? process.env.DEPLOYER : t[0] === "'" ? t.slice(1, -1) : t));
   return { env, args };
 }
 
@@ -277,13 +304,17 @@ function mermaid(g, target) {
   }
   const k = (s) => "n" + String(s).replace(/[^A-Za-z0-9]/gu, "_");
   // By code point, which is UTF-8 byte order and not JS's UTF-16 order.
-  const units = [...new Set(ns.map((n) => n.unit))].sort((a, b) => Buffer.compare(Buffer.from(String(a)), Buffer.from(String(b))));
+  const units = [...new Set(ns.map((n) => n.unit))].sort((a, b) =>
+    Buffer.compare(Buffer.from(String(a)), Buffer.from(String(b))),
+  );
   const lines = ["flowchart TD"];
   for (const unit of units) {
     lines.push(`subgraph ${k(unit)}["${unit}"]`);
     for (const n of ns.filter((m) => m.unit === unit)) {
       const tf = n.flags?.testOnly;
-      lines.push(`  ${k(n.id)}${n.kind === "predicate" ? `(["${n.id}"])` : `["${n.id}"]`}${tf != null && tf !== false ? ":::testOnly" : ""}`);
+      lines.push(
+        `  ${k(n.id)}${n.kind === "predicate" ? `(["${n.id}"])` : `["${n.id}"]`}${tf != null && tf !== false ? ":::testOnly" : ""}`,
+      );
     }
     lines.push("end");
   }
@@ -309,18 +340,19 @@ async function main(argv) {
   process.chdir(root);
   const project = readJson(PROJECT);
   const keys = (o) => Object.keys(o).sort().join();
-  if (
-    !(
-      isObject(project) &&
-      keys(project) === "chains,paths" &&
-      isObject(project.chains) &&
-      isObject(project.paths) &&
-      keys(project.paths) === "deployments,graph,rehearsal,units" &&
-      // Plan lines carry the paths unquoted.
-      Object.values(project.paths).every((v) => typeof v === "string" && /^[A-Za-z0-9_./-]+$/.test(v))
-    )
-  ) {
-    fail(2, `refusing: ${PROJECT} must hold exactly paths and chains; paths must hold exactly deployments, graph, rehearsal and units, as nonempty strings using only A-Z a-z 0-9 _ . / -`);
+  if (!(
+    isObject(project) &&
+    keys(project) === "chains,paths" &&
+    isObject(project.chains) &&
+    isObject(project.paths) &&
+    keys(project.paths) === "deployments,graph,rehearsal,units" &&
+    // Plan lines carry the paths unquoted.
+    Object.values(project.paths).every((v) => typeof v === "string" && /^[A-Za-z0-9_./-]+$/.test(v))
+  )) {
+    fail(
+      2,
+      `refusing: ${PROJECT} must hold exactly paths and chains; paths must hold exactly deployments, graph, rehearsal and units, as nonempty strings using only A-Z a-z 0-9 _ . / -`,
+    );
   }
   const { deployments: DEPLOYMENTS, graph: GRAPH_SCRIPT, rehearsal: REHEARSAL } = project.paths;
   // The graph contract is named like its script file, and the saved export lies beside it.
@@ -332,11 +364,19 @@ async function main(argv) {
   // rule for every rehearsal directory. Keeping that rule complete is the project's job. Calling forge
   // directly bypasses this check.
   const rehearsal = REHEARSAL.startsWith(`${DEPLOYMENTS}/`) ? REHEARSAL.slice(DEPLOYMENTS.length + 1) : "";
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(rehearsal)) fail(2, `refusing: ${PROJECT}'s paths.rehearsal is not ${DEPLOYMENTS}/<lower-case name>`);
-  if (DEVICE.test(rehearsal)) fail(2, `refusing: ${PROJECT}'s paths.rehearsal ends in the directory ${rehearsal}, a name Windows reserves; rename it`);
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(rehearsal))
+    fail(2, `refusing: ${PROJECT}'s paths.rehearsal is not ${DEPLOYMENTS}/<lower-case name>`);
+  if (DEVICE.test(rehearsal))
+    fail(
+      2,
+      `refusing: ${PROJECT}'s paths.rehearsal ends in the directory ${rehearsal}, a name Windows reserves; rename it`,
+    );
   const ignored = (d) => exec("git", ["check-ignore", "-q", d], ["ignore", "ignore", "ignore"]).status === 0;
   if (!(ignored(`${REHEARSAL}/`) && ignored(`${REHEARSAL}-x/`))) {
-    fail(2, "refusing: git does not ignore the directories <paths.rehearsal> and <paths.rehearsal>-*, where a rehearsal writes");
+    fail(
+      2,
+      "refusing: git does not ignore the directories <paths.rehearsal> and <paths.rehearsal>-*, where a rehearsal writes",
+    );
   }
 
   const exported = () => {
@@ -344,13 +384,18 @@ async function main(argv) {
     return isObject(g) && Array.isArray(g.nodes) ? g : undefined;
   };
   const known = (t) => {
-    if (!exported()?.nodes.some((n) => n?.id === t)) fail(2, `cannot reach ${t}: unknown target; see ${NAME} list, or regenerate graph.generated.json if the graph changed`);
+    if (!exported()?.nodes.some((n) => n?.id === t))
+      fail(
+        2,
+        `cannot reach ${t}: unknown target; see ${NAME} list, or regenerate graph.generated.json if the graph changed`,
+      );
   };
 
   const [verb, ...rest] = argv;
   if (verb === "list" || verb === "json") {
     if (rest.length) usageError();
-    for (const l of await graph(GRAPH, verb === "list" ? "TARGET" : "GRAPH", verb === "list" ? "list()" : "graph()")) out(`${l}\n`);
+    for (const l of await graph(GRAPH, verb === "list" ? "TARGET" : "GRAPH", verb === "list" ? "list()" : "graph()"))
+      out(`${l}\n`);
     return 0;
   }
   if (verb === "mermaid") {
@@ -367,8 +412,12 @@ async function main(argv) {
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, dirtyOk = false, keep = false, stopOnly = false;
-  const signers = [], blocks = [];
+  let wait = false,
+    dirtyOk = false,
+    keep = false,
+    stopOnly = false;
+  const signers = [],
+    blocks = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
@@ -412,13 +461,15 @@ async function main(argv) {
     let home = project.chains.default;
     if (home != null && home !== false && home !== "") {
       home = String(home);
-      if (!chainMap[home]) fail(2, `refusing ${name}: network.json has no chain ${home}, which ${PROJECT} names as chains.default`);
+      if (!chainMap[home])
+        fail(2, `refusing ${name}: network.json has no chain ${home}, which ${PROJECT} names as chains.default`);
     } else home = chains.length === 1 ? chains[0] : "";
     // A chain's rpc is printed into the commands, like the network name, and rehearse passes it to anvil.
     const copy = name === rehearsal || name.startsWith(`${rehearsal}-`);
     for (const c of chains) {
       const rpc = chainMap[c]?.rpc;
-      if (typeof rpc !== "string" || !(ALIAS.test(rpc) || (copy && LOOPBACK.test(rpc)))) fail(2, `refusing ${name}: chain ${c}'s rpc is not a plain alias from foundry.toml's [rpc_endpoints]`);
+      if (typeof rpc !== "string" || !(ALIAS.test(rpc) || (copy && LOOPBACK.test(rpc))))
+        fail(2, `refusing ${name}: chain ${c}'s rpc is not a plain alias from foundry.toml's [rpc_endpoints]`);
     }
     return { net, chainMap, chains, home };
   }
@@ -428,7 +479,8 @@ async function main(argv) {
   async function rehearse(source) {
     const name = `${rehearsal}-${source}`;
     const dir = `${DEPLOYMENTS}/${name}`;
-    if (source === rehearsal || source.startsWith(`${rehearsal}-`)) fail(2, `refusing ${source}: it is a rehearsal network; rehearse the network it copies`);
+    if (source === rehearsal || source.startsWith(`${rehearsal}-`))
+      fail(2, `refusing ${source}: it is a rehearsal network; rehearse the network it copies`);
     if (!ignored(`${dir}/`)) fail(2, `refusing: git does not ignore ${dir}/, where rehearse writes`);
     const recordFile = `${dir}/.sprue/rehearsal.json`;
     const lock = `${dir}/.sprue/lock`;
@@ -443,10 +495,13 @@ async function main(argv) {
     };
     const anvilMetadata = (url) => {
       const r = exec("cast", ["rpc", "anvil_metadata", "--rpc-url", url], ["ignore", "pipe", "ignore"]);
-      try { return r.status === 0 ? JSON.parse(r.out) : undefined; } catch {}
+      try {
+        return r.status === 0 ? JSON.parse(r.out) : undefined;
+      } catch {}
     };
     if (!existsSync(dir) && stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
-    if (existsSync(dir) && !existsSync(dirname(recordFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
+    if (existsSync(dir) && !existsSync(dirname(recordFile)))
+      fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
     mkdirSync(dirname(recordFile), { recursive: true });
     // Exclusive, and read under it: two rehearses of one network would share its journals over different
     // forks. A stale lock is not taken over, since two runs could both take it.
@@ -473,11 +528,14 @@ async function main(argv) {
       });
     }
     const previous = readJson(recordFile) ?? { source, forks: [] };
-    if (!isObject(previous) || !Array.isArray(previous.forks)) fail(2, `refusing: ${recordFile} is not a rehearse's record; move ${dir} away`);
+    if (!isObject(previous) || !Array.isArray(previous.forks))
+      fail(2, `refusing: ${recordFile} is not a rehearse's record; move ${dir} away`);
     // A kept fork's pid may since name another process: signal it only while its URL answers as its instance.
     for (const f of previous.forks) {
       if (anvilMetadata(f.url)?.instanceId !== f.instanceId) continue;
-      try { process.kill(f.pid); } catch {}
+      try {
+        process.kill(f.pid);
+      } catch {}
     }
     if (stopOnly) {
       save({ ...previous, forks: [] });
@@ -500,21 +558,33 @@ async function main(argv) {
       const group = groups.get(upstream) ?? { upstream, id: chainMap[c].id, chains: [] };
       group.chains.push(c);
       if (blocksByChain.has(c)) {
-        if (group.block && group.block !== blocksByChain.get(c)) fail(2, `refusing --block: ${group.chains.join(" and ")} share one fork`);
+        if (group.block && group.block !== blocksByChain.get(c))
+          fail(2, `refusing --block: ${group.chains.join(" and ")} share one fork`);
         group.block = blocksByChain.get(c);
       }
       groups.set(upstream, group);
     }
-    if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).error) fail(2, "rehearse starts anvil, which is not on PATH: install Foundry");
+    if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).error)
+      fail(2, "rehearse starts anvil, which is not on PATH: install Foundry");
     // forge signs with a keystore these name even under --unlocked. It loads .env only for names unset,
     // and counts an empty value as set.
     const wallet = ["ETH_KEYSTORE", "ETH_KEYSTORE_ACCOUNT", "ETH_PASSWORD"];
     for (const v of wallet) delete process.env[v];
-    const named = isFile(".env") && new RegExp(`^\\s*(export\\s+)?(${wallet.join("|")})\\s*=`, "m").exec(readFileSync(".env", "utf8"));
-    if (named) fail(2, `refusing: .env sets ${named[2]}, and forge would sign with that keystore; rehearse holds no key`);
+    const named =
+      isFile(".env") &&
+      new RegExp(`^\\s*(export\\s+)?(${wallet.join("|")})\\s*=`, "m").exec(readFileSync(".env", "utf8"));
+    if (named)
+      fail(2, `refusing: .env sets ${named[2]}, and forge would sign with that keystore; rehearse holds no key`);
     for (const v of Object.keys(process.env)) if (OVERRIDE.test(v)) delete process.env[v];
-    const over = overriding(JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")), process.env);
-    if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`);
+    const over = overriding(
+      JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")),
+      process.env,
+    );
+    if (over.length)
+      fail(
+        2,
+        `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`,
+      );
 
     // .sprue/ holds the lock.
     for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, RM_TREE);
@@ -528,7 +598,9 @@ async function main(argv) {
       save(record(keep ? forks.filter((f) => f.instanceId) : []));
       rmSync(lock, { force: true });
       if (keep && forks.every((f) => f.instanceId)) {
-        err(`${NAME}: the forks keep running, and ${dir}/network.json names them; stop them with ${NAME} rehearse --stop ${source}\n`);
+        err(
+          `${NAME}: the forks keep running, and ${dir}/network.json names them; stop them with ${NAME} rehearse --stop ${source}\n`,
+        );
       }
     };
     for (const f of readdirSync(`${DEPLOYMENTS}/${source}`)) {
@@ -548,7 +620,11 @@ async function main(argv) {
       const fd = openSync(log, "w");
       const args = ["--fork-url", group.upstream, ...(group.block ? ["--fork-block-number", group.block] : [])];
       if (limit) args.push("--code-size-limit", String(limit));
-      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], { detached: true, stdio: ["ignore", fd, fd], windowsHide: true });
+      const child = spawn("anvil", [...args, "--host", "127.0.0.1", "--port", "0", "--auto-impersonate"], {
+        detached: true,
+        stdio: ["ignore", fd, fd],
+        windowsHide: true,
+      });
       closeSync(fd);
       child.unref();
       const fork = { chains: group.chains, pid: child.pid, url: "", instanceId: "", child };
@@ -556,14 +632,17 @@ async function main(argv) {
       for (let t = 0; !fork.url; t++) {
         const m = /Listening on ([0-9.]+:[0-9]+)/.exec(readFileSync(log, "utf8"));
         if (m) fork.url = `http://${m[1]}`;
-        else if (child.exitCode !== null || t > 1200) fail(1, `anvil did not start for ${group.chains.join(",")} from ${group.upstream}; see ${log}`);
+        else if (child.exitCode !== null || t > 1200)
+          fail(1, `anvil did not start for ${group.chains.join(",")} from ${group.upstream}; see ${log}`);
         else await sleep(100);
       }
       const meta = anvilMetadata(fork.url);
       fork.instanceId = meta?.instanceId ?? "";
       save(record());
       const block = meta?.forkedNetwork?.forkBlockNumber;
-      out(`fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`}${limit ? ` code limit ${limit}` : ""} ${fork.url} (from alias ${group.upstream})\n`);
+      out(
+        `fork ${group.chains.join(",")} chain ${chainId(fork.url)}${block == null ? "" : ` block ${block}`}${limit ? ` code limit ${limit}` : ""} ${fork.url} (from alias ${group.upstream})\n`,
+      );
       for (const c of group.chains) chainMap[c].rpc = fork.url;
     }
     writeFileSync(`${dir}/network.json`, `${JSON.stringify(net, null, 2)}\n`);
@@ -577,8 +656,14 @@ async function main(argv) {
         if (!/^0x[0-9a-fA-F]{40}$/.test(checked[role]) || typeof hash !== "string") continue;
         const id = String(checked[`${role}ChainId`] ?? checked[`${home}ChainId`]);
         const fork = forks.find((k) => k.chains.some((c) => String(chainMap[c].id) === id));
-        if (fork && must("cast", ["codehash", checked[role], "--rpc-url", fork.url]).toLowerCase() !== hash.toLowerCase()) {
-          fail(2, `refusing: the fork of ${fork.chains.join(",")} lacks the code ${unit}.json certifies for ${role} at ${checked[role]}; fork a block after its deployment`);
+        if (
+          fork &&
+          must("cast", ["codehash", checked[role], "--rpc-url", fork.url]).toLowerCase() !== hash.toLowerCase()
+        ) {
+          fail(
+            2,
+            `refusing: the fork of ${fork.chains.join(",")} lacks the code ${unit}.json certifies for ${role} at ${checked[role]}; fork a block after its deployment`,
+          );
         }
       }
     }
@@ -598,10 +683,17 @@ async function main(argv) {
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
-  const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
+  const broadcastDir =
+    network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
   const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
   const plan = () =>
-    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
+    graph(
+      GRAPH,
+      "PLAN",
+      "plan(string,string)",
+      [network, target, "--rpc-url", planRpc],
+      broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {},
+    );
   if (verb === "plan") {
     for (const l of await plan()) out(`${l}\n`);
     return 0;
@@ -614,11 +706,17 @@ async function main(argv) {
   const same = (a, b) => a.toLowerCase() === b.toLowerCase();
   const from = process.env.DEPLOYER ? "DEPLOYER" : pin ? "network.json" : "";
   process.env.DEPLOYER ||= pin;
-  if (!process.env.DEPLOYER && rehearsing) fail(2, "set DEPLOYER, or network.json's deployer, to the sender of steps without .by");
-  if (process.env.DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(process.env.DEPLOYER)) fail(2, `${from} names the deployer ${process.env.DEPLOYER}, which is not a 0x address`);
-  if (unsafeDeployer && !pin) fail(2, `--unsafe-unexpected-deployer has no use: ${network}'s network.json pins no deployer`);
+  if (!process.env.DEPLOYER && rehearsing)
+    fail(2, "set DEPLOYER, or network.json's deployer, to the sender of steps without .by");
+  if (process.env.DEPLOYER && !/^0x[0-9a-fA-F]{40}$/.test(process.env.DEPLOYER))
+    fail(2, `${from} names the deployer ${process.env.DEPLOYER}, which is not a 0x address`);
+  if (unsafeDeployer && !pin)
+    fail(2, `--unsafe-unexpected-deployer has no use: ${network}'s network.json pins no deployer`);
   if (pin && !same(process.env.DEPLOYER, pin) && !unsafeDeployer) {
-    fail(2, `refusing: DEPLOYER is ${process.env.DEPLOYER}, and ${network}'s network.json pins the deployer ${pin}; unset DEPLOYER, or pass --unsafe-unexpected-deployer`);
+    fail(
+      2,
+      `refusing: DEPLOYER is ${process.env.DEPLOYER}, and ${network}'s network.json pins the deployer ${pin}; unset DEPLOYER, or pass --unsafe-unexpected-deployer`,
+    );
   }
   if (rehearsing) out(`deployer ${process.env.DEPLOYER}, from ${from}\n`);
   // A sender the run cannot sign for is refused before any send, not at its step's turn. Only a pin
@@ -629,18 +727,32 @@ async function main(argv) {
     else {
       const fallback = from === "network.json" && canSign(own);
       if (unsafeDeployer && fallback) process.env.DEPLOYER = own;
-      else fail(2, `refusing: ${from === "DEPLOYER" ? "DEPLOYER is" : `${network}'s network.json pins the deployer`} ${d}, and ${why}; sign as it${fallback && !unsafeDeployer ? `, or pass --unsafe-unexpected-deployer to send as ${own}` : ""}`);
+      else
+        fail(
+          2,
+          `refusing: ${from === "DEPLOYER" ? "DEPLOYER is" : `${network}'s network.json pins the deployer`} ${d}, and ${why}; sign as it${fallback && !unsafeDeployer ? `, or pass --unsafe-unexpected-deployer to send as ${own}` : ""}`,
+        );
     }
-    out(`deployer ${process.env.DEPLOYER}, from ${process.env.DEPLOYER === d ? from || "the signer" : "the signer (--unsafe-unexpected-deployer)"}\n`);
+    out(
+      `deployer ${process.env.DEPLOYER}, from ${process.env.DEPLOYER === d ? from || "the signer" : "the signer (--unsafe-unexpected-deployer)"}\n`,
+    );
   };
   // git status as the person sees it. Configuration (status.showUntrackedFiles, diff.ignoreSubmodules)
   // must not hide an untracked file or a dirty submodule, and a failing git is a refusal, never an empty
   // status.
   const porcelain = () => {
-    const s = must("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], "refusing: git status failed");
+    const s = must(
+      "git",
+      ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"],
+      "refusing: git status failed",
+    );
     return s === "" ? [] : s.split("\n");
   };
-  const units = new Set(exported().nodes.map((n) => n.unit).filter((u) => typeof u === "string" && u));
+  const units = new Set(
+    exported()
+      .nodes.map((n) => n.unit)
+      .filter((u) => typeof u === "string" && u),
+  );
   // Local: every chain of the network is listed in sprue.json's chains.local, so a send needs no
   // person. This only picks the signer. `plan`, which precedes every send, refuses a malformed list.
   let anvil = false;
@@ -666,9 +778,20 @@ async function main(argv) {
   if (!rehearsing && !attended) {
     const key = must("cast", ["wallet", "address", "--private-key", process.env.KEY || DEV_KEY]);
     // Anvil's --unlocked signs only for the accounts each node lists, impersonated ones included.
-    const unlocked = (rpc) => JSON.parse(must("cast", ["rpc", "eth_accounts", "--rpc-url", rpc])).map((a) => a.toLowerCase());
-    if (anvil) settleDeployer(key, (d) => endpoints.every((rpc) => unlocked(rpc).includes(d.toLowerCase())), "Anvil signs only for its unlocked accounts");
-    else settleDeployer(key, (d) => same(d, key), `this run signs only as ${key}, the address of ${process.env.KEY ? "KEY" : "Anvil's dev key (KEY is unset)"}`);
+    const unlocked = (rpc) =>
+      JSON.parse(must("cast", ["rpc", "eth_accounts", "--rpc-url", rpc])).map((a) => a.toLowerCase());
+    if (anvil)
+      settleDeployer(
+        key,
+        (d) => endpoints.every((rpc) => unlocked(rpc).includes(d.toLowerCase())),
+        "Anvil signs only for its unlocked accounts",
+      );
+    else
+      settleDeployer(
+        key,
+        (d) => same(d, key),
+        `this run signs only as ${key}, the address of ${process.env.KEY ? "KEY" : "Anvil's dev key (KEY is unset)"}`,
+      );
   }
   let me = "";
   const live = new Set();
@@ -687,11 +810,17 @@ async function main(argv) {
         return m ? [m[1]] : [];
       });
       if (!kinds.join("\n") || kinds.includes("live")) {
-        fail(2, `refusing --allow-dirty: ${network} has a live chain (or no chain kind), which deploys from a clean commit`);
+        fail(
+          2,
+          `refusing --allow-dirty: ${network} has a live chain (or no chain kind), which deploys from a clean commit`,
+        );
       }
       out("warning: --allow-dirty: the working tree is not required to be clean\n");
     } else if (porcelain().length) {
-      fail(2, "refusing: the working tree is not clean; commit it (the journals of an interrupted run too), or on a test chain pass --allow-dirty");
+      fail(
+        2,
+        "refusing: the working tree is not clean; commit it (the journals of an interrupted run too), or on a test chain pass --allow-dirty",
+      );
     }
     // Outside a rehearsal network a development node is refused: a run on a fork or devnet would write
     // the network's committed journals and records. On one it is required: a real send would be
@@ -702,8 +831,16 @@ async function main(argv) {
       const v = clientVersion(rpc);
       if (v.status !== 0 && !(broadcastDir && isLocal(Number(id)))) fail(2, `cannot read the node at ${rpc}`);
       const dev = isAnvil(v) || isLocal(Number(id));
-      if (dev && !broadcastDir) fail(2, `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`);
-      if (!dev && broadcastDir) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal requires Anvil or a chains.local id`);
+      if (dev && !broadcastDir)
+        fail(
+          2,
+          `refusing ${network}: ${rpc} is a development node (${v.out}, chain ${id}); rehearse on a ${rehearsal}-* network`,
+        );
+      if (!dev && broadcastDir)
+        fail(
+          2,
+          `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal requires Anvil or a chains.local id`,
+        );
     }
     signer = signers[0];
     me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
@@ -717,7 +854,8 @@ async function main(argv) {
       .map((rpc) => {
         const at = (block) => must("cast", ["nonce", sender, "--block", block, "--rpc-url", rpc]);
         const latest = at("latest");
-        if (latest !== at("pending")) fail(2, `refusing: ${sender} has a pending transaction at ${rpc}; wait for it or replace it`);
+        if (latest !== at("pending"))
+          fail(2, `refusing: ${sender} has a pending transaction at ${rpc}; wait for it or replace it`);
         return `${latest} `;
       })
       .join("");
@@ -728,7 +866,10 @@ async function main(argv) {
     const dir = `${DEPLOYMENTS}/${network}/`;
     return porcelain().filter((l) => {
       const p = l.slice(3);
-      return !(p.startsWith(dir) && (p.endsWith(".metadata.json") || (p.endsWith(".json") && units.has(p.slice(dir.length, -5)))));
+      return !(
+        p.startsWith(dir) &&
+        (p.endsWith(".metadata.json") || (p.endsWith(".json") && units.has(p.slice(dir.length, -5))))
+      );
     });
   };
   // The untracked records that this run's own earlier sends created (ownership is by path) do not make
@@ -737,19 +878,26 @@ async function main(argv) {
   // not.
   const ours = new Set();
   const digest = (f) => (isFile(f) ? [`${f} ${createHash("sha256").update(readFileSync(f)).digest("hex")}`] : []);
-  const tree = () => [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
+  const tree = () =>
+    [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
   const head = () => must("git", ["rev-parse", "HEAD"], "refusing: git rev-parse failed");
 
   // Repeats forge's last `Error:` line, where a long run buries it, and exits with forge's code.
   const stop = (text, code) => {
-    const e = text.split("\n").filter((l) => l.startsWith("Error:")).pop();
+    const e = text
+      .split("\n")
+      .filter((l) => l.startsWith("Error:"))
+      .pop();
     if (e) err(`${e}\n`);
     throw new Exit(code);
   };
   // Runs forge with its output streaming.
   const step = async ({ env, args }) => {
     const { code, log } = await new Promise((resolve) => {
-      const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("forge", [...args, "--broadcast", ...signer], {
+        env: { ...process.env, ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       forgeStep = child;
       let log = "";
       for (const s of [child.stdout, child.stderr]) {
@@ -772,7 +920,8 @@ async function main(argv) {
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
   async function attend(line, cmd) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
-    if (sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
+    if (sender.toLowerCase() !== me.toLowerCase())
+      fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
     const snap = nonces(sender);
     const sha = head();
     const seen = tree();
@@ -785,14 +934,18 @@ async function main(argv) {
     if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
     // transactions but names no file, they cannot be shown, so refuse.
-    const records = dry.text.split("\n").flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
+    const records = dry.text
+      .split("\n")
+      .flatMap((l) => (l.startsWith("Transactions saved to: ") ? [l.slice(23).replace(/\r$/, "")] : []));
     const show = (v) => (v == null ? "null" : typeof v === "string" ? v : JSON.stringify(v));
     for (const f of records) {
       try {
         const rec = readJson(f);
         for (const d of rec.deployments ?? [rec]) {
           for (const t of d.transactions) {
-            out(`  chain ${show(d.chain)} nonce ${show(t.transaction.nonce)}: ${show(t.transactionType)} ${t.contractName ?? ""} ${show(t.contractAddress ?? t.transaction.to)} value ${show(t.transaction.value)} ${t.function ?? ""} ${JSON.stringify(t.arguments ?? [])}\n`);
+            out(
+              `  chain ${show(d.chain)} nonce ${show(t.transaction.nonce)}: ${show(t.transactionType)} ${t.contractName ?? ""} ${show(t.contractAddress ?? t.transaction.to)} value ${show(t.transaction.value)} ${t.function ?? ""} ${JSON.stringify(t.arguments ?? [])}\n`,
+            );
           }
         }
       } catch {
@@ -800,7 +953,8 @@ async function main(argv) {
       }
     }
     if (!records.length) {
-      if (/^SIMULATION COMPLETE/m.test(dry.text)) fail(2, "refusing: the dry run has transactions but names no record to show");
+      if (/^SIMULATION COMPLETE/m.test(dry.text))
+        fail(2, "refusing: the dry run has transactions but names no record to show");
       out("  no transactions in the dry run\n");
     }
     if (ask(`${line}\nSend this as ${sender}? Type yes: `) !== "yes") fail(6, "not sent: the answer was not yes");
@@ -817,7 +971,8 @@ async function main(argv) {
 
   // A date line names its chain's rpc (`# not before <ts> on <rpc> ...`). Without `on`, the plan's.
   const before = (line, at, on) => {
-    if (on && !endpoints.includes(on)) fail(2, `refusing: the line reads ${on}, which no chain of ${network} names: ${line}`);
+    if (on && !endpoints.includes(on))
+      fail(2, `refusing: the line reads ${on}, which no chain of ${network} names: ${line}`);
     const clock = on || planRpc;
     const now = must("cast", ["block", "latest", "--field", "timestamp", "--rpc-url", clock]);
     if (!/^[0-9]+$/.test(now)) fail(1, `cannot read the clock at ${clock}`);
@@ -846,13 +1001,28 @@ async function main(argv) {
       const dirty = Object.keys(j).filter((k) => k.endsWith("Dirty") && j[k] === true);
       // forge records an abbreviated commit, and a ref of that name would win over it.
       const resolve = (c) => {
-        const r = typeof c === "string" && /^[0-9a-f]{7,40}$/.test(c) ? git("rev-parse", "-q", "--verify", `${c}^{commit}`) : undefined;
+        const r =
+          typeof c === "string" && /^[0-9a-f]{7,40}$/.test(c)
+            ? git("rev-parse", "-q", "--verify", `${c}^{commit}`)
+            : undefined;
         return r?.status === 0 && r.out.startsWith(c) ? r.out : "";
       };
-      const recorded = [...new Set(Object.keys(j).filter((k) => k.endsWith("Commit")).map((k) => j[k]))];
+      const recorded = [
+        ...new Set(
+          Object.keys(j)
+            .filter((k) => k.endsWith("Commit"))
+            .map((k) => j[k]),
+        ),
+      ];
       const commits = [...new Set(recorded.map(resolve))];
-      if (dirty.length) { note(`not tagged: ${dirty.join(", ")} records a dirty tree`); continue; }
-      if (commits.length !== 1 || !commits[0]) { note(`not tagged: its roles record ${recorded.join(", ") || "no commit"}, not one commit of this repository`); continue; }
+      if (dirty.length) {
+        note(`not tagged: ${dirty.join(", ")} records a dirty tree`);
+        continue;
+      }
+      if (commits.length !== 1 || !commits[0]) {
+        note(`not tagged: its roles record ${recorded.join(", ") || "no commit"}, not one commit of this repository`);
+        continue;
+      }
       const tree = (rev) => git("rev-parse", "-q", "--verify", `${rev}^{tree}`).out;
       const local = tree(ref);
       if (!local) {
@@ -861,7 +1031,10 @@ async function main(argv) {
           input: `${unit} on ${network}, certified by its check. This tag never moves.\n\n${JSON.stringify(j, null, 2)}\n`,
           stdio: ["pipe", "ignore", "inherit"],
         });
-        if (r.status !== 0) { note("git tag failed"); continue; }
+        if (r.status !== 0) {
+          note("git tag failed");
+          continue;
+        }
       } else if (local !== tree(commits[0])) {
         // Squash merges give one tree two commits, so the tree is what must match.
         note(`a tag of another tree exists; tags never move`);
@@ -869,18 +1042,31 @@ async function main(argv) {
       }
       const theirs = pushed.get(ref);
       if (theirs === git("rev-parse", ref).out) continue;
-      if (theirs) { note(`${remote} has another tag of that name; it is never overwritten`); continue; }
-      if (!remote || !yes(`Push ${tag} to ${remote}?`)) { note(`tagged; push later with ${push}`); continue; }
+      if (theirs) {
+        note(`${remote} has another tag of that name; it is never overwritten`);
+        continue;
+      }
+      if (!remote || !yes(`Push ${tag} to ${remote}?`)) {
+        note(`tagged; push later with ${push}`);
+        continue;
+      }
       // A failed push is no failed deploy: the check already passed. A push without + never replaces a
       // remote tag, so an unreadable remote is offered the push too.
-      if (exec("git", ["push", "--no-follow-tags", remote, `${ref}:${ref}`], ["ignore", "ignore", "inherit"]).status !== 0) note(`push failed; retry with ${push}`);
+      if (
+        exec("git", ["push", "--no-follow-tags", remote, `${ref}:${ref}`], ["ignore", "ignore", "inherit"]).status !== 0
+      )
+        note(`push failed; retry with ${push}`);
     }
   };
   if (attended && !broadcastDir) {
     atExit = (code) => {
       if (!live.size || ![0, 3, 4].includes(code)) return;
       // The run's status stands whatever the offer meets.
-      try { offerTags(); } catch (e) { err(`${NAME}: tags not offered: ${e.message}\n`); }
+      try {
+        offerTags();
+      } catch (e) {
+        err(`${NAME}: tags not offered: ${e.message}\n`);
+      }
     };
   }
 
@@ -890,8 +1076,16 @@ async function main(argv) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
     // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
     // After each plan: its forge may have just installed a submodule.
-    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(must("git", ["ls-files", "--eol", "--recurse-submodules", ":/"], "refusing: git ls-files failed"))) {
-      fail(2, "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again");
+    if (
+      attended &&
+      /^i\/(?!crlf)\S*\s+w\/crlf/m.test(
+        must("git", ["ls-files", "--eol", "--recurse-submodules", ":/"], "refusing: git ls-files failed"),
+      )
+    ) {
+      fail(
+        2,
+        "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again",
+      );
     }
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
@@ -928,27 +1122,41 @@ async function main(argv) {
         const chain = /^# chain [^ ]+ ([0-9]+) live$/.exec(line);
         if (chain) live.add(chain[1]);
         out(`${line}\n`);
-      }
-      else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
+      } else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);
       else if (line) {
         // A line reaches only the network's own chains, which the checks above read.
         const rpc = / --rpc-url ([^ ]+)/.exec(line)?.[1];
-        if (rpc && !endpoints.includes(rpc)) fail(2, `refusing: the line reads ${rpc}, which no chain of ${network} names: ${line}`);
+        if (rpc && !endpoints.includes(rpc))
+          fail(2, `refusing: the line reads ${rpc}, which no chain of ${network} names: ${line}`);
         const cmd = parse(line);
         // The resolved paths: foundry.toml and inherited variables can move them past the line's assignments.
-        const result = spawnSync("forge", ["config", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...cmd.env } });
+        const result = spawnSync("forge", ["config", "--json"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "inherit"],
+          env: { ...process.env, ...cmd.env },
+        });
         let config;
         try {
           config = JSON.parse(result.stdout);
         } catch {}
         if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
         const over = overriding(config, process.env);
-        if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
+        if (over.length)
+          fail(
+            2,
+            `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`,
+          );
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
-          fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
+          fail(
+            2,
+            `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`,
+          );
         }
         if (cacheDir && config.cache_path !== cacheDir) {
-          fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
+          fail(
+            2,
+            `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`,
+          );
         }
         sent = text;
         await (attended ? attend(line, cmd) : step(cmd));
