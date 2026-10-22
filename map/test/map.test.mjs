@@ -413,3 +413,17 @@ test('a log whose indexed layout is not the declared one is skipped and counted'
   assert.equal(stats.events, 1);
 });
 
+test('calldata decides the arguments; the record strings are read only without it', () => {
+  const input = '0x' + keccak256(new TextEncoder().encode('setAdmin(address)')).slice(0, 8) + word(B).slice(2);
+  const m = modelOf({ 1: [{ ts: 1, txs: [{ hash: H(1), to: A, block: 1, function: 'setAdmin(address)', arguments: [Q], input }] }] });
+  assert.deepEqual(m.edges.filter((e) => e.kind === 'call').map((e) => e.to), [`1:${B}`]);
+  assert.equal(m.txs[0].decode, 'abi');
+});
+
+test('a fixed array larger than the calldata is undecoded before it is allocated', () => {
+  const run = (src) => spawnSync(process.execPath, ['--max-old-space-size=48', '--input-type=module', '-e', src], { encoding: 'utf8' });
+  const abi = join(here, '..', 'abi.mjs');
+  const r = run(`import { decTuple, parseSignature } from ${JSON.stringify(abi)};
+    try { decTuple(parseSignature('f(address[100000000])').params, '00'.repeat(64), 0); console.log('decoded'); } catch (e) { console.log(e.message); }`);
+  assert.equal(r.stdout.trim(), 'short calldata', r.stderr.slice(0, 200));
+});

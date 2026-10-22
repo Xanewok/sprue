@@ -190,12 +190,21 @@ export function decTuple(types, hex, start) {
   });
 }
 
+// The encoded head must fit in the calldata before anything is allocated for it.
+function fits(hex, pos, bytes) {
+  if (pos * 2 + bytes * 2 > hex.length) throw new Error('short calldata');
+}
+
 function decAt(t, hex, pos) {
   if (t.k === 'tuple') return { type: t, children: decTuple(t.comps, hex, pos) };
   if (t.k === 'arr') {
-    if (t.len !== null) return { type: t, children: decTuple(Array(t.len).fill(t.of), hex, pos) };
+    if (t.len !== null) {
+      fits(hex, pos, t.len * headSize(t.of));
+      return { type: t, children: decTuple(Array(t.len).fill(t.of), hex, pos) };
+    }
     const n = Number(BigInt('0x' + word(hex, pos)));
     if (n > 10000) throw new Error('bad length');
+    fits(hex, pos + 32, n * headSize(t.of));
     return { type: t, children: decTuple(Array(n).fill(t.of), hex, pos + 32) };
   }
   const w = word(hex, pos), b = t.t;

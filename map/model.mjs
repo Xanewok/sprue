@@ -117,16 +117,16 @@ export function build({ paths, outDir, sprue }) {
         const fromAbi = x.functionAbi && parseSignature(x.functionAbi);
         params = withNames(parsed.params, fromAbi?.params || abis.functionParams(nodeOf(chain, x.to)?.name || x.contractName, x.fn)
           || COMMON.find((p) => commonSig(p) === x.fn)?.params);
-        if (x.arguments && x.arguments.length === params.length) {
-          try {
-            trees = params.map((t, k) => parseArgString(t, x.arguments[k]));
-            mode = 'record';
-          } catch { trees = null; }
-        }
-        if (!trees && x.input) {
+        // Calldata is what ran; forge's argument strings are read only when there is none.
+        if (x.input) {
           try {
             trees = decTuple(params, x.input.slice(10), 0);
             mode = 'abi';
+          } catch { trees = null; }
+        } else if (x.arguments && x.arguments.length === params.length) {
+          try {
+            trees = params.map((t, k) => parseArgString(t, x.arguments[k]));
+            mode = 'record';
           } catch { trees = null; }
         }
         if (!trees && x.arguments && x.arguments.length === params.length) {
