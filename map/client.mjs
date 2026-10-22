@@ -6,8 +6,8 @@
 // in every page.
 // Maintains: `S` is all the UI state (step, selection, lens, whether the reader has moved, whether the step list
 // is open). `draw` places and rebuilds the SVG for the current width; `apply` restyles it for `S` and a focus
-// without moving anything; `panel` rewrites the side panel. The layout depends on the width only, so stepping
-// never moves a box.
+// without placing boxes or links again; `panel` rewrites the side panel. The layout depends on the width only,
+// so stepping never moves a box.
 // Relies on the model as JSON in `#data` and on the ids and classes of the markup in page.mjs.
 export function client(place) {
   const D = JSON.parse(document.getElementById('data').textContent);

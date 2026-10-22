@@ -6,7 +6,7 @@
 //   Links run only in the gaps between rows, lanes and columns, so no link is drawn through a box.
 //   Links into one node merge into one trunk and links out of one node into one bus; each trunk or bus owns a
 //   track of every channel it uses, and a channel widens until its tracks fit, so parallel links never draw
-//   over each other. Widening stops after 20 rounds. A result wider than the page drops a column at a time
+//   over each other. Widening stops after 21 rounds. A result wider than the page drops a column at a time
 //   down to two, then narrows the boxes to at least 112px, and may still be wider.
 //   Positions depend on the deployment and the width only, never on the step shown.
 // Relies on `layout` having set `laneKey` and `ord` on the nodes.
