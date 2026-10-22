@@ -90,7 +90,7 @@ export function build({ paths, outDir, sprue }) {
   for (const x of out) {
     const chain = x.chain;
     const isCreate = x.type === 'CREATE' || x.type === 'CREATE2';
-    let fnName = null, params = null, trees = null, mode = 'none';
+    let fnName = null, params = null, trees = null, mode = 'none', fallback = false;
     if (isCreate) {
       const args = x.arguments || [];
       if (args.length) {
@@ -132,6 +132,7 @@ export function build({ paths, outDir, sprue }) {
         if (!trees && x.arguments && x.arguments.length === params.length) {
           trees = params.map((t, k) => ({ type: { k: 'base', t: t.k === 'base' ? t.t : '?', name: t.name ?? `arg${k}` }, value: String(x.arguments[k]) }));
           mode = 'positional';
+          fallback = !!x.input;
         }
         if (!trees && params.length === 0) mode = 'abi';
         if (!trees && params.length) mode = 'failed';
@@ -184,7 +185,7 @@ export function build({ paths, outDir, sprue }) {
       for (const v of vals) {
         if (/^0x0{40}$/.test(v)) continue;
         const rule = matchRule(isCreate ? null : fnName, leaf);
-        addEdge(source, touch(v), isCreate ? 'deploy' : 'call', label(leaf), rule, x, true, `${leaf.path} = ${lc(v)}`);
+        addEdge(source, touch(v), isCreate ? 'deploy' : 'call', label(leaf), rule, x, !fallback, `${leaf.path} = ${lc(v)}`);
       }
     }
   }

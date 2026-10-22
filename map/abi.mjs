@@ -206,6 +206,7 @@ function decAt(t, hex, pos) {
   if (t.k === 'arr') {
     if (t.len !== null) {
       fits(hex, pos, t.len * headSize(t.of));
+      if (t.len > 10000) throw new Error('bad length');
       return { type: t, children: decTuple(Array(t.len).fill(t.of), hex, pos) };
     }
     const n = Number(BigInt('0x' + word(hex, pos)));
