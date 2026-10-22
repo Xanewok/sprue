@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: MIT
-// Lane and rank only; the page places them for its width.
+// Where the map's boxes sit and where its links run. `layout` fixes lane order and node rank, which do not depend
+// on the page; `place` turns them into coordinates for one page width.
+//
+// `place` maintains, for the width it is given:
+//   Links run only in the gaps between rows, lanes and columns, so no link is drawn through a box.
+//   Links into one node merge into one trunk and links out of one node into one bus; each trunk or bus owns a
+//   track of every channel it uses, and a channel widens until its tracks fit, so parallel links never draw
+//   over each other. Widening stops after 20 rounds. A result wider than the page drops a column at a time
+//   down to two, then narrows the boxes to at least 112px, and may still be wider.
+//   Positions depend on the deployment and the width only, never on the step shown.
+// Relies on `layout` having set `laneKey` and `ord` on the nodes.
+
+// Box and gap sizes in px; the page's width decides how many columns fit.
 export const GEOM = { w: 190, h: 46, gx: 44, gy: 34, laneGap: 52, cols: 8, pad: 24, title: 22 };
 
 export function layout(list, out) {
@@ -19,14 +31,12 @@ export function layout(list, out) {
   return { list, lanes };
 }
 
-// Places nodes and routes links for a page width. Runs in the page (serialised), so it must not use anything
-// outside its own body. Positions depend on the deployment and the width only, never on the step.
-// Links run only in the gaps between rows, lanes and columns, so no link crosses a box. Links into one node
-// share its entry point and their channel tracks, so they merge into one trunk. Each trunk or bus owns a track
-// of every channel it uses, and channels widen until their tracks fit, so parallel links never draw over each other.
+// Runs in the page, serialised with its source text (`client.mjs` receives it as an argument), so it must use
+// nothing outside its own body: its helpers are nested functions, not module-level ones.
 export function place(D, G, avail) {
   const g = avail < 560 ? { ...G, w: 148, gx: 24, pad: 8 } : { ...G };
   const SP = g.w < G.w ? 6 : 8;
+
   const byId = new Map(D.nodes.map((n) => [n.id, n]));
   const bundles = new Map();
   for (const e of D.edges) {
@@ -52,7 +62,8 @@ export function place(D, G, avail) {
       lanes.get(n.laneKey).nodes.push(n);
       continue;
     }
-    const into = new Set([...nbrs.get(n.id)].map((id) => byId.get(id)).filter((m) => m.kind === 'contract').map((m) => m.laneKey));
+    const linked = [...nbrs.get(n.id)].map((id) => byId.get(id));
+    const into = new Set(linked.filter((m) => m.kind === 'contract').map((m) => m.laneKey));
     const first = [...lanes.values()].find((l) => l.chain === String(n.chain) && l.nodes.length);
     if (into.size === 1) lanes.get([...into][0]).nodes.push(n);
     else if (!into.size && first) first.nodes.push(n);
@@ -62,6 +73,7 @@ export function place(D, G, avail) {
       side.get(c).push(n);
     }
   }
+
   const gutter = g.gx + 16;
   // Too narrow for a side column beside two grid columns: the shared addresses become their chain's first lane.
   if (side.size && avail - 2 * g.pad - g.w - gutter < 2 * g.w + g.gx) {
@@ -71,10 +83,12 @@ export function place(D, G, avail) {
     for (const l of all) lanes.set(l.key, l);
     side.clear();
   }
+
   const laneList = [...lanes.values()].filter((l) => l.nodes.length);
   const hasSide = side.size > 0;
   const x0 = hasSide ? g.pad + g.w : 0, gap0 = hasSide ? gutter : 2 * g.pad + 8;
   const fit = Math.max(1, Math.min(G.cols, Math.floor((avail - x0 - gap0 - g.pad) / (g.w + g.gx))));
+
   // Widened gaps can overflow the width: then one column fewer, down to two, then narrower boxes, down to 112px.
   for (let cols = fit; ; cols--) {
     const L = attempt(cols);
@@ -104,6 +118,7 @@ export function place(D, G, avail) {
       l.shelf = shelves[shelves.length - 1];
     }
     for (const l of laneList) l.span = l.shelf.lanes.length > 1 ? l.nodes.length : cols;
+
     // Columns: barycenter sweeps over the lanes. A lane that fits in one row puts each node at the free column
     // nearest its barycenter, so linked nodes line up; a longer lane spreads over every column, filling column
     // by column, so a node's x still follows its barycenter.
@@ -129,6 +144,7 @@ export function place(D, G, avail) {
       l.rows = Math.max(...at.values());
     };
     laneList.forEach((l) => assign(l));
+
     const colOf = (id) => (cell.has(id) ? cell.get(id).c : -1);
     for (let it = 0; it < 6; it++) {
       for (const l of it % 2 ? [...laneList].reverse() : laneList) {
@@ -142,6 +158,7 @@ export function place(D, G, avail) {
         assign(l, bary);
       }
     }
+
     // Each channel needs a track per trunk or bus it carries; route, widen what overflowed, route again.
     const vw = Array(cols + 1).fill(g.gx);
     vw[0] = gap0;
@@ -167,14 +184,18 @@ export function place(D, G, avail) {
       x += vw[i];
       if (i < cols) { colX.push(x); x += g.w; }
     }
+
     const width = new Map();
     const chan = (id, top, base) => {
       const w = Math.max(base, widths.get(id) || 0);
       width.set(id, w);
       return { id, y: top + w / 2, w };
     };
+
     const box = new Map();
     const sides = [];
+    // `prev` is the channel below the last shelf placed: the next shelf takes it as its channel above, so two
+    // shelves share one gap. It is null where a side column pushed `y` past the last shelf.
     let y = g.pad - g.laneGap / 2, k = 0, prev = null;
     for (const chain of [...new Set(D.lanes.map((key) => key.split('|')[0]))]) {
       let top = null;
@@ -228,7 +249,10 @@ export function place(D, G, avail) {
       }
     }
 
+
     const tracks = new Map();
+    // The offset of `by`'s track in a channel: the first user runs on the centre line, the next ones alternate
+    // either side. Everything with the same `by` shares one track, which is what merges a trunk or a bus.
     const track = (key, by) => {
       if (!tracks.has(key)) tracks.set(key, []);
       const l = tracks.get(key);
@@ -245,6 +269,7 @@ export function place(D, G, avail) {
       outDeg.set(b.from, (outDeg.get(b.from) || 0) + 1);
       inDeg.set(b.to, (inDeg.get(b.to) || 0) + 1);
     }
+
     const routes = [];
     for (const bd of bundles.values()) {
       const A = box.get(bd.from), B = box.get(bd.to), T = bd.to;
@@ -260,10 +285,12 @@ export function place(D, G, avail) {
         const xg = v(0);
         pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
       } else if (B.side) {
-        const up = cy(B) < cy(A), yc = h(up ? A.shelf.above(A.row) : A.shelf.below(A.row), S), xg = v(0), sx = port(A, up, true);
+        const up = cy(B) < cy(A), sx = port(A, up, true);
+        const yc = h(up ? A.shelf.above(A.row) : A.shelf.below(A.row), S), xg = v(0);
         pts = [[sx, up ? A.y : A.y + g.h], [sx, yc], [xg, yc], [xg, cy(B) + 6], [B.x + g.w, cy(B) + 6]];
       } else if (A.side) {
-        const down = cy(B) > cy(A), yc = h(down ? B.shelf.above(B.row) : B.shelf.below(B.row)), xg = v(0, S), ex = port(B, down, false);
+        const down = cy(B) > cy(A), ex = port(B, down, false);
+        const yc = h(down ? B.shelf.above(B.row) : B.shelf.below(B.row)), xg = v(0, S);
         pts = [[A.x + g.w, cy(A) - 6], [xg, cy(A) - 6], [xg, yc], [ex, yc], [ex, down ? B.y : B.y + g.h]];
       } else if (A.shelf === B.shelf && A.row === B.row) {
         if (Math.abs(A.col - B.col) === 1) {
@@ -275,8 +302,10 @@ export function place(D, G, avail) {
         }
       } else {
         const down = B.y > A.y;
-        const c1 = down ? A.shelf.below(A.row) : A.shelf.above(A.row), c2 = down ? B.shelf.above(B.row) : B.shelf.below(B.row);
-        const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h, sx = port(A, !down, true), ex = port(B, down, false);
+        const c1 = down ? A.shelf.below(A.row) : A.shelf.above(A.row);
+        const c2 = down ? B.shelf.above(B.row) : B.shelf.below(B.row);
+        const aEdge = down ? A.y + g.h : A.y, bEdge = down ? B.y : B.y + g.h;
+        const sx = port(A, !down, true), ex = port(B, down, false);
         if (c1.id === c2.id) {
           const yc = h(c1);
           pts = [[sx, aEdge], [sx, yc], [ex, yc], [ex, bEdge]];
@@ -289,6 +318,7 @@ export function place(D, G, avail) {
       }
       routes.push({ ...bd, pts });
     }
+
     // A trunk's count sits at its shared entry point.
     const entries = new Map();
     for (const r of routes) {
@@ -296,18 +326,22 @@ export function place(D, G, avail) {
       if (!entries.has(k)) entries.set(k, { to: r.to, n: 0, a: r.pts[r.pts.length - 1], b: r.pts[r.pts.length - 2] });
       entries.get(k).n++;
     }
-    const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 }));
+    const badgeAt = (e) => ({ n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
+    const badges = [...entries.values()].filter((e) => e.n >= 3).map((e) => ({ to: e.to, ...badgeAt(e) }));
+
     const exits = new Map();
     for (const r of routes) {
       const k = r.from + '@' + r.pts[0].join(',');
       if (!exits.has(k)) exits.set(k, { from: r.from, n: 0, a: r.pts[0], b: r.pts[1] });
       exits.get(k).n++;
     }
-    for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, n: e.n, x: (e.a[0] + e.b[0]) / 2, y: (e.a[1] + e.b[1]) / 2 });
+    for (const e of exits.values()) if (e.n >= 4) badges.push({ from: e.from, ...badgeAt(e) });
+
     const maxUsed = Math.max(0, ...[...cell.values()].map((p) => p.c)) + 1;
     const W = Math.max(Math.min(avail, 440), gapC[maxUsed] + vw[maxUsed] / 2 + g.pad);
     const H = Math.max(prev ? prev.y + prev.w / 2 : y, ...sides.map((s) => s.y1 + 10)) + g.pad / 2;
     const counts = new Map([...tracks].map(([key, l]) => [key, l.length]));
+
     // A lane's title goes in the leftmost stretch of its band that no link crosses and that holds it whole, else
     // in the widest one, where the page shortens it.
     const lanes = laneList.map((l) => {
@@ -328,8 +362,10 @@ export function place(D, G, avail) {
       }
       if (at < x1 - 10) free.push([at, x1 - 10]);
       const need = text.length * 6.8;
-      const spot = free.find(([a, b]) => b - a >= need) || free.reduce((m, f) => (f[1] - f[0] > m[1] - m[0] ? f : m), [x0 + 10, x0 + 10]);
-      return { key: l.key, x0, x1, y0, y1: l.shelf.y1, title: { text, x: spot[0], y: band[0], w: spot[1] - spot[0], h: band[1] - band[0] } };
+      const widest = free.reduce((m, f) => (f[1] - f[0] > m[1] - m[0] ? f : m), [x0 + 10, x0 + 10]);
+      const spot = free.find(([a, b]) => b - a >= need) || widest;
+      const title = { text, x: spot[0], y: band[0], w: spot[1] - spot[0], h: band[1] - band[0] };
+      return { key: l.key, x0, x1, y0, y1: l.shelf.y1, title };
     });
     return { g, W, H, cols, box, routes, badges, lanes, sides, counts, width };
   }
