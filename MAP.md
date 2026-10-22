@@ -20,8 +20,8 @@ adds names and verified links. The command is `sprue map`.
   deploy, or set by a call. A thick "permanent" edge is left for a later version: it needs the compiler's
   `immutableReferences` and the AST to prove that an argument fed an immutable.
 - **Why a step player?** A deploy is a sequence. Reviewing it means asking what each step created or
-  bound. Dimming what does not exist yet and marking what a step changed lets a reader follow it. Animation
-  is an optional extra on top of the dimming, and stops under `prefers-reduced-motion`.
+  bound. Dimming what does not exist yet and marking what a step changed lets a reader follow it.
+  Animation is an optional extra on top of the dimming. It stops under `prefers-reduced-motion`.
 
 ## Version 1
 
@@ -33,11 +33,12 @@ adds names and verified links. The command is `sprue map`.
    per step; not control).
    Key every node by chain and address.
 2. **Control lens, on by default.** Control comes from events first: the owner, pending owner, role
-   holders and proxy admin that the receipts' logs name, replayed in order, so each step shows who holds
-   what then. Where no event says it, names second: links whose parameter or function names control the
-   target (owner, admin, role, minter, treasury, `transferOwnership`, `grantRole`, any `set*`/`bind*` with
-   an address), a heuristic. Control links are drawn first, contracts that an outside address controls
-   are marked, and the panel names each entry's source: the event or the rule that matched.
+   holders and proxy admin that the receipts' logs name. They replay in order, so each step shows who
+   holds what then. Where no event says it, names come second, as a heuristic: links whose parameter or
+   function names control the target (owner, admin, role, minter, treasury, `transferOwnership`,
+   `grantRole`, any `set*`/`bind*` with an address). Control links are drawn first, and contracts that
+   an outside address controls are marked. The panel names each entry's source: the event or the rule
+   that matched.
 3. **Focus.** Hovering or selecting an address dims everything but its edges. A side panel lists the
    transactions behind each edge: step, function, arguments, transaction hash, block, status.
 4. **Step player.** One step per transaction, or per sprue plan step when the project is a sprue one
@@ -54,16 +55,19 @@ no step id.
 ## Inputs and decoding
 
 - `sprue map [--records <path>]... [--out <file>] [--title <text>] [<network>]` writes one offline HTML
-  file with the data inlined; the page makes no network calls. The project is the nearest directory up
-  with `foundry.toml` or `sprue.json`; the `broadcast` and `out` paths come from `forge config --json` there (so `foundry.toml`, `FOUNDRY_PROFILE`
-  and `FOUNDRY_*` apply; forge must be installed, else exit 2). The records hold the transactions and `out`,
-  when present, the parameter names. A network adds the sprue layer from `<paths.deployments>/<network>`. Without a
-  project, `--records` alone is enough. The page goes to stdout, which must not be a terminal (exit 2):
-  redirect it or name a file with `--out`, which replaces that file. `sprue map --help` has the exit codes.
-  `node --test map/test/*.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
-  regenerates.
-- Arguments are decoded from the records' strings, recursively for tuples and arrays. Where a record
-  has no decoded arguments (older or raw calls), the calldata is decoded from the function signature.
+  file with the data inlined. The page makes no network calls.
+  - The project is the nearest directory up with `foundry.toml` or `sprue.json`. The `broadcast` and
+    `out` paths come from `forge config --json` there, so `foundry.toml`, `FOUNDRY_PROFILE` and
+    `FOUNDRY_*` apply. Forge must be installed, else exit 2.
+  - The records hold the transactions. `out`, when present, holds the parameter names.
+  - A network adds the sprue layer from `<paths.deployments>/<network>`.
+  - Without a project, `--records` alone is enough.
+  - The page goes to stdout, which must not be a terminal (exit 2). Redirect it, or name a file with
+    `--out`, which replaces that file.
+  - `sprue map --help` has the exit codes.
+- Arguments are decoded from the calldata and the function signature, recursively for tuples and
+  arrays. A call with no calldata uses the records' argument strings instead. A call whose calldata
+  does not decode, including an array larger than the calldata, is left undecoded.
   Where no signature is known, the map shows the selector. A calldata word that holds a known address
   is still drawn as a link, flagged as not decoded. The same holds for such a word at the end of
   initcode that the records do not split into code and arguments (a factory's `bytes` argument, or a
@@ -76,16 +80,30 @@ no step id.
   `<out>/<File>.sol/<Contract>.json` when it exists and its constructor's argument count matches the
   record; otherwise the argument's position. Many repositories commit records but not `out`, so the
   map must work without ABIs.
-- Control events are profiles in `map/control.mjs`: one data shape per standard, with its events, what each
-  does (owner, pending owner, proxy admin, implementation, beacon, role granted, role revoked), the
-  parameter that holds the holder and the role, and its known role names. Built in: Ownable, Ownable2Step,
-  AccessControl (OpenZeppelin and TimelockController role names) and ERC-1967. Events are matched by topic0 and read from
-  the topics after it, then the data words, so indexed and non-indexed layouts both decode. A log counts only
-  from an address on the map. A role id shows by its name where a profile has one, else short. A pending owner is
-  not control. A transfer to the zero address shows as renounced. An event and a name-rule link that say the
-  same thing in one transaction are one link with both sources.
-- Several runs of one script (`run-<timestamp>.json`) are merged in time order; a resumed or replaced
-  transaction appears once, with its final receipt.
+- Control events are profiles in `map/control.mjs`: one data shape per standard. A profile gives each
+  event:
+  - what it does (owner, pending owner, proxy admin, implementation, beacon, role granted, role revoked);
+  - the parameter that holds the holder, and the role where there is one;
+  - which parameters are indexed, and any alternative layout (ERC-1967's `AdminChanged` is read with
+    non-indexed data words, or with indexed topics).
+  A profile also lists its known role names.
+  Built in: Ownable, Ownable2Step, AccessControl (OpenZeppelin and TimelockController role names) and
+  ERC-1967.
+- Events are matched by topic0. A log is read only when its topic count and data length fit a declared
+  layout; any other log is skipped and counted in the stats (`eventsSkipped`).
+- A log counts only from an address on the map. A role id shows by its name where a profile has one,
+  else short; roles are told apart by their full id.
+- A pending owner is not control. A transfer of an owner or proxy admin to the zero address shows as
+  renounced. A role granted to the zero address shows as held by "anyone (zero address)".
+- An event and a name-rule link that say the same thing in one transaction are one link with both sources.
+- Several runs of one script (`run-<timestamp>.json`) are merged. A transaction is identified by its
+  chain and hash, and appears once with its final receipt. Within a chain, mined transactions replay in
+  block and transaction-index order, whatever file holds them.
+
+## Development
+
+`node --test map/test/*.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
+regenerates.
 
 ## Not in version 1
 
