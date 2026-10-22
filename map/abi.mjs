@@ -48,6 +48,12 @@ export function keccak256(bytes) {
 export const selectorOf = (sig) => '0x' + keccak256(new TextEncoder().encode(sig)).slice(0, 8);
 export const topicOf = (s) => '0x' + keccak256(new TextEncoder().encode(s));
 
+// EIP-55, so decoded addresses read as forge prints them.
+export function checksum(a) {
+  const h = a.slice(2).toLowerCase(), k = keccak256(new TextEncoder().encode(h));
+  return '0x' + [...h].map((c, i) => (parseInt(k[i], 16) >= 8 ? c.toUpperCase() : c)).join('');
+}
+
 // A type tree: {k:'base',t} | {k:'arr',of,len} | {k:'tuple',comps}; any node may carry `name`.
 function splitTop(s, sep = ',') {
   const out = [];
@@ -210,7 +216,7 @@ function decAt(t, hex, pos) {
   const w = word(hex, pos), b = t.t;
   if (b === 'address') {
     if (!/^0{24}/.test(w)) throw new Error('dirty address');
-    return { type: t, value: '0x' + w.slice(24) };
+    return { type: t, value: checksum('0x' + w.slice(24)) };
   }
   if (b === 'bool') return { type: t, value: String(BigInt('0x' + w) !== 0n) };
   if (/^uint/.test(b)) return { type: t, value: BigInt('0x' + w).toString() };

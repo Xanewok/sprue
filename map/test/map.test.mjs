@@ -427,3 +427,9 @@ test('a fixed array larger than the calldata is undecoded before it is allocated
     try { decTuple(parseSignature('f(address[100000000])').params, '00'.repeat(64), 0); console.log('decoded'); } catch (e) { console.log(e.message); }`);
   assert.equal(r.stdout.trim(), 'short calldata', r.stderr.slice(0, 200));
 });
+
+test('decoded addresses keep their EIP-55 checksum', async () => {
+  const { decTuple, parseSignature } = await import('../abi.mjs');
+  const [d] = decTuple(parseSignature('f(address)').params, '000000000000000000000000fb6916095ca1df60bb79ce92ce3ea74c37c5d359', 0);
+  assert.equal(d.value, '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359');
+});
