@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: MIT
-// Runs in the page, serialised with its source text: it must use nothing outside its own body but `place`.
+// The page's script: draws the model as SVG, steps through its transactions, and lists them in a table.
+//
+// Serialised with `toString()` into every page, so it must use nothing outside its own body but `place`, which
+// the page passes in, and browser globals: no imports, no module-level helpers. Comments inside the body ship
+// in every page.
+// Maintains: `S` is all the UI state (step, selection, lens, whether the reader has moved, whether the step list
+// is open). `draw` places and rebuilds the SVG for the current width; `apply` restyles it for `S` and a focus
+// without moving anything; `panel` rewrites the side panel. The layout depends on the width only, so stepping
+// never moves a box.
+// Relies on the model as JSON in `#data` and on the ids and classes of the markup in page.mjs.
 export function client(place) {
   const D = JSON.parse(document.getElementById('data').textContent);
   const G = D.geom;
   const $ = (s) => document.querySelector(s);
-  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => escapes[c]);
   const short = (a) => (a ? a.slice(0, 6) + '…' + a.slice(-4) : '');
   const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s));
-  const clip = (s, n = 90) => (String(s).length > n ? String(s).slice(0, n) + `… (${String(s).length} chars)` : String(s));
+  const clip = (s, n = 90) => {
+    const t = String(s);
+    return t.length > n ? t.slice(0, n) + `… (${t.length} chars)` : t;
+  };
   const byId = new Map(D.nodes.map((n) => [n.id, n]));
   // An event's link holds over its spans of steps; a link from the records' arguments holds from its first step on.
   const inSpans = (e, s) => e.spans.some(([a, b]) => a <= s && (b === null || s < b));
@@ -16,10 +29,21 @@ export function client(place) {
   const ctlAt = (e, s) => isCtl(e) && shownAt(e, s);
   const outsideCtl = (e) => e.cls === 'authority' && isCtl(e) && byId.get(e.to).kind !== 'contract';
   const controllers = (id, s) => D.edges.filter((e) => e.from === id && outsideCtl(e) && shownAt(e, s));
-  const sources = (e) => [e.event || e.impl ? `event ${e.event || e.impl}` : null, ...(e.rule ? [e.rule] : []).concat((e.names || []).map((m) => m.rule)).map((r) => `name rule ${r}`)].filter(Boolean);
-  const spanText = (e) => e.spans.map(([a, b]) => (b === null ? `from step ${a + 1}` : b === a ? `set and ended in step ${a + 1}` : `steps ${a + 1}–${b}`)).join(', ');
-  const title = (n) => n.role || n.name || n.label || { sender: 'deployer', outside: 'outside address', 'outside-contract': 'outside contract' }[n.kind] || 'unnamed';
-  const kindText = { contract: 'created here', sender: 'sender (EOA)', outside: 'outside address: an EOA, multisig or contract', 'outside-contract': 'outside contract' };
+  const sources = (e) => {
+    const evt = e.event || e.impl ? `event ${e.event || e.impl}` : null;
+    const ruleNames = (e.rule ? [e.rule] : []).concat((e.names || []).map((m) => m.rule));
+    return [evt, ...ruleNames.map((r) => `name rule ${r}`)].filter(Boolean);
+  };
+  const spanText = (e) => e.spans.map(([a, b]) => {
+    if (b === null) return `from step ${a + 1}`;
+    return b === a ? `set and ended in step ${a + 1}` : `steps ${a + 1}–${b}`;
+  }).join(', ');
+  const kindName = { sender: 'deployer', outside: 'outside address', 'outside-contract': 'outside contract' };
+  const title = (n) => n.role || n.name || n.label || kindName[n.kind] || 'unnamed';
+  const kindText = {
+    contract: 'created here', sender: 'sender (EOA)', outside: 'outside address: an EOA, multisig or contract',
+    'outside-contract': 'outside contract',
+  };
   const NS = 'http://www.w3.org/2000/svg';
   const el = (tag, attrs, parent) => {
     const e = document.createElementNS(NS, tag);
@@ -39,7 +63,8 @@ export function client(place) {
     const len = t.getComputedTextLength();
     if (len <= w) return;
     if (min) {
-      t.style.fontSize = Math.max(min, Math.floor((parseFloat(getComputedStyle(t).fontSize) * w * 10) / len) / 10) + 'px';
+      const size = Math.floor((parseFloat(getComputedStyle(t).fontSize) * w * 10) / len) / 10;
+      t.style.fontSize = Math.max(min, size) + 'px';
       if (t.getComputedTextLength() <= w) return;
     }
     let n = text.length;
@@ -51,7 +76,8 @@ export function client(place) {
     for (let i = 1; i < pts.length - 1; i++) {
       const [px, py] = pts[i - 1], [x, y] = pts[i], [nx, ny] = pts[i + 1];
       const r = Math.min(6, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
-      const ax = x - Math.sign(x - px) * r, ay = y - Math.sign(y - py) * r, bx = x + Math.sign(nx - x) * r, by = y + Math.sign(ny - y) * r;
+      const ax = x - Math.sign(x - px) * r, ay = y - Math.sign(y - py) * r;
+      const bx = x + Math.sign(nx - x) * r, by = y + Math.sign(ny - y) * r;
       d += ` L${ax},${ay} Q${x},${y} ${bx},${by}`;
     }
     return d + ` L${pts[pts.length - 1][0]},${pts[pts.length - 1][1]}`;
@@ -70,7 +96,9 @@ export function client(place) {
     markEls.clear();
     const defs = el('defs', {}, svg);
     for (const [id, color] of [['arr', 'var(--edge)'], ['arrc', 'var(--accent)']]) {
-      const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+      const m = el('marker', {
+        id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+      }, defs);
       el('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }, m);
     }
     const lanesG = el('g', {}, svg), edgesG = el('g', {}, svg), nodesG = el('g', {}, svg), labelsG = el('g', {}, svg);
@@ -89,14 +117,17 @@ export function client(place) {
       const p = L.box.get(n.id);
       const cls = ['node', n.kind];
       if (n.certified) cls.push('cert');
-      const ng = el('g', { class: cls.join(' '), tabindex: 0, role: 'button', 'aria-label': `${title(n)} ${n.addr}` }, nodesG);
+      const ng = el('g', {
+        class: cls.join(' '), tabindex: 0, role: 'button', 'aria-label': `${title(n)} ${n.addr}`,
+      }, nodesG);
       const inner = el('g', { transform: `translate(${p.x},${p.y})` }, ng);
       el('rect', { width: g.w, height: g.h, rx: 7 }, inner);
       // The lane title names the chain, so the name has the box's whole width.
       fit(el('text', { x: 9, y: 18 }, inner), title(n), g.w - 16, 10);
       const everCtl = D.edges.some((e) => e.from === n.id && outsideCtl(e));
       const marks = (everCtl ? 14 : 0) + (n.certified ? 14 : 0);
-      fit(el('text', { x: 9, y: 35, class: 'addr' }, inner), short(n.addr) + (n.role && n.name ? ' · ' + n.name : ''), g.w - 16 - marks);
+      const addr = short(n.addr) + (n.role && n.name ? ' · ' + n.name : '');
+      fit(el('text', { x: 9, y: 35, class: 'addr' }, inner), addr, g.w - 16 - marks);
       if (everCtl) {
         const m = el('text', { x: g.w - (n.certified ? 30 : 16), y: 36, class: 'mark' }, inner);
         m.textContent = '⚑';
@@ -108,7 +139,9 @@ export function client(place) {
       ng.addEventListener('mouseenter', () => hover({ node: n.id }));
       ng.addEventListener('mouseleave', () => hover(null));
       ng.addEventListener('click', (e) => { e.stopPropagation(); select({ node: n.id }); });
-      ng.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select({ node: n.id }); } });
+      ng.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select({ node: n.id }); }
+      });
       nodeEls.set(n.id, ng);
     }
 
@@ -118,10 +151,14 @@ export function client(place) {
       const d = rounded(r.pts);
       const path = el('path', { d }, eg);
       el('path', { d, class: 'hit' }, eg);
-      const text = r.edges.length === 1 ? r.edges[0].label + (r.edges[0].rule ? ` [${r.edges[0].rule}]` : '') : `${r.edges.length} links: ${r.edges.map((e) => e.label).join(', ')}`;
+      const text = r.edges.length === 1
+        ? r.edges[0].label + (r.edges[0].rule ? ` [${r.edges[0].rule}]` : '')
+        : `${r.edges.length} links: ${r.edges.map((e) => e.label).join(', ')}`;
       const lt = el('text', { 'text-anchor': 'middle', class: 'elabel' }, labelsG);
       lt.textContent = cut(text, 46);
-      el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${r.edges.map((e) => e.label + (sources(e).length ? ` (${sources(e).join(', ')})` : '') + (e.verified ? ' (certificate-verified)' : '')).join('\n')}`;
+      const each = r.edges.map((e) => e.label + (sources(e).length ? ` (${sources(e).join(', ')})` : '')
+        + (e.verified ? ' (certificate-verified)' : ''));
+      el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${each.join('\n')}`;
       eg.addEventListener('mouseenter', () => hover({ link: r.key }));
       eg.addEventListener('mouseleave', () => hover(null));
       eg.addEventListener('click', (ev) => { ev.stopPropagation(); select({ link: r.key }); });
@@ -131,7 +168,9 @@ export function client(place) {
       const bg = el('g', { class: 'badge', 'data-node': b.to || b.from }, labelsG);
       el('circle', { cx: b.x, cy: b.y, r: 8 }, bg);
       el('text', { x: b.x, y: b.y + 3.5, 'text-anchor': 'middle' }, bg).textContent = b.n;
-      el('title', {}, bg).textContent = b.to ? `${b.n} links merge here into ${title(byId.get(b.to))}` : `${b.n} links leave ${title(byId.get(b.from))} here as one bus`;
+      el('title', {}, bg).textContent = b.to
+        ? `${b.n} links merge here into ${title(byId.get(b.to))}`
+        : `${b.n} links leave ${title(byId.get(b.from))} here as one bus`;
     }
   }
 
@@ -144,26 +183,50 @@ export function client(place) {
     const x = D.txs[i];
     const tgt = byId.get(`${x.chain}:${x.to}`);
     const args = x.args.map((a) => `${esc(a.name)} = <code>${esc(clip(a.value))}</code>`).join('<br>');
-    return `<div class="tx"><b>step ${x.step + 1}</b> ${x.type === 'CALL' ? esc(x.fn || '(no data)') : esc(x.type) + ' ' + esc(x.contractName || '')}
-      ${x.status === 'reverted' ? '<span class="pill bad">reverted</span>' : x.status === 'unknown' ? '<span class="pill">no receipt</span>' : ''}
-      ${x.decode === 'raw' ? '<span class="pill">selector only</span>' : x.decode === 'failed' ? '<span class="pill bad">undecoded</span>' : ''}
-      <div class="muted">to ${tgt ? esc(title(tgt)) : ''} <code>${esc(x.to || '')}</code> · from <code>${esc(short(x.from))}</code></div>
-      ${detail && !x.args.some((a) => detail === `${a.name} = ${String(a.value).toLowerCase()}`) ? `<div>link: ${esc(detail)}</div>` : ''}${args ? `<div>${args}</div>` : ''}
-      <div class="muted">${x.block !== null ? 'block ' + x.block + ' · ' : ''}${x.sig ? esc(x.sig) + ' · ' : ''}<code>${esc(x.hash || 'no hash')}</code></div></div>`;
+    const what = x.type === 'CALL' ? esc(x.fn || '(no data)') : esc(x.type) + ' ' + esc(x.contractName || '');
+    const state = x.status === 'reverted' ? '<span class="pill bad">reverted</span>'
+      : x.status === 'unknown' ? '<span class="pill">no receipt</span>' : '';
+    const decode = x.decode === 'raw' ? '<span class="pill">selector only</span>'
+      : x.decode === 'failed' ? '<span class="pill bad">undecoded</span>' : '';
+    const to = tgt ? esc(title(tgt)) : '';
+    const shown = detail && !x.args.some((a) => detail === `${a.name} = ${String(a.value).toLowerCase()}`);
+    const linked = shown ? `<div>link: ${esc(detail)}</div>` : '';
+    const block = x.block !== null ? 'block ' + x.block + ' · ' : '';
+    const sig = x.sig ? esc(x.sig) + ' · ' : '';
+    return `<div class="tx"><b>step ${x.step + 1}</b> ${what}
+      ${state}
+      ${decode}
+      <div class="muted">to ${to} <code>${esc(x.to || '')}</code> · from <code>${esc(short(x.from))}</code></div>
+      ${linked}${args ? `<div>${args}</div>` : ''}
+      <div class="muted">${block}${sig}<code>${esc(x.hash || 'no hash')}</code></div></div>`;
   }
+
   function linkBlock(key) {
     const { r } = edgeEls.get(key);
     return r.edges.map(edgeBlock).join('');
   }
+
   function edgeBlock(e) {
     const a = byId.get(e.from), b = byId.get(e.to);
-    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by', event: 'emitted', impl: 'emitted' }[e.kind]}: <code>${esc(e.label)}</code>
-      ${pills(e)}${D.sprue ? (e.verified ? '<span class="pill ok">certificate-verified</span>' : '<span class="pill">not certified</span>') : ''}
-      ${e.decoded ? '' : '<span class="pill bad">found in raw calldata</span>'}</div>${e.names ? `<div class="muted">also ${e.names.map((m) => esc(m.label)).join(', ')}</div>` : ''}${e.spans ? `<div class="muted">holds ${spanText(e)}</div>` : ''}${e.txs.map((d) => txLine(d.i, d.detail)).join('')}`;
+    const verb = {
+      deploy: 'set at deploy', call: 'set by call', created: 'created by', event: 'emitted', impl: 'emitted',
+    }[e.kind];
+    const cert = !D.sprue ? ''
+      : e.verified ? '<span class="pill ok">certificate-verified</span>' : '<span class="pill">not certified</span>';
+    const raw = e.decoded ? '' : '<span class="pill bad">found in raw calldata</span>';
+    const also = e.names ? `<div class="muted">also ${e.names.map((m) => esc(m.label)).join(', ')}</div>` : '';
+    const holds = e.spans ? `<div class="muted">holds ${spanText(e)}</div>` : '';
+    const txs = e.txs.map((d) => txLine(d.i, d.detail)).join('');
+    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${verb}: <code>${esc(e.label)}</code>
+      ${pills(e)}${cert}
+      ${raw}</div>${also}${holds}${txs}`;
   }
+
   function pills(e) {
-    return (e.cls === 'pending' ? '<span class="pill">pending, not control</span>' : '') + sources(e).map((t) => `<span class="pill ctl">${esc(t)}</span>`).join('');
+    const pending = e.cls === 'pending' ? '<span class="pill">pending, not control</span>' : '';
+    return pending + sources(e).map((t) => `<span class="pill ctl">${esc(t)}</span>`).join('');
   }
+
   function panel() {
     const P = $('#panel');
     if (S.sel && S.sel.node) {
@@ -172,21 +235,45 @@ export function client(place) {
       const made = D.txs.find((x) => x.created.includes(n.id));
       const ctlNow = controllers(n.id, S.step);
       const impls = D.edges.filter((e) => e.kind === 'impl' && e.from === n.id && shownAt(e, S.step));
-      P.innerHTML = `<h2>${esc(title(n))}</h2><div><code>${esc(n.addr)}</code></div><div class="muted">chain ${n.chain} · ${esc(kindText[n.kind])}${n.name && n.role ? ' · ' + esc(n.name) : ''}</div>
-        ${n.certified ? '<div><span class="pill ok">certified in its journal</span></div>' : ''}
-        ${ctlNow.length ? `<div><span class="pill ctl">controlled by an outside address</span> ${ctlNow.map((e) => `${esc(title(byId.get(e.to)))} (${esc(e.label)}; ${esc(sources(e).join(', '))})`).join(', ')}</div>` : ''}
-        ${impls.map((e) => `<div><span class="pill">${esc(e.label)}</span> <a href="#" data-node="${esc(e.to)}"><b>${nameOf(e.to)}</b></a> <code>${esc(short(byId.get(e.to).addr))}</code></div>`).join('')}
-        ${D.renounced.filter((r) => r.from === n.id && inSpans(r, S.step)).map((r) => `<div><span class="pill">${esc(r.label)} renounced</span> ${spanText(r)} (event ${esc(r.event)})</div>`).join('')}
-        ${made ? `<h3>Created</h3>${txLine(made.i)}` : ''}${es.length ? es.map(edgeBlock).join('') : '<p class="muted">No links.</p>'}`;
+      const alias = n.name && n.role ? ' · ' + esc(n.name) : '';
+      const head = `<h2>${esc(title(n))}</h2><div><code>${esc(n.addr)}</code></div>`
+        + `<div class="muted">chain ${n.chain} · ${esc(kindText[n.kind])}${alias}</div>`;
+      const certified = n.certified ? '<div><span class="pill ok">certified in its journal</span></div>' : '';
+      const ctlText = ctlNow
+        .map((e) => `${esc(title(byId.get(e.to)))} (${esc(e.label)}; ${esc(sources(e).join(', '))})`).join(', ');
+      const ctl = ctlNow.length
+        ? `<div><span class="pill ctl">controlled by an outside address</span> ${ctlText}</div>` : '';
+      const implLines = impls.map((e) => `<div><span class="pill">${esc(e.label)}</span> `
+        + `<a href="#" data-node="${esc(e.to)}"><b>${nameOf(e.to)}</b></a> `
+        + `<code>${esc(short(byId.get(e.to).addr))}</code></div>`).join('');
+      const gone = D.renounced.filter((r) => r.from === n.id && inSpans(r, S.step))
+        .map((r) => `<div><span class="pill">${esc(r.label)} renounced</span> ${spanText(r)} `
+          + `(event ${esc(r.event)})</div>`)
+        .join('');
+      const created = made ? `<h3>Created</h3>${txLine(made.i)}` : '';
+      const links = es.length ? es.map(edgeBlock).join('') : '<p class="muted">No links.</p>';
+      P.innerHTML = `${head}
+        ${certified}
+        ${ctl}
+        ${implLines}
+        ${gone}
+        ${created}${links}`;
     } else if (S.sel && S.sel.link) {
       P.innerHTML = linkBlock(S.sel.link);
     } else {
       const s = D.stats;
-      P.innerHTML = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} outside addresses, ${s.edges} links (${s.control} for control: ${s.controlEvents} from events, ${s.control - s.controlEvents} from names), ${s.steps} steps${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>
+      const summary = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} `
+        + `outside addresses, ${s.edges} links (${s.control} for control: ${s.controlEvents} from events, `
+        + `${s.control - s.controlEvents} from names), ${s.steps} steps`
+        + `${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>`;
+      const note = 'Control comes from the events the chain emitted (ownership, roles, proxy admin) and else from '
+        + 'function and parameter names, a heuristic. Each line names its source. Select a line, an address or a '
+        + 'link for the transactions behind it.';
+      P.innerHTML = `${summary}
         ${D.warnings.map((w) => `<p class="rev">${esc(w)}</p>`).join('')}
         <h3>Step ${S.step + 1}: what changed</h3>${stepChanges(S.step)}
         <h3>Who controls what at step ${S.step + 1}</h3>${controls(S.step)}
-        <p class="muted">Control comes from the events the chain emitted (ownership, roles, proxy admin) and else from function and parameter names, a heuristic. Each line names its source. Select a line, an address or a link for the transactions behind it.</p>`;
+        <p class="muted">${note}</p>`;
     }
   }
   const nameOf = (id) => esc(title(byId.get(id)));
@@ -204,34 +291,61 @@ export function client(place) {
       for (const e of D.edges)
         for (const d of e.kind === 'created' ? [] : e.txs.filter((d) => d.i === i)) {
           any = true;
-          lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${d.gone ? '− ' : ''}${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${d.gone ? ' ended' : ' ' + pills(e)}</li>`);
+          lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${d.gone ? '− ' : ''}`
+            + `${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${d.gone ? ' ended' : ' ' + pills(e)}</li>`);
         }
       for (const r of D.renounced)
         if (r.txs.some((d) => d.i === i && !d.gone)) {
           any = true;
-          lines.push(`<li><a href="#" data-node="${esc(r.from)}">${nameOf(r.from)} · ${esc(r.label)} renounced</a> <span class="pill">event ${esc(r.event)}</span></li>`);
+          lines.push(`<li><a href="#" data-node="${esc(r.from)}">${nameOf(r.from)} · ${esc(r.label)} renounced</a> `
+            + `<span class="pill">event ${esc(r.event)}</span></li>`);
         }
-      if (!any && x.status !== 'reverted') lines.push(`<li class="muted">${esc(fn)}\u0001 on ${nameOf(`${x.chain}:${x.to}`)}</li>`);
+      if (!any && x.status !== 'reverted') {
+        lines.push(`<li class="muted">${esc(fn)}\u0001 on ${nameOf(`${x.chain}:${x.to}`)}</li>`);
+      }
     }
     const seen = new Map();
     for (const l of lines) seen.set(l, (seen.get(l) || 0) + 1);
-    const count = (l, n) => (l.includes('\u0001') ? l.replace('\u0001', n > 1 ? ` ×${n}` : '') : n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l);
+    const count = (l, n) => {
+      if (l.includes('\u0001')) return l.replace('\u0001', n > 1 ? ` ×${n}` : '');
+      return n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l;
+    };
     return `<ul class="changes">${[...seen].map(([l, n]) => count(l, n)).join('')}</ul>`;
   }
   // The handover question: each address that holds control at step s, and what it holds; outside addresses first.
   function controls(s) {
     const by = new Map();
-    for (const e of D.edges) if (ctlAt(e, s) || (e.cls === 'pending' && shownAt(e, s))) (by.get(e.to) || by.set(e.to, []).get(e.to)).push(e);
+    for (const e of D.edges) {
+      if (ctlAt(e, s) || (e.cls === 'pending' && shownAt(e, s))) (by.get(e.to) || by.set(e.to, []).get(e.to)).push(e);
+    }
     const gone = D.renounced.filter((r) => inSpans(r, s));
     if (!by.size && !gone.length) return '<p class="muted">No control event or name rule at this step.</p>';
     const since = (e) => (e.spans ? e.spans.filter(([a]) => a <= s).pop()[0] : e.firstStep) + 1;
     const order = [...by.keys()].sort((a, b) => (byId.get(a).kind === 'contract') - (byId.get(b).kind === 'contract'));
-    return `<ul class="changes">${order.map((id) => `<li><a href="#" data-node="${esc(id)}"><b>${nameOf(id)}</b></a> <code>${esc(short(byId.get(id).addr))}</code>${multiChain ? ` <span class="muted">chain ${byId.get(id).chain}</span>` : ''}${byId.get(id).kind === 'contract' ? '' : ' <span class="pill">outside</span>'}<ul>${by.get(id).map((e) => `<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)}</a> ${pills(e)} <span class="muted">step ${since(e)}</span></li>`).join('')}</ul></li>`).join('')}${gone.length ? `<li><b>renounced</b><ul>${gone.map((r) => `<li><a href="#" data-node="${esc(r.from)}">${nameOf(r.from)} · ${esc(r.label)}</a> <span class="pill">event ${esc(r.event)}</span> <span class="muted">step ${r.spans.filter(([a]) => a <= s).pop()[0] + 1}</span></li>`).join('')}</ul></li>` : ''}</ul>`;
+    const holders = order.map((id) => {
+      const n = byId.get(id);
+      const rows = by.get(id).map((e) => `<li><a href="#" data-link="${esc(linkKey(e))}">`
+        + `${nameOf(e.from)} · ${esc(e.label)}</a> ${pills(e)} `
+        + `<span class="muted">step ${since(e)}</span></li>`).join('');
+      const chain = multiChain ? ` <span class="muted">chain ${n.chain}</span>` : '';
+      const outside = n.kind === 'contract' ? '' : ' <span class="pill">outside</span>';
+      return `<li><a href="#" data-node="${esc(id)}"><b>${nameOf(id)}</b></a> `
+        + `<code>${esc(short(n.addr))}</code>${chain}${outside}<ul>${rows}</ul></li>`;
+    }).join('');
+    const renouncedRows = gone.map((r) => `<li><a href="#" data-node="${esc(r.from)}">`
+      + `${nameOf(r.from)} · ${esc(r.label)}</a> <span class="pill">event ${esc(r.event)}</span> `
+      + `<span class="muted">step ${r.spans.filter(([a]) => a <= s).pop()[0] + 1}</span></li>`).join('');
+    const renounced = gone.length ? `<li><b>renounced</b><ul>${renouncedRows}</ul></li>` : '';
+    return `<ul class="changes">${holders}${renounced}</ul>`;
   }
+
+  // Leaving a hover returns to the selection's highlight.
   function hover(focus) {
     if (!focus && S.sel) return apply();
     apply(focus);
   }
+
+  // Selecting what is already selected clears it.
   function select(sel) {
     S.sel = sel && S.sel && JSON.stringify(sel) === JSON.stringify(S.sel) ? null : sel;
     apply();
@@ -254,6 +368,8 @@ export function client(place) {
       markEls.get(n.id)?.classList.toggle('hidden', !ctl);
       g.classList.remove('hot');
     }
+
+    // A drawn link takes the style of its strongest edge shown at this step.
     const rank = { event: 3, impl: 3, deploy: 2, call: 1, created: 0 };
     for (const { g, path, label, r } of edgeEls.values()) {
       const vis = r.edges.filter((e) => shownAt(e, s));
@@ -270,8 +386,10 @@ export function client(place) {
         x.classList.remove('hot');
       }
     }
+
     svg.classList.toggle('dim', !!focus);
     if (focus) {
+      // A hot link moves last in its group, so it paints over the others.
       const hot = new Set();
       for (const { g, label, r } of edgeEls.values())
         if (focus.link === r.key || r.from === focus.node || r.to === focus.node) {
@@ -283,27 +401,37 @@ export function client(place) {
       if (focus.node) hot.add(focus.node);
       for (const id of hot) nodeEls.get(id)?.classList.add('hot');
     }
+
     svg.querySelectorAll('.badge').forEach((b) => b.classList.toggle('future', byId.get(b.dataset.node).firstStep > s));
     placeLabels(focus);
     document.querySelectorAll('.sec').forEach((b, k) => b.classList.toggle('cur', k === secOf(s)));
+
     $('#count').textContent = `${s + 1}/${D.steps.length}`;
     scrub.value = s;
     scrub.setAttribute('aria-valuetext', `step ${s + 1} of ${D.steps.length}`);
     $('#prev').disabled = s === 0;
     $('#next').disabled = last;
+
     const st = D.steps[s];
     const parts = st.txs.map((i) => {
       const x = D.txs[i];
-      const what = x.type === 'CALL' ? `<b>${esc(x.fn || '(no data)')}</b> on ${esc(title(byId.get(`${x.chain}:${x.to}`) || {}))}` : `<b>${esc(x.type)}</b> ${esc(x.contractName || '')}`;
+      const target = byId.get(`${x.chain}:${x.to}`) || {};
+      const what = x.type === 'CALL'
+        ? `<b>${esc(x.fn || '(no data)')}</b> on ${esc(title(target))}`
+        : `<b>${esc(x.type)}</b> ${esc(x.contractName || '')}`;
       const made = x.created.length ? ` · creates ${x.created.map((id) => esc(title(byId.get(id)))).join(', ')}` : '';
       const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => d.i === i && !d.gone)).length;
-      return `${what}${made}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${x.status === 'reverted' ? ' · <span class="rev">reverted: created and bound nothing</span>' : ''}`;
+      const bound = binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : '';
+      const revertedNote = x.status === 'reverted'
+        ? ' · <span class="rev">reverted: created and bound nothing</span>' : '';
+      return `${what}${made}${bound}${revertedNote}`;
     });
     const head = `${st.id ? `<b>${esc(st.id)}</b> · ` : ''}${esc(D.txs[st.txs[0]].script)} · `;
     if (parts.length === 1) {
       $('#stepinfo').innerHTML = head + parts[0];
       return;
     }
+
     // Several transactions: one summary line, so the map does not jump while stepping; the list on demand.
     const xs = st.txs.map((i) => D.txs[i]), kinds = new Map();
     for (const x of xs) {
@@ -312,18 +440,27 @@ export function client(place) {
     }
     const made = xs.reduce((a, x) => a + x.created.length, 0), rev = xs.filter((x) => x.status === 'reverted').length;
     const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => stepTx.has(d.i) && !d.gone)).length;
-    const what = [...kinds].slice(0, 3).map(([k, n]) => esc(k) + (n > 1 ? ` ×${n}` : '')).join(', ') + (kinds.size > 3 ? `, +${kinds.size - 3} more` : '');
-    $('#stepinfo').innerHTML = `<details${S.list ? ' open' : ''}><summary>${head}<b>${xs.length} transactions</b>: ${what}${made ? ` · creates ${made}` : ''}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${rev ? ` · <span class="rev">${rev} reverted</span>` : ''}</summary><ol class="txlist">${parts.map((p) => `<li>${p}</li>`).join('')}</ol></details>`;
+    const top = [...kinds].slice(0, 3).map(([k, n]) => esc(k) + (n > 1 ? ` ×${n}` : '')).join(', ');
+    const what = top + (kinds.size > 3 ? `, +${kinds.size - 3} more` : '');
+    const bound = binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : '';
+    const revText = rev ? ` · <span class="rev">${rev} reverted</span>` : '';
+    $('#stepinfo').innerHTML = `<details${S.list ? ' open' : ''}><summary>${head}<b>${xs.length} transactions</b>: `
+      + `${what}${made ? ` · creates ${made}` : ''}${bound}${revText}</summary>`
+      + `<ol class="txlist">${parts.map((p) => `<li>${p}</li>`).join('')}</ol></details>`;
     $('#stepinfo details').ontoggle = (e) => (S.list = e.target.open);
   }
 
   // Labels of the focused links, else of the current step's, each at the first spot along its route that
   // overlaps no box and no other label; one that fits nowhere stays in the side panel only.
   function placeLabels(focus) {
-    const g = L.g, taken = [...L.box.values()].map((b) => [b.x, b.y, b.x + g.w, b.y + g.h]).concat(L.badges.map((b) => [b.x - 9, b.y - 9, b.x + 9, b.y + 9]));
-    const free = (r) => r[0] >= 0 && r[2] <= L.W && taken.every((t) => r[2] <= t[0] || r[0] >= t[2] || r[3] <= t[1] || r[1] >= t[3]);
+    const g = L.g, taken = [...L.box.values()].map((b) => [b.x, b.y, b.x + g.w, b.y + g.h])
+      .concat(L.badges.map((b) => [b.x - 9, b.y - 9, b.x + 9, b.y + 9]));
+    const free = (r) => r[0] >= 0 && r[2] <= L.W
+      && taken.every((t) => r[2] <= t[0] || r[0] >= t[2] || r[3] <= t[1] || r[1] >= t[3]);
     for (const x of edgeEls.values()) {
-      const want = focus ? x.g.classList.contains('hot') : x.label.classList.contains('now') && !x.label.classList.contains('future');
+      const want = focus
+        ? x.g.classList.contains('hot')
+        : x.label.classList.contains('now') && !x.label.classList.contains('future');
       x.label.classList.remove('shown');
       if (!want) continue;
       const w = x.label.textContent.length * 6.2 + 6, h = 14, pts = x.r.pts;
@@ -332,7 +469,9 @@ export function client(place) {
         for (let i = 1; i < pts.length && !spot; i++) {
           const [x1, y1] = pts[i - 1], [x2, y2] = pts[i];
           const px = x1 + (x2 - x1) * t, py = y1 + (y2 - y1) * t;
-          const cands = y1 === y2 ? [[px, py - 4], [px, py + 13]] : [[px + w / 2 + 4, py + 4], [px - w / 2 - 4, py + 4]];
+          const cands = y1 === y2
+            ? [[px, py - 4], [px, py + 13]]
+            : [[px + w / 2 + 4, py + 4], [px - w / 2 - 4, py + 4]];
           for (const [cx, cy] of cands) {
             const r = [cx - w / 2, cy - 11, cx + w / 2, cy - 11 + h];
             if (free(r)) { spot = [cx, cy, r]; break; }
@@ -426,20 +565,33 @@ export function client(place) {
     else if (e.key === 'ArrowLeft') { go(S.step - 1); e.preventDefault(); }
     else if (e.key === 'Home') { go(sections[secOf(S.step)].start); e.preventDefault(); }
     else if (e.key === 'End') { go(sections[secOf(S.step)].end); e.preventDefault(); }
-    else if (e.key === 'PageUp') { const k = secOf(S.step); go(sections[S.step > sections[k].start ? k : Math.max(0, k - 1)].start); e.preventDefault(); }
-    else if (e.key === 'PageDown') { go(sections[Math.min(sections.length - 1, secOf(S.step) + 1)].start); e.preventDefault(); }
-    else if (e.key === 'Escape') select(null);
+    else if (e.key === 'PageUp') {
+      const k = secOf(S.step);
+      go(sections[S.step > sections[k].start ? k : Math.max(0, k - 1)].start);
+      e.preventDefault();
+    } else if (e.key === 'PageDown') {
+      go(sections[Math.min(sections.length - 1, secOf(S.step) + 1)].start);
+      e.preventDefault();
+    } else if (e.key === 'Escape') select(null);
   });
 
   // Table.
   const rows = D.txs.map((x) => {
     const tgt = byId.get(`${x.chain}:${x.to}`);
-    const args = x.args.map((a) => `${esc(a.name)}: <code>${esc(clip(a.value, 120))}</code>`).join('<br>') || (x.decode === 'raw' ? `<span class="muted">selector ${esc(x.selector)}, ${x.bytes} bytes</span>` : '');
+    const selectorOnly = x.decode === 'raw'
+      ? `<span class="muted">selector ${esc(x.selector)}, ${x.bytes} bytes</span>` : '';
+    const args = x.args.map((a) => `${esc(a.name)}: <code>${esc(clip(a.value, 120))}</code>`).join('<br>')
+      || selectorOnly;
     const tr = document.createElement('tr');
     if (x.status === 'reverted') tr.className = 'reverted';
-    tr.innerHTML = `<td>${x.step + 1}${D.steps[x.step].id ? `<br><span class="muted">${esc(D.steps[x.step].id)}</span>` : ''}</td><td>${esc(x.script)}<br><span class="muted">chain ${x.chain}</span></td>
-      <td>${esc(x.type)}</td><td>${tgt ? esc(title(tgt)) : ''}<br><code>${esc(x.to || '')}</code></td><td><code>${esc(x.fn || '')}</code></td><td>${args}</td>
-      <td>${esc(x.status)}${x.block !== null ? '<br>block ' + x.block : ''}</td><td><code>${esc(x.hash || '')}</code></td>`;
+    const planId = D.steps[x.step].id ? `<br><span class="muted">${esc(D.steps[x.step].id)}</span>` : '';
+    const to = tgt ? esc(title(tgt)) : '';
+    const blockText = x.block !== null ? '<br>block ' + x.block : '';
+    const toAddr = esc(x.to || ''), fn = esc(x.fn || '');
+    const scriptCell = `<td>${esc(x.script)}<br><span class="muted">chain ${x.chain}</span></td>`;
+    tr.innerHTML = `<td>${x.step + 1}${planId}</td>${scriptCell}
+      <td>${esc(x.type)}</td><td>${to}<br><code>${toAddr}</code></td><td><code>${fn}</code></td><td>${args}</td>
+      <td>${esc(x.status)}${blockText}</td><td><code>${esc(x.hash || '')}</code></td>`;
     tr.dataset.text = tr.textContent.toLowerCase();
     return tr;
   });
