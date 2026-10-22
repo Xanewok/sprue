@@ -25,8 +25,8 @@ export function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
     const checked = j.checked || {};
     for (const [k, v] of Object.entries(j)) {
       if (typeof v !== 'string' || !ADDR.test(v) || !(k + 'Tx' in j || k + 'CodeHash' in j || k in checked)) continue;
-      if (j[k + 'Tx']) unitOfHash.set(lc(j[k + 'Tx']), unit);
       for (const c of chains) {
+        if (j[k + 'Tx']) unitOfHash.set(`${c}:${lc(j[k + 'Tx'])}`, unit);
         const n = nodes.get(`${c}:${lc(v)}`);
         if (!n) continue;
         n.role = k === unit ? k : `${unit}.${k}`;
@@ -43,7 +43,7 @@ export function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
   }
   // Step ids: a record's script maps to the unit whose journal names one of its transactions.
   const scriptUnit = new Map();
-  for (const x of out) if (x.hash && unitOfHash.has(lc(x.hash))) scriptUnit.set(x.script, unitOfHash.get(lc(x.hash)));
+  for (const x of out) if (x.hash && unitOfHash.has(`${x.chain}:${lc(x.hash)}`)) scriptUnit.set(`${x.chain}:${x.script}`, unitOfHash.get(`${x.chain}:${lc(x.hash)}`));
   let graph = null;
   try {
     const cfg = JSON.parse(readFileSync(join(dir, 'sprue.json'), 'utf8'));
@@ -51,7 +51,7 @@ export function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
   } catch {}
   const ids = new Map();
   for (const x of out) {
-    const unit = scriptUnit.get(x.script);
+    const unit = scriptUnit.get(`${x.chain}:${x.script}`);
     if (!unit || !x.sig) continue;
     const id = graph ? graph.find((g) => g.unit === unit && g.signature.startsWith(x.sig + '('))?.id : `${unit}.${x.sig}`;
     if (id) ids.set(x.i, id);

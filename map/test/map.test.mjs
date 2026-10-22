@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build, keccak256, place, GEOM } from '../index.mjs';
+import { sprueLayer } from '../sprue-layer.mjs';
 import { PROFILES, compile, matchRule, replayControl } from '../control.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,20 @@ test('the sprue layer adds roles, plan step ids and the certificate-verified lin
   assert.deepEqual(data.nodes.filter((n) => n.certified).map((n) => n.role).sort(), ['token', 'vault']);
   const verified = data.edges.filter((e) => e.verified).map((e) => [e.kind, e.label]);
   assert.deepEqual(verified, [['deploy', 'arg0']]);
+});
+
+test('a journal transaction hash names its step only on its own chain', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    const hash = '0x' + '7'.repeat(64);
+    mkdirSync(join(dir, 'net'));
+    writeFileSync(join(dir, 'net', 'vault.json'), JSON.stringify({ vaultChainId: 1, vault: '0x' + 'a'.repeat(40), vaultTx: hash }));
+    const step = (i, chain) => ({ i, chain, hash, script: 'Deploy.s.sol', sig: 'deploy' });
+    const ids = sprueLayer({ dir, network: 'net' }, [step(0, 1), step(1, 2)], new Map(), new Map(), []);
+    assert.deepEqual([...ids], [[0, 'vault.deploy']]);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });
 
 test('a reverted CREATE is a step that creates nothing', () => {
