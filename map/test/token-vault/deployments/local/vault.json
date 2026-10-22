@@ -1,0 +1,19 @@
+{
+  "l2ChainId": 31337,
+  "vaultArgs": "0x0000000000000000000000005fbdb2315678afecb367f032d93f642f64180aa3",
+  "vaultInitcodeHash": "0xa21e441a4958ae85801bb49e6a2b056da26823f366c86e9d90c19ce221d90f8f",
+  "vaultCommit": "pending",
+  "vaultCodeHash": "0x5ed684c03b9604bedb851ebaee2b021da9519c6dcf5f8230ca7634f3d993cc77",
+  "vaultMetadata": "deployments/local/Vault.metadata.json",
+  "vaultDeployer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "vaultNonce": 1,
+  "vault": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+  "vaultTx": "0x90e69b6f6050739ba52235d1add03a03bd3804a4e2f8b25e587f454656f35b39",
+  "vaultBlock": 2,
+  "checked": {
+    "evmBlock": 4,
+    "l2ChainId": 31337,
+    "vault": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+    "vaultCodeHash": "0x5ed684c03b9604bedb851ebaee2b021da9519c6dcf5f8230ca7634f3d993cc77"
+  }
+}

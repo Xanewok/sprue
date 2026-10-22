@@ -89,6 +89,14 @@ with `$DEPLOYER` as Anvil's dev key, the run's own signer here, and plans again 
 The example's [README](examples/token-vault/README.md) explains each step, then loses a journal and
 rebuilds it.
 
+## Map
+
+`sprue map > map.html` (or `sprue map --out map.html`) draws what a deployment created and how the
+contracts connect. It never writes to a terminal. It produces one offline HTML page with a step player,
+from forge's broadcast records (paths from `forge config`) and the events in their receipts (owner,
+roles, proxy admin, ERC-1967 implementation). It works in any Foundry project. `sprue map <network>`
+adds sprue's role names and certificate-verified links. [MAP.md](MAP.md) has the details.
+
 ## Install
 
 Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4`. The remapping is

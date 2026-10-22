@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+`sprue map` writes an HTML map of a deployment from forge's broadcast records. It works in any Foundry
+project, and a network argument adds sprue's journals. The page goes to stdout or to the `--out` file,
+never to a terminal ([MAP.md](MAP.md)).
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
