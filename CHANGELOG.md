@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-`_validateGraph` refuses, with `DueBehindCertificate`, a step with a `Due` view or a predicate that needs a
-step only its unit's `check` marks done, when `check` needs that step back. Before, `run` exited 5 with
-"plan is unchanged after sending it". Give the earlier step a `Due` view.
+`plan`, `run` and `rehearse` refuse a plan that would stop at a step with a `Due` view or a predicate
+waiting for a step only its unit's `check` marks done, when the plan sends no such `check` before it.
+Before, `run` sent the earlier step and then exited 5 with "plan is unchanged after sending it", and
+`rehearse` passed. Give the earlier step a `Due` view.
 
 ## 0.1.4
 

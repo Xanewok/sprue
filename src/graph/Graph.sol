@@ -72,9 +72,6 @@ abstract contract Graph is Script {
     error ProductionDependency(string id, string dependency);
     error SelectorMismatch(string id, bytes4 expected, bytes4 actual);
     error MissingDoneRule(string id);
-    /// @dev `judged` is read only after its needs are done, and it needs `certified`, which only `check`
-    ///      marks done, while `check` needs `judged`: no plan can advance. Give `certified` a `Due` view.
-    error DueBehindCertificate(string judged, string certified, string check);
     error UnsafeName(string name);
 
     uint256 private constant NONE = type(uint256).max;
@@ -222,6 +219,7 @@ abstract contract Graph is Script {
                 visit.status = Status.Done;
             } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
+                _requireCertificateAhead(target, i, statuses, visits, count);
             } else {
                 if (bytes(n.gate).length != 0) {
                     require(
@@ -256,6 +254,44 @@ abstract contract Graph is Script {
             statuses[i] = visit.status;
             visits[count++] = visit;
             if (visit.status == Status.NotJudged) break;
+        }
+    }
+
+    /// @dev `nodeIndex` stops the plan until its needs are done. A need that only its unit's certificate
+    ///      marks done stays undone unless this plan sends a `check` of that unit before `nodeIndex`, and
+    ///      every later plan would stop at `nodeIndex` again.
+    function _requireCertificateAhead(
+        string memory target,
+        uint256 nodeIndex,
+        Status[] memory statuses,
+        Visit[] memory visits,
+        uint256 count
+    ) private view {
+        bool[] memory needed = _closure(nodeIndex);
+        for (uint256 c; c < nodeIndex; ++c) {
+            Node storage certified = _nodes[c];
+            if (!needed[c] || statuses[c] == Status.Done || !certified.certified) continue;
+            bytes32 journal = keccak256(bytes(vm.split(certified.id, ".")[0]));
+            bool ahead;
+            for (uint256 v; v < count && !ahead; ++v) {
+                Node storage check = _nodes[visits[v].node];
+                ahead = !check.due && keccak256(bytes(check.step)) == keccak256("check")
+                    && keccak256(bytes(vm.split(check.id, ".")[0])) == journal;
+            }
+            require(
+                ahead,
+                _cannotReach(
+                    target,
+                    string.concat(
+                        _nodes[nodeIndex].id,
+                        " waits for ",
+                        certified.id,
+                        ", which only a check of its unit marks done, and none is sent before it: give ",
+                        certified.id,
+                        " a Due view, or plan such a check first"
+                    )
+                )
+            );
         }
     }
 
@@ -492,27 +528,6 @@ abstract contract Graph is Script {
         for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
             require(bytes(n.step).length == 0 || n.due || n.certified, MissingDoneRule(n.id));
-        }
-        // A step with a `Due` view or a predicate is judged only once its needs are done (`_walk`), but a
-        // certified step is done only when its `check` has run.
-        for (uint256 k; k < _nodes.length; ++k) {
-            if (_nodes[k].due || keccak256(bytes(_nodes[k].step)) != keccak256("check")) continue;
-            bool[] memory behind = _closure(k);
-            for (uint256 j; j < k; ++j) {
-                Node storage judged = _nodes[j];
-                if (!behind[j] || !(judged.due || bytes(judged.until).length != 0)) continue;
-                bool[] memory needs = _closure(j);
-                for (uint256 c; c < j; ++c) {
-                    Node storage certified = _nodes[c];
-                    if (!needs[c] || !certified.certified) continue;
-                    for (uint256 b; b < certified.certifiedBy.length; ++b) {
-                        require(
-                            keccak256(bytes(certified.certifiedBy[b])) != keccak256(bytes(_nodes[k].id)),
-                            DueBehindCertificate(judged.id, certified.id, _nodes[k].id)
-                        );
-                    }
-                }
-            }
         }
     }
 
