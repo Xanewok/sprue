@@ -262,7 +262,7 @@ export function build({ paths, outDir, sprue }) {
   stats.reverted = out.filter((x) => x.status === 'reverted').length;
   stats.records = records.length;
   return {
-    nodes: nodeList.map(({ refs, firstRef, created, createdBy, sender, lane, ...n }) => ({ ...n, sender: !!sender, createdBy: createdBy ? createdBy.factory : null, via: createdBy?.via ?? null })),
+    nodes: nodeList.map(({ refs, firstRef, created, createdBy, sender, lane, ...n }) => n),
     edges: edgeList,
     renounced: renouncedList,
     txs: out.map(({ arguments: _a, input, functionAbi, ...x }) => ({ ...x, selector: input && input.length >= 10 ? input.slice(0, 10) : null, bytes: input ? (input.length - 2) / 2 : 0 })),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A static HTML map of a Foundry deployment, from forge's broadcast records. `sprue map`; see MAP.md.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, basename, dirname, resolve } from 'node:path';
 
 import { build } from './model.mjs';
@@ -35,7 +35,6 @@ Names come from the project's forge out directory when it exists. Nothing is sen
 
 class Refusal extends Error {}
 const refuse = (msg) => { throw new Refusal(msg); };
-const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
 
 function project(from) {
   for (let d = resolve(from); ; d = dirname(d)) {
