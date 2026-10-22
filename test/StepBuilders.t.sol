@@ -405,6 +405,57 @@ contract StepBuildersTest is Test, Declares {
         new BuilderGraph(unit, s);
     }
 
+    string private constant WAITS_FOR_DEPLOY = "vault.deploy, which only a check of its unit marks done, and none is "
+        "sent before it: give vault.deploy a Due view, or plan such a check first";
+
+    function _dueBehindCertificate(bool deployHasDue) private returns (BuilderGraph) {
+        Step[] memory s = new Step[](3);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        if (deployHasDue) s[0] = s[0].due(StepFunctions.deployDue.selector);
+        s[1] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        s[1] = s[1].due(StepFunctions.fundDue.selector);
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.open");
+        return new BuilderGraph(unit, s);
+    }
+
+    /// @dev Sending `vault.deploy` would leave the plan unchanged: `vault.open` waits for the certificate,
+    ///      and the only `check` needs `vault.open`.
+    function test_plan_refusesADueStepBehindACertificateNoEarlierCheckWrites() public {
+        BuilderGraph g = _dueBehindCertificate(false);
+        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.open waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.check");
+
+        assertTrue(
+            vm.contains(_dueBehindCertificate(true).plan("anvil", "vault.check"), "# then plan again vault.open")
+        );
+    }
+
+    function test_plan_refusesAPredicateBehindACertificateNoEarlierCheckWrites() public {
+        Step[] memory s = new Step[](3);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        s[1] = _until("vault.observed", "observed", StepFunctions.observed.selector).needs("vault.deploy");
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.observed");
+        BuilderGraph g = new BuilderGraph(unit, s);
+        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.observed waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.check");
+    }
+
+    /// @dev The refusal follows the target: `vault.early` comes before `vault.open` and writes the certificate.
+    function test_plan_acceptsADueStepBehindACertificateAnEarlierCheckWrites() public {
+        Step[] memory s = new Step[](5);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        s[1] = _step("vault.early", "check", StepFunctions.check.selector).needs("vault.deploy");
+        s[2] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        s[2] = s[2].due(StepFunctions.fundDue.selector);
+        s[3] = _step("vault.late", "check", StepFunctions.check.selector).needs("vault.open");
+        s[4] = _node("vault.all").needs("vault.early").needs("vault.late");
+        BuilderGraph g = new BuilderGraph(unit, s);
+        assertTrue(vm.contains(g.plan("anvil", "vault.all"), "# then plan again vault.open"));
+
+        vm.expectRevert(bytes(string.concat("cannot reach vault.late: vault.open waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.late");
+    }
+
     function test_predicateSelectorMatchesItsSignature() public {
         Step[] memory s = new Step[](1);
         s[0] = _until("observed", "observed", StepFunctions.fundDue.selector);
