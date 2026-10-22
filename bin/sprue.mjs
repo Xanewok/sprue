@@ -43,6 +43,10 @@ Flags may appear anywhere after the command.
                             runs target on Anvil forks of network's chains, which it starts, in a fresh copy
                             <paths.rehearsal>-<network> of network's files; impersonates each step's sender
   rehearse --stop <network> stops the forks that rehearse --keep left running
+  map [--records <path>]... [--out <file>] [--title <text>] [<network>]
+                            an HTML map of what the deployment created, from forge's broadcast records, in any
+                            Foundry project; a network adds sprue's journals; sprue map --help says more, and
+                            its exit codes are 0, 1 (no transaction found) and 2 (usage or refusal)
 
 run, on a network whose chains sprue.json lists all as local, sends unattended, sending from Anvil's unlocked
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
@@ -297,6 +301,8 @@ async function main(argv) {
     out(USAGE);
     return 0;
   }
+  // map reads a bare Foundry project too, so it finds its own root.
+  if (argv[0] === "map") return (await import("../map/index.mjs")).cli(argv.slice(1));
   // The project root is the nearest directory, from the current one up, that holds sprue.json. This
   // runner validates `paths` itself, because it needs them before forge can run, and reads only the
   // few `chains` fields it uses. Chains.sol validates the whole file in every `FileGraph` `plan`, and a

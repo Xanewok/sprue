@@ -5,9 +5,9 @@ import { join, dirname } from 'node:path';
 import { ADDR, lc } from './abi.mjs';
 
 export function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
-  const jdir = join(dir, 'deployments', network);
+  const jdir = join(dir, network);
   if (!existsSync(jdir)) {
-    warnings.push(`no journals at deployments/${network}`);
+    warnings.push(`no journals at ${jdir}`);
     return null;
   }
   let netIds = [];

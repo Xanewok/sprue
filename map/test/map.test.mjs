@@ -1,7 +1,7 @@
 // node --test map/test/map.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -11,18 +11,23 @@ import { build, keccak256, place, GEOM } from '../index.mjs';
 import { PROFILES, compile, replayControl } from '../control.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const map = join(here, '..', 'index.mjs');
+const sprue = join(here, '..', '..', 'bin', 'sprue.mjs');
 const fixture = join(here, 'token-vault');
 
-function run(...args) {
-  const html = execFileSync(process.execPath, [map, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+function exec(args, cwd) {
+  return spawnSync(process.execPath, [sprue, 'map', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+function run(args, cwd = fixture) {
+  const r = exec(args, cwd);
+  assert.equal(r.status, 0, r.stderr);
+  const html = r.stdout;
   const data = JSON.parse(/<script type="application\/json" id="data">([\s\S]*?)<\/script>/.exec(html)[1]);
   return { html, data };
 }
 const named = (data, name) => data.nodes.find((n) => n.name === name);
 
 test('maps the token-vault records: two contracts, their links, one step per transaction', () => {
-  const { html, data } = run(join(fixture, 'broadcast'));
+  const { html, data } = run([]);
   assert.deepEqual(data.nodes.map((n) => [n.kind, n.name]).sort(), [['contract', 'Token'], ['contract', 'Vault'], ['sender', null]]);
   const token = named(data, 'Token'), vault = named(data, 'Vault');
   const edges = data.edges.map((e) => [e.kind, e.from, e.to, e.label]).sort();
@@ -33,7 +38,7 @@ test('maps the token-vault records: two contracts, their links, one step per tra
 });
 
 test('the sprue layer adds roles, plan step ids and the certificate-verified link', () => {
-  const { data } = run('--sprue', fixture, 'local');
+  const { data } = run(['local']);
   assert.deepEqual(data.steps.map((s) => s.id), ['token.deploy', 'vault.deploy', 'vault.fund']);
   assert.deepEqual(data.nodes.filter((n) => n.certified).map((n) => n.role).sort(), ['token', 'vault']);
   const verified = data.edges.filter((e) => e.verified).map((e) => [e.kind, e.label]);
@@ -51,7 +56,7 @@ test('a reverted CREATE is a step that creates nothing', () => {
       for (const r of j.receipts) if (r.transactionHash === vaultTx) r.status = '0x0';
       writeFileSync(join(vaultDir, f), JSON.stringify(j));
     }
-    const { data } = run(join(dir, 'broadcast'));
+    const { data } = run(['--records', join(dir, 'broadcast')], dir);
     assert.equal(data.steps.length, 3);
     const x = data.txs.find((t) => t.hash === vaultTx);
     assert.equal(x.status, 'reverted');
@@ -64,7 +69,7 @@ test('a reverted CREATE is a step that creates nothing', () => {
 });
 
 test('no link crosses a box, at desktop and phone width', () => {
-  const { data } = run('--sprue', fixture, 'local');
+  const { data } = run(['local']);
   for (const width of [1060, 390]) {
     const { g, box, routes } = place(data, GEOM, width);
     assert.equal(routes.length, 2);
@@ -229,4 +234,57 @@ test('an ERC-1967 upgrade is an implementation link, replaced by the next, and n
   const impl = m.edges.filter((e) => e.kind === 'impl' && e.from === `1:${X}`);
   assert.deepEqual(impl.map((e) => [e.to, e.label, e.cls, e.spans]), [[`1:${U}`, 'implementation', 'impl', [[8, 9]]], [`1:${M}`, 'implementation', 'impl', [[9, null]]]]);
   assert.equal(m.stats.control, 6, 'the implementation links add no control');
+});
+
+test('a bare Foundry project maps from foundry.toml and broadcast/ alone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    cpSync(join(fixture, 'broadcast'), join(dir, 'broadcast'), { recursive: true });
+    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\n');
+    const { data } = run([], dir);
+    assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
+    assert.ok(!data.sprue);
+    const r = exec(['local'], dir);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /no sprue\.json: drop the network/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('map refuses what does not apply and names the fix', () => {
+  const refused = (args, cwd, re) => {
+    const r = exec(args, cwd);
+    assert.equal(r.status, 2, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, re);
+  };
+  refused(['--wait'], fixture, /refusing --wait: map takes only --records, --out and --title/);
+  refused(['nowhere'], fixture, /unknown network 'nowhere': no .*network\.json/);
+  refused(['local', 'other'], fixture, /takes one network/);
+  refused(['--out'], fixture, /--out needs a value/);
+  const empty = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    refused([], empty, /no foundry\.toml or sprue\.json .*--records/);
+  } finally {
+    rmSync(empty, { recursive: true });
+  }
+});
+
+test('--out writes the page to a file and leaves stdout empty; no transaction exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    const r = exec(['--out', join(dir, 'm.html')], fixture);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(readFileSync(join(dir, 'm.html'), 'utf8'), /^<!doctype html>/);
+    writeFileSync(join(dir, 'foundry.toml'), '');
+    assert.equal(exec([], dir).status, 2, 'no broadcast/ is a refusal');
+    mkdirSync(join(dir, 'broadcast'));
+    const e = exec([], dir);
+    assert.equal(e.status, 1);
+    assert.match(e.stderr, /no broadcast records with transactions/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });

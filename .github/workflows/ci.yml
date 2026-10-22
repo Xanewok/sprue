@@ -23,6 +23,7 @@ jobs:
       - run: forge build
       - run: forge test
       - run: node --check bin/sprue.mjs
+      - run: node --test map/test/*.test.mjs
       - run: |
           # The library imports forge-std and itself; its tests also import src/.
           imports() { grep -H -E '^import[[:space:]].*"|^[[:space:]]*\}[[:space:]]*from[[:space:]]*"' "$@" | grep -v -E "$allowed" || true; }

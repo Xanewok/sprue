@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
-// A static HTML map of a Foundry deployment, from forge's broadcast records. See README.md.
-import { existsSync } from 'node:fs';
-import { join, basename, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// A static HTML map of a Foundry deployment, from forge's broadcast records. `sprue map`; see MAP.md.
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join, basename, dirname, resolve } from 'node:path';
 
 import { build } from './model.mjs';
 import { render } from './page.mjs';
@@ -11,46 +10,85 @@ export { keccak256 } from './abi.mjs';
 export { GEOM, place } from './layout.mjs';
 export { build, render };
 
-const USAGE = `usage: node map/index.mjs [--project <dir>] [--sprue <project dir> <network>] [--title <text>] <broadcast dir or record files...> > map.html
-  --project <dir>   read constructor and function parameter names from <dir>/out
-  --sprue <dir> <network>
-                    add role names, certificate-verified links and step ids from <dir>/deployments/<network>;
-                    implies --project <dir>, and <dir>/broadcast when no records are named`;
+export const USAGE = `usage: sprue map [--records <path>]... [--out <file>] [--title <text>] [<network>]
 
-function main(argv) {
-  const paths = [];
-  let project = null, sprue = null, title = null;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--project') project = argv[++i];
-    else if (a === '--sprue') {
-      sprue = { dir: argv[++i], network: argv[++i] };
-      if (!sprue.dir || !sprue.network) return fail('--sprue needs a project directory and a network name');
-    } else if (a === '--title') title = argv[++i];
-    else if (a === '-h' || a === '--help') { process.stdout.write(USAGE + '\n'); return 0; }
-    else if (a.startsWith('-')) return fail(`unknown option ${a}`);
-    else paths.push(a);
+Draws what a Foundry deployment created and how the contracts connect, as one HTML page that loads nothing.
+It reads forge's broadcast records; sprue's journals are an add-in.
+
+  <network>         add role names, certificate-verified links and step ids from the journals of that network
+                    (<paths.deployments>/<network> of sprue.json); the project must have sprue.json
+  --records <path>  a broadcast directory or record file, relative to the current directory; repeatable;
+                    default: broadcast/ of the project, the nearest directory up with foundry.toml or sprue.json
+  --out <file>      write the page to file; \`-\` is stdout. Default: stdout when it is not a terminal, else map.html
+  --title <text>    the page title; default: the project's directory name
+
+Names come from out/ when the project has it. Nothing is sent or changed but --out.
+
+  0   the page was written
+  1   no transaction in the records, or the page could not be written
+  2   usage error, or a refusal: a flag that does not apply, an unknown network, no project and no --records
+`;
+
+class Refusal extends Error {}
+const refuse = (msg) => { throw new Refusal(msg); };
+const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+
+function project(from) {
+  for (let d = resolve(from); ; d = dirname(d)) {
+    if (existsSync(join(d, 'sprue.json')) || existsSync(join(d, 'foundry.toml'))) return d;
+    if (dirname(d) === d) return null;
   }
-  if (sprue) {
-    project = project || sprue.dir;
-    if (!paths.length) paths.push(join(sprue.dir, 'broadcast'));
-  }
-  if (!paths.length) return fail('name a broadcast directory or record files');
-  for (const p of paths) if (!existsSync(p)) return fail(`${p} does not exist`);
-  const model = build({ paths, project, sprue });
-  if (!model.txs.length) return fail(`no broadcast records with transactions under ${paths.join(' ')}`);
-  const scripts = [...new Set(model.txs.map((x) => x.script))];
-  const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
-  process.stdout.write(render(model, title || `Deployment map: ${project ? `${basename(resolve(project))} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`));
-  const s = model.stats;
-  process.stderr.write(`deploy-map: ${s.nodes} nodes, ${s.edges} edges (${s.edgesDecoded} decoded, ${s.control} control, ${s.controlEvents} of them from events), ${s.steps} steps, ${s.txs} transactions\n`);
-  for (const w of model.warnings) process.stderr.write(`deploy-map: ${w}\n`);
-  return 0;
 }
 
-function fail(msg) {
-  process.stderr.write(`deploy-map: ${msg}\n${USAGE}\n`);
-  return 2;
+// Returns the exit code.
+export function cli(argv, cwd = process.cwd()) {
+  const records = [];
+  let outFile = null, title = null, network = null;
+  try {
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === '-h' || a === '--help') { process.stdout.write(USAGE); return 0; }
+      if (a === '--records' || a === '--out' || a === '--title') {
+        const v = argv[++i];
+        if (v === undefined || (v.startsWith('-') && v !== '-')) refuse(`${a} needs a value: ${a} <${a === '--records' ? 'path' : a === '--out' ? 'file' : 'text'}>`);
+        if (a === '--records') records.push(v);
+        else if (a === '--out') outFile = v;
+        else title = v;
+      } else if (a.startsWith('-')) refuse(`refusing ${a}: map takes only --records, --out and --title; see sprue map --help`);
+      else if (network === null) network = a;
+      else refuse(`refusing ${a}: map takes one network, and ${network} is named; name broadcast records with --records`);
+    }
+    const root = project(cwd);
+    if (!root && !records.length) refuse(`no foundry.toml or sprue.json in ${cwd} or above: run inside a Foundry project, or name the records with --records <broadcast dir or file>`);
+    let sprue = null;
+    if (network !== null) {
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(network)) refuse(`refusing network '${network}': not a plain name`);
+      const cfg = root && existsSync(join(root, 'sprue.json')) ? JSON.parse(readFileSync(join(root, 'sprue.json'), 'utf8')) : null;
+      if (!cfg) refuse(`${network} names sprue's journals, and ${root || cwd} has no sprue.json: drop the network for a map of the broadcast records alone`);
+      const dir = join(root, String(cfg.paths?.deployments || 'deployments'));
+      if (!existsSync(join(dir, network, 'network.json'))) refuse(`unknown network '${network}': no ${join(dir, network, 'network.json')}`);
+      sprue = { dir, network };
+    }
+    const paths = records.length ? records.map((r) => resolve(cwd, r)) : [join(root, 'broadcast')];
+    for (const p of paths) if (!existsSync(p)) refuse(`${p} does not exist: run the deployment with --broadcast first, or name other records with --records`);
+    const model = build({ paths, project: root, sprue });
+    if (!model.txs.length) { process.stderr.write(`sprue: no broadcast records with transactions under ${paths.join(' ')}: broadcast a script, or name other records with --records\n`); return 1; }
+    const scripts = [...new Set(model.txs.map((x) => x.script))];
+    const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
+    const page = render(model, title || `Deployment map: ${root ? `${basename(root)} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`);
+    const target = outFile ?? (process.stdout.isTTY ? 'map.html' : '-');
+    const s = model.stats;
+    process.stderr.write(`sprue: map of ${root ? `project ${root}` : 'the named records'}${sprue ? `, journals of ${network}` : ''}, records ${paths.join(' ')}, to ${target === '-' ? 'stdout' : target}\n`
+      + `sprue: ${s.nodes} nodes, ${s.edges} links (${s.control} control, ${s.controlEvents} of them from events), ${s.steps} steps, ${s.txs} transactions\n`);
+    for (const w of model.warnings) process.stderr.write(`sprue: ${w}\n`);
+    if (target === '-') process.stdout.write(page);
+    else {
+      try { writeFileSync(resolve(cwd, target), page); } catch (e) { process.stderr.write(`sprue: cannot write ${target}: ${e.message}; choose another file with --out\n`); return 1; }
+    }
+    return 0;
+  } catch (e) {
+    if (!(e instanceof Refusal || e instanceof SyntaxError)) throw e;
+    process.stderr.write(`sprue: ${e.message}\n`);
+    return 2;
+  }
 }
-
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main(process.argv.slice(2));

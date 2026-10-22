@@ -26,3 +26,5 @@ rm -rf "$out"
 done)
 mkdir -p "$out/deployments/local"
 cp "$work"/deployments/local/{network,token,vault}.json "$out/deployments/local/"
+cp "$work/sprue.json" "$out/sprue.json"
+printf '[profile.default]\nout = "out"\n' > "$out/foundry.toml"

@@ -1,8 +1,8 @@
-# deploy-map (spike)
+# sprue map
 
 A static HTML map of what a Foundry deployment created and how the contracts connect, built from
 forge's own broadcast records. It works for any Foundry project; sprue's data, where present, only
-adds names and verified links. Spike: for discussion, not a supported tool.
+adds names and verified links. The command is `sprue map`.
 
 ## Why it has this shape
 
@@ -28,7 +28,9 @@ adds names and verified links. Spike: for discussion, not a supported tool.
 1. **Graph.** A node per deployed contract (name and short address) and per outside address: an EOA,
    a multisig or a contract the deployment did not create. Edges: *created by* (a factory's child),
    *set at deploy* (an address among a CREATE's arguments), *set by call* (an address passed in a call
-   to a deployed contract, labelled with the function), *emitted* (a holder that a control event names).
+   to a deployed contract, labelled with the function), *emitted* (a holder that a control event names),
+   *implementation* (a proxy's current implementation or beacon from `Upgraded` or `BeaconUpgraded`, replayed
+   per step; not control).
    Key every node by chain and address.
 2. **Control lens, on by default.** Control comes from events first: the owner, pending owner, role
    holders and proxy admin that the receipts' logs name, replayed in order, so each step shows who holds
@@ -51,11 +53,12 @@ no step id.
 
 ## Inputs and decoding
 
-- `node map/index.mjs [--project <dir>] [--sprue <dir> <network>] <broadcast dir or record
-  files...> > map.html`, offline, one file with the data inlined; the page makes no network calls.
-  `--project` reads parameter names from `<dir>/out`; `--sprue <dir>` adds the sprue layer and implies
-  `--project <dir>`.
-  `node --test map/test/map.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
+- `sprue map [--records <path>]... [--out <file>] [--title <text>] [<network>]` writes one offline HTML
+  file with the data inlined; the page makes no network calls. The project is the nearest directory up
+  with `foundry.toml` or `sprue.json`; its `broadcast/` holds the records and its `out/`, when present,
+  the parameter names. A network adds the sprue layer from `<paths.deployments>/<network>`. Without a
+  project, `--records` alone is enough. `sprue map --help` has the exit codes.
+  `node --test map/test/*.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
   regenerates.
 - Arguments are decoded from the records' strings, recursively for tuples and arrays. Where a record
   has no decoded arguments (older or raw calls), the calldata is decoded from the function signature.
@@ -71,12 +74,14 @@ no step id.
   `out/<File>.sol/<Contract>.json` when it exists and its constructor's argument count matches the
   record; otherwise the argument's position. Many repositories commit records but not `out/`, so the
   map must work without ABIs.
-- Control events: `OwnershipTransferred`, `OwnershipTransferStarted` (a pending owner, not control),
-  `RoleGranted`, `RoleRevoked` and ERC-1967 `AdminChanged`, matched by topic0 and read from the topics
-  after it, then the data words, so indexed and non-indexed layouts both decode. A log counts only from an
-  address on the map. A role id shows by its OpenZeppelin name where it has one, else short. A transfer
-  to the zero address shows as renounced. An event and a name-rule link that say the same thing in one
-  transaction are one link with both sources.
+- Control events are profiles in `map/control.mjs`: one data shape per standard, with its events, what each
+  does (owner, pending owner, proxy admin, implementation, beacon, role granted, role revoked), the
+  parameter that holds the holder and the role, and its known role names. Built in: Ownable, Ownable2Step,
+  AccessControl (OpenZeppelin and TimelockController role names) and ERC-1967. Events are matched by topic0 and read from
+  the topics after it, then the data words, so indexed and non-indexed layouts both decode. A log counts only
+  from an address on the map. A role id shows by its name where a profile has one, else short. A pending owner is
+  not control. A transfer to the zero address shows as renounced. An event and a name-rule link that say the
+  same thing in one transaction are one link with both sources.
 - Several runs of one script (`run-<timestamp>.json`) are merged in time order; a resumed or replaced
   transaction appears once, with its final receipt.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+`sprue map` writes an HTML map of a deployment from forge's broadcast records, in any Foundry project; a
+network adds sprue's journals ([MAP.md](MAP.md)).
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
