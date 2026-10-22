@@ -72,6 +72,9 @@ abstract contract Graph is Script {
     error ProductionDependency(string id, string dependency);
     error SelectorMismatch(string id, bytes4 expected, bytes4 actual);
     error MissingDoneRule(string id);
+    /// @dev `judged` is read only after its needs are done, and it needs `certified`, which only `check`
+    ///      marks done, while `check` needs `judged`: no plan can advance. Give `certified` a `Due` view.
+    error DueBehindCertificate(string judged, string certified, string check);
     error UnsafeName(string name);
 
     uint256 private constant NONE = type(uint256).max;
@@ -489,6 +492,27 @@ abstract contract Graph is Script {
         for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
             require(bytes(n.step).length == 0 || n.due || n.certified, MissingDoneRule(n.id));
+        }
+        // A step with a `Due` view or a predicate is judged only once its needs are done (`_walk`), but a
+        // certified step is done only when its `check` has run.
+        for (uint256 k; k < _nodes.length; ++k) {
+            if (_nodes[k].due || keccak256(bytes(_nodes[k].step)) != keccak256("check")) continue;
+            bool[] memory behind = _closure(k);
+            for (uint256 j; j < k; ++j) {
+                Node storage judged = _nodes[j];
+                if (!behind[j] || !(judged.due || bytes(judged.until).length != 0)) continue;
+                bool[] memory needs = _closure(j);
+                for (uint256 c; c < j; ++c) {
+                    Node storage certified = _nodes[c];
+                    if (!needs[c] || !certified.certified) continue;
+                    for (uint256 b; b < certified.certifiedBy.length; ++b) {
+                        require(
+                            keccak256(bytes(certified.certifiedBy[b])) != keccak256(bytes(_nodes[k].id)),
+                            DueBehindCertificate(judged.id, certified.id, _nodes[k].id)
+                        );
+                    }
+                }
+            }
         }
     }
 

@@ -405,6 +405,27 @@ contract StepBuildersTest is Test, Declares {
         new BuilderGraph(unit, s);
     }
 
+    function _dueBehindCertificate(bool openHasDue, bool deployHasDue) private returns (BuilderGraph) {
+        Step[] memory s = new Step[](3);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        if (deployHasDue) s[0] = s[0].due(StepFunctions.deployDue.selector);
+        s[1] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        if (openHasDue) s[1] = s[1].due(StepFunctions.fundDue.selector);
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.open");
+        return new BuilderGraph(unit, s);
+    }
+
+    function test_aDueStepBehindItsUnitsCertificateIsRefused() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(Graph.DueBehindCertificate.selector, "vault.open", "vault.deploy", "vault.check")
+        );
+        _dueBehindCertificate(true, false);
+    }
+
+    function test_aDueStepBehindAStepWithItsOwnDueViewBuilds() public {
+        assertFalse(_dueBehindCertificate(true, true).node(0).certified);
+    }
+
     function test_predicateSelectorMatchesItsSignature() public {
         Step[] memory s = new Step[](1);
         s[0] = _until("observed", "observed", StepFunctions.fundDue.selector);

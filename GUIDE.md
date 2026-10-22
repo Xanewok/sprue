@@ -33,6 +33,9 @@ then differ from the commit, the build is not the commit's, and an attended `run
    [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) as a
    template. Every step needs a done rule: a `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, or
    a `check` step of the same unit that reaches it through `.needs(...)`.
+   A step with a `Due` view is read only after everything it needs is done, and a step without one is done
+   only when `check` runs. So a `Due` step that needs such a step, while `check` needs the `Due` step, can
+   never start: `_validateGraph` refuses it with `DueBehindCertificate`. Give the earlier step a `Due` view.
 4. Register the units in a graph script whose contract is named like its file: its constructor calls
    `_add(address(new DeployToken()), "<path>:DeployToken")` for each unit, then `_validateGraph()`, as in
    the example's [`DeployGraph.s.sol`](examples/token-vault/script/deploy/DeployGraph.s.sol).

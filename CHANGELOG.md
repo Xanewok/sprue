@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+`_validateGraph` refuses, with `DueBehindCertificate`, a step with a `Due` view or a predicate that needs a
+step only its unit's `check` marks done, when `check` needs that step back. Before, `run` exited 5 with
+"plan is unchanged after sending it". Give the earlier step a `Due` view.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
