@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build, keccak256, place, GEOM } from '../index.mjs';
-import { PROFILES, compile, replayControl } from '../control.mjs';
+import { PROFILES, compile, matchRule, replayControl } from '../control.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sprue = join(here, '..', '..', 'bin', 'sprue.mjs');
@@ -342,3 +342,61 @@ test('--out writes the page to a file and leaves stdout empty; no transaction ex
     rmSync(dir, { recursive: true });
   }
 });
+
+// Hand-written records: {chain: [{ts, txs: [{hash, to, input?, function?, arguments?, block, index, logs?}]}]}.
+function modelOf(chains) {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    let n = 0;
+    for (const [chain, files] of Object.entries(chains))
+      for (const f of files) {
+        const d = join(dir, 'broadcast', 'Deploy.s.sol', chain);
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, `run-${++n}.json`), JSON.stringify({
+          chain: Number(chain), timestamp: f.ts,
+          transactions: f.txs.map((t, i) => ({ hash: t.hash, transactionType: 'CALL', contractName: 'C', contractAddress: t.to, function: t.function ?? 'touch()', arguments: t.arguments ?? null,
+            transaction: { from: D, to: t.to, nonce: '0x' + (n * 10 + i).toString(16), input: t.input ?? '0xa55526db' } })),
+          receipts: f.txs.map((t) => ({ transactionHash: t.hash, status: '0x1', blockNumber: '0x' + t.block.toString(16), transactionIndex: '0x' + (t.index ?? 0).toString(16),
+            logs: (t.logs || []).map((l, k) => ({ ...l, logIndex: '0x' + k.toString(16) })) })),
+        }));
+      }
+    return build({ paths: [join(dir, 'broadcast')] });
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+}
+const H = (i) => '0x' + String(i).padStart(64, '0');
+const replay = (logs, table) => {
+  const edges = new Map(), stats = { events: 0, eventsUnplaced: 0, eventsSkipped: 0 };
+  const renounced = replayControl(logs.map((_, i) => ({ i, chain: 1 })), logs.map((l) => [l]), (chain, a) => ({ id: `${chain}:${a}` }), (chain, a) => `${chain}:${a}`, edges, stats, table);
+  return { edges: [...edges.values()], renounced, stats };
+};
+
+test('revokeRole is not a control link; grantRole still is', () => {
+  assert.equal(matchRule('revokeRole', { name: 'account', path: 'account' }), null);
+  assert.equal(matchRule('revokeRoles', { name: 'account', path: 'account' }), null);
+  assert.equal(matchRule('grantRole', { name: 'account', path: 'account' }).cls, 'authority');
+});
+
+test('a role granted to the zero address is held by anyone, not renounced', () => {
+  const m = modelOf({ 1: [{ ts: 1, txs: [{ hash: H(1), to: R, block: 1, logs: [role('RoleGranted', R, MINTER, ZERO)] }] }] });
+  assert.deepEqual(m.renounced, []);
+  const [e] = at(m, R, 'MINTER_ROLE');
+  assert.equal(e.to, `1:${ZERO}`);
+  assert.equal(m.nodes.find((n) => n.id === e.to).name, 'anyone (zero address)');
+});
+
+test('roles whose ids share a prefix keep their own spans', () => {
+  const r1 = '0x12345678' + '1'.repeat(56), r2 = '0x12345678' + '2'.repeat(56);
+  const { edges } = replay([role('RoleGranted', R, r1, U), role('RoleGranted', R, r2, U), role('RoleRevoked', R, r1, U)]);
+  assert.deepEqual(edges.map((e) => e.spansTx), [[[0, 2]], [[1, null]]]);
+});
+
+test('a log whose indexed layout is not the declared one is skipped and counted', () => {
+  const partly = { address: A, topics: [topic('OwnershipTransferred(address,address)'), word(B)], data: word(D) };
+  const { edges, stats } = replay([partly, owned(A, ZERO, D)]);
+  assert.equal(edges.length, 1);
+  assert.equal(stats.eventsSkipped, 1);
+  assert.equal(stats.events, 1);
+});
+

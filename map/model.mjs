@@ -85,7 +85,7 @@ export function build({ paths, outDir, sprue }) {
     ed.decoded = ed.decoded && decoded;
     if (!ed.txs.some((d) => d.i === x.i)) ed.txs.push({ i: x.i, detail });
   };
-  const stats = { txs: out.length, decode: { record: 0, abi: 0, positional: 0, raw: 0, none: 0, failed: 0 }, events: 0, eventsUnplaced: 0 };
+  const stats = { txs: out.length, decode: { record: 0, abi: 0, positional: 0, raw: 0, none: 0, failed: 0 }, events: 0, eventsUnplaced: 0, eventsSkipped: 0 };
 
   for (const x of out) {
     const chain = x.chain;
