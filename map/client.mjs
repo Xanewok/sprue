@@ -119,7 +119,7 @@ export function client(place) {
       const path = el('path', { d }, eg);
       el('path', { d, class: 'hit' }, eg);
       const text = r.edges.length === 1 ? r.edges[0].label + (r.edges[0].rule ? ` [${r.edges[0].rule}]` : '') : `${r.edges.length} links: ${r.edges.map((e) => e.label).join(', ')}`;
-      const lt = el('text', { x: r.labelAt[0], y: r.labelAt[1] - 3, 'text-anchor': 'middle', class: 'elabel' }, labelsG);
+      const lt = el('text', { 'text-anchor': 'middle', class: 'elabel' }, labelsG);
       lt.textContent = cut(text, 46);
       el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${r.edges.map((e) => e.label + (sources(e).length ? ` (${sources(e).join(', ')})` : '') + (e.verified ? ' (certificate-verified)' : '')).join('\n')}`;
       eg.addEventListener('mouseenter', () => hover({ link: r.key }));

@@ -287,12 +287,7 @@ export function place(D, G, avail) {
           pts = [[sx, aEdge], [sx, ya], [xg, ya], [xg, yb], [ex, yb], [ex, bEdge]];
         }
       }
-      let best = 0, at = [pts[0][0], pts[0][1]];
-      for (let i = 1; i < pts.length; i++) {
-        const len = Math.abs(pts[i][0] - pts[i - 1][0]) + Math.abs(pts[i][1] - pts[i - 1][1]);
-        if (len > best) { best = len; at = [(pts[i][0] + pts[i - 1][0]) / 2, (pts[i][1] + pts[i - 1][1]) / 2]; }
-      }
-      routes.push({ ...bd, pts, labelAt: at });
+      routes.push({ ...bd, pts });
     }
     // A trunk's count sits at its shared entry point.
     const entries = new Map();
