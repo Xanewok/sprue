@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: MIT
-// A static HTML map of a Foundry deployment, from forge's broadcast records. `sprue map`; see MAP.md.
+// `sprue map`: draws what a Foundry deployment created and how its contracts link, as one HTML page that loads
+// nothing, from forge's broadcast records (see MAP.md).
+//
+// Guarantees: the page is built whole before anything is written; it goes to the `--out` file, replacing it,
+// or to stdout, never to a terminal; nothing else is created or changed. `cli` returns 0 when the page was
+// written, 1 when there was nothing to draw or the file could not be written, 2 for a refusal that names its fix.
+// An unreadable `sprue.json` is a refusal too.
+// Relies on `forge config --json` for the `out` and `broadcast` paths whenever a project is used.
+
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, basename, dirname, resolve } from 'node:path';
@@ -33,26 +41,6 @@ Names come from the project's forge out directory when it exists. Nothing is sen
       forge config failed, stdout is a terminal and there is no --out
 `;
 
-class Refusal extends Error {}
-const refuse = (msg) => { throw new Refusal(msg); };
-
-function project(from) {
-  for (let d = resolve(from); ; d = dirname(d)) {
-    if (existsSync(join(d, 'sprue.json')) || existsSync(join(d, 'foundry.toml'))) return d;
-    if (dirname(d) === d) return null;
-  }
-}
-
-// The project's own paths: foundry.toml, FOUNDRY_PROFILE and FOUNDRY_* can move them.
-function forgePaths(root) {
-  const r = spawnSync('forge', ['config', '--json'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
-  let config;
-  try { config = JSON.parse(r.stdout); } catch {}
-  if (r.error || r.status !== 0 || typeof config?.out !== 'string' || typeof config?.broadcast !== 'string') {
-    refuse(`forge config --json failed in ${root}: install Foundry, or name the records with --records and drop the project`);
-  }
-  return { out: resolve(root, config.out), broadcast: resolve(root, config.broadcast) };
-}
 
 // Returns the exit code.
 export function cli(argv, cwd = process.cwd()) {
@@ -64,43 +52,73 @@ export function cli(argv, cwd = process.cwd()) {
       if (a === '-h' || a === '--help') { process.stdout.write(USAGE); return 0; }
       if (a === '--records' || a === '--out' || a === '--title') {
         const v = argv[++i];
-        if (a === '--out' && v === '-') refuse('refusing --out -: without --out the page goes to stdout; name a file, or redirect: sprue map > map.html');
-        if (v === undefined || v.startsWith('-')) refuse(`${a} needs a value: ${a} <${a === '--records' ? 'path' : a === '--out' ? 'file' : 'text'}>`);
+        if (a === '--out' && v === '-') {
+          refuse('refusing --out -: without --out the page goes to stdout; '
+            + 'name a file, or redirect: sprue map > map.html');
+        }
+        if (v === undefined || v.startsWith('-')) {
+          refuse(`${a} needs a value: ${a} <${a === '--records' ? 'path' : a === '--out' ? 'file' : 'text'}>`);
+        }
         if (a === '--records') records.push(v);
         else if (a === '--out') outFile = v;
         else title = v;
-      } else if (a.startsWith('-')) refuse(`refusing ${a}: map takes only --records, --out and --title; see sprue map --help`);
-      else if (network === null) network = a;
-      else refuse(`refusing ${a}: map takes one network, and ${network} is named; name broadcast records with --records`);
+      } else if (a.startsWith('-')) {
+        refuse(`refusing ${a}: map takes only --records, --out and --title; see sprue map --help`);
+      } else if (network === null) {
+        network = a;
+      } else {
+        refuse(`refusing ${a}: map takes one network, and ${network} is named; name broadcast records with --records`);
+      }
     }
+
     const root = project(cwd);
-    if (!root && !records.length) refuse(`no foundry.toml or sprue.json in ${cwd} or above: run inside a Foundry project, or name the records with --records <broadcast dir or file>`);
-    let sprue = null;
-    if (network !== null) {
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(network)) refuse(`refusing network '${network}': not a plain name`);
-      const cfg = root && existsSync(join(root, 'sprue.json')) ? JSON.parse(readFileSync(join(root, 'sprue.json'), 'utf8')) : null;
-      if (!cfg) refuse(`${network} names sprue's journals, and ${root || cwd} has no sprue.json: drop the network for a map of the broadcast records alone`);
-      const dir = join(root, String(cfg.paths?.deployments || 'deployments'));
-      if (!existsSync(join(dir, network, 'network.json'))) refuse(`unknown network '${network}': no ${join(dir, network, 'network.json')}`);
-      sprue = { dir, network };
+    if (!root && !records.length) {
+      refuse(`no foundry.toml or sprue.json in ${cwd} or above: run inside a Foundry project, `
+        + 'or name the records with --records <broadcast dir or file>');
     }
+    const sprue = network === null ? null : journals(root, cwd, network);
     const dirs = root ? forgePaths(root) : { out: null, broadcast: null };
     const paths = records.length ? records.map((r) => resolve(cwd, r)) : [dirs.broadcast];
-    for (const p of paths) if (!existsSync(p)) refuse(`${p} does not exist: run the deployment with --broadcast first, or name other records with --records`);
-    if (outFile === null && process.stdout.isTTY) refuse('refusing to write a page to the terminal: name a file with --out map.html, or redirect: sprue map > map.html');
+    for (const p of paths) {
+      if (!existsSync(p)) {
+        refuse(`${p} does not exist: run the deployment with --broadcast first, or name other records with --records`);
+      }
+    }
+    if (outFile === null && process.stdout.isTTY) {
+      refuse('refusing to write a page to the terminal: name a file with --out map.html, '
+        + 'or redirect: sprue map > map.html');
+    }
+
     const model = build({ paths, outDir: dirs.out, sprue });
-    if (!model.txs.length) { process.stderr.write(`sprue: no broadcast records with transactions under ${paths.join(' ')}: broadcast a script, or name other records with --records\n`); return 1; }
+    if (!model.txs.length) {
+      process.stderr.write(`sprue: no broadcast records with transactions under ${paths.join(' ')}: `
+        + 'broadcast a script, or name other records with --records\n');
+      return 1;
+    }
+
     const scripts = [...new Set(model.txs.map((x) => x.script))];
     const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
-    const page = render(model, title || `Deployment map: ${root ? `${basename(root)} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`);
+    const counted = `${basename(root || '')} (${scripts.length} script${scripts.length > 1 ? 's' : ''})`;
+    const named = root ? counted : scripts[0] + more;
+    const page = render(model, title || `Deployment map: ${named}`);
+
     const target = outFile ?? '-';
     const s = model.stats;
-    process.stderr.write(`sprue: map of ${root ? `project ${root}` : 'the named records'}${sprue ? `, journals of ${network}` : ''}, records ${paths.join(' ')}, to ${target === '-' ? 'stdout' : target}\n`
-      + `sprue: ${s.nodes} nodes, ${s.edges} links (${s.control} control, ${s.controlEvents} of them from events), ${s.steps} steps, ${s.txs} transactions\n`);
+    process.stderr.write(
+      `sprue: map of ${root ? `project ${root}` : 'the named records'}${sprue ? `, journals of ${network}` : ''}, `
+      + `records ${paths.join(' ')}, to ${target === '-' ? 'stdout' : target}\n`
+      + `sprue: ${s.nodes} nodes, ${s.edges} links (${s.control} control, ${s.controlEvents} of them from events), `
+      + `${s.steps} steps, ${s.txs} transactions\n`);
     for (const w of model.warnings) process.stderr.write(`sprue: ${w}\n`);
+
     if (target === '-') process.stdout.write(page);
     else {
-      try { writeFileSync(resolve(cwd, target), page); } catch (e) { process.stderr.write(`sprue: cannot write ${target}: ${e.message}; choose another file with --out\n`); return 1; }
+      try {
+        writeFileSync(resolve(cwd, target), page);
+      } catch (e) {
+        process.stderr.write(`sprue: cannot write ${target}: ${e.message}; choose another file with --out\n`);
+        return 1;
+      }
     }
     return 0;
   } catch (e) {
@@ -108,4 +126,46 @@ export function cli(argv, cwd = process.cwd()) {
     process.stderr.write(`sprue: ${e.message}\n`);
     return 2;
   }
+}
+
+class Refusal extends Error {}
+const refuse = (msg) => { throw new Refusal(msg); };
+
+function project(from) {
+  for (let d = resolve(from); ; d = dirname(d)) {
+    if (existsSync(join(d, 'sprue.json')) || existsSync(join(d, 'foundry.toml'))) return d;
+    if (dirname(d) === d) return null;
+  }
+}
+
+// sprue's journals of one network; the project must have sprue.json.
+function journals(root, cwd, network) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(network)) refuse(`refusing network '${network}': not a plain name`);
+
+  const file = root && join(root, 'sprue.json');
+  const cfg = file && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null;
+  if (!cfg) {
+    refuse(`${network} names sprue's journals, and ${root || cwd} has no sprue.json: `
+      + 'drop the network for a map of the broadcast records alone');
+  }
+
+  const dir = join(root, String(cfg.paths?.deployments || 'deployments'));
+  if (!existsSync(join(dir, network, 'network.json'))) {
+    refuse(`unknown network '${network}': no ${join(dir, network, 'network.json')}`);
+  }
+  return { dir, network };
+}
+
+// The project's own paths: foundry.toml, FOUNDRY_PROFILE and FOUNDRY_* can move them.
+function forgePaths(root) {
+  const r = spawnSync('forge', ['config', '--json'], {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  let config;
+  try { config = JSON.parse(r.stdout); } catch {}
+  if (r.error || r.status !== 0 || typeof config?.out !== 'string' || typeof config?.broadcast !== 'string') {
+    refuse(`forge config --json failed in ${root}: `
+      + 'install Foundry, or name the records with --records and drop the project');
+  }
+  return { out: resolve(root, config.out), broadcast: resolve(root, config.broadcast) };
 }
