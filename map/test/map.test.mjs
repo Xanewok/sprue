@@ -1,4 +1,4 @@
-// node --test tools/deploy-map/test/map.test.mjs
+// node --test map/test/map.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -7,10 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { build, keccak256, place, GEOM } from '../map.mjs';
+import { build, keccak256, place, GEOM } from '../index.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const map = join(here, '..', 'map.mjs');
+const map = join(here, '..', 'index.mjs');
 const fixture = join(here, 'token-vault');
 
 function run(...args) {

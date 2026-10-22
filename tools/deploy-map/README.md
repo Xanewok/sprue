@@ -51,11 +51,11 @@ no step id.
 
 ## Inputs and decoding
 
-- `node tools/deploy-map/map.mjs [--project <dir>] [--sprue <dir> <network>] <broadcast dir or record
+- `node map/index.mjs [--project <dir>] [--sprue <dir> <network>] <broadcast dir or record
   files...> > map.html`, offline, one file with the data inlined; the page makes no network calls.
   `--project` reads parameter names from `<dir>/out`; `--sprue <dir>` adds the sprue layer and implies
   `--project <dir>`.
-  `node --test tools/deploy-map/test/map.test.mjs` runs on `test/token-vault`, which `test/fixture.sh`
+  `node --test map/test/map.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
   regenerates.
 - Arguments are decoded from the records' strings, recursively for tuples and arrays. Where a record
   has no decoded arguments (older or raw calls), the calldata is decoded from the function signature.

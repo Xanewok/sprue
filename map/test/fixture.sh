@@ -2,8 +2,8 @@
 # Regenerates token-vault/ from a run of examples/token-vault on a fresh Anvil (PORT, default 8545).
 # The records are forge's and the journals sprue's; never edit them by hand.
 set -euo pipefail
-root=$(cd "$(dirname "$0")/../../.." && pwd)
-out=$root/tools/deploy-map/test/token-vault
+root=$(cd "$(dirname "$0")/../.." && pwd)
+out=$root/map/test/token-vault
 port=${PORT:-8545}
 work=$(mktemp -d)
 anvil=
