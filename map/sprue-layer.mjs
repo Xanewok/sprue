@@ -86,7 +86,8 @@ function verifyLinks(n, edges, checked, args) {
   for (const w of argWords) if (/^0{24}/.test(w)) vouched.add('0x' + w.slice(24).toLowerCase());
 
   for (const e of edges.values()) {
+    if (e.from !== n.id) continue;
     const deploys = e.kind === 'deploy' || e.names?.some((m) => m.kind === 'deploy');
-    if (e.from === n.id && deploys && vouched.has(e.to.split(':')[1])) e.verified = true;
+    if (deploys && vouched.has(e.to.split(':')[1])) e.verified = true;
   }
 }

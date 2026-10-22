@@ -32,7 +32,7 @@ export const RULES = [
 export function matchRule(fnName, leaf) {
   if (/^_?(revoke|renounce)/i.test(fnName || '')) return null;
 
-  const root = leaf.path && leaf.path.split(/[.[]/)[0];
+  const root = leaf.path && String(leaf.path).split(/[.[]/)[0];
   for (const r of RULES) {
     if (r.fn && fnName && r.fn.test(fnName)) return r;
     if (r.param && ((leaf.name && r.param.test(leaf.name)) || (root && r.param.test(root)))) return r;

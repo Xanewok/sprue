@@ -349,6 +349,10 @@ const replay = (logs, table) => {
   return { edges: [...edges.values()], renounced, stats };
 };
 
+test('a non-string ABI input name does not throw', () => {
+  assert.equal(matchRule('setOwner', { name: 'o', path: 42 }).id, 'fn:ownership');
+});
+
 test('revokeRole is not a control link; grantRole still is', () => {
   assert.equal(matchRule('revokeRole', { name: 'account', path: 'account' }), null);
   assert.equal(matchRule('revokeRoles', { name: 'account', path: 'account' }), null);
