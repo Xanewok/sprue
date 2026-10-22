@@ -15,6 +15,7 @@ export const RULES = [
 ];
 
 export function matchRule(fnName, leaf) {
+  if (/^_?(revoke|renounce)/i.test(fnName || '')) return null;
   for (const r of RULES) {
     if (r.fn && fnName && r.fn.test(fnName)) return r;
     if (r.param && ((leaf.name && r.param.test(leaf.name)) || (leaf.path && r.param.test(leaf.path.split(/[.[]/)[0])))) return r;
@@ -122,7 +123,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
         if (cur.holder === who) return void (cur.txs.some((d) => d.i === x.i) || cur.txs.push({ i: x.i, detail }));
         end(cur, x, detail);
       }
-      // Only an owner-type slot is renounced; a role held by the zero address is held by anyone.
+      // Only an owner-type slot is renounced. A zero-address holder is open only for TimelockController's EXECUTOR_ROLE.
       if (who === ZERO && !isRole) {
         if (pending || link) return;
         const r = { from: from.id, label, event: ev.name, holder: who, spansTx: [], txs: [] };
@@ -141,7 +142,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
       }
       begin(r, x, detail);
       slots.set(key, r);
-      const z = who === ZERO && nodeOf(x.chain, who);
+      const z = who === ZERO && label === 'EXECUTOR_ROLE' && nodeOf(x.chain, who);
       if (z) z.name ||= 'anyone (zero address)';
     });
   }

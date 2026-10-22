@@ -375,15 +375,20 @@ const replay = (logs, table) => {
 test('revokeRole is not a control link; grantRole still is', () => {
   assert.equal(matchRule('revokeRole', { name: 'account', path: 'account' }), null);
   assert.equal(matchRule('revokeRoles', { name: 'account', path: 'account' }), null);
+  assert.equal(matchRule('revokeRole', { name: 'minter', path: 'minter' }), null);
+  assert.equal(matchRule('renounceRole', { name: 'owner', path: 'owner' }), null);
   assert.equal(matchRule('grantRole', { name: 'account', path: 'account' }).cls, 'authority');
 });
 
-test('a role granted to the zero address is held by anyone, not renounced', () => {
-  const m = modelOf({ 1: [{ ts: 1, txs: [{ hash: H(1), to: R, block: 1, logs: [role('RoleGranted', R, MINTER, ZERO)] }] }] });
+test('only EXECUTOR_ROLE granted to the zero address means anyone; no role is renounced', () => {
+  const m = modelOf({ 1: [{ ts: 1, txs: [{ hash: H(1), to: R, block: 1, logs: [role('RoleGranted', R, MINTER, ZERO), role('RoleGranted', R, topic('EXECUTOR_ROLE'), ZERO)] }] }] });
   assert.deepEqual(m.renounced, []);
-  const [e] = at(m, R, 'MINTER_ROLE');
+  const [e] = at(m, R, 'MINTER_ROLE'), [x] = at(m, R, 'EXECUTOR_ROLE');
   assert.equal(e.to, `1:${ZERO}`);
+  assert.equal(x.to, e.to);
   assert.equal(m.nodes.find((n) => n.id === e.to).name, 'anyone (zero address)');
+  const only = modelOf({ 1: [{ ts: 1, txs: [{ hash: H(1), to: R, block: 1, logs: [role('RoleGranted', R, MINTER, ZERO)] }] }] });
+  assert.notEqual(only.nodes.find((n) => n.id === `1:${ZERO}`).name, 'anyone (zero address)');
 });
 
 test('roles whose ids share a prefix keep their own spans', () => {
