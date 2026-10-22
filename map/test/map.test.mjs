@@ -392,6 +392,19 @@ test('roles whose ids share a prefix keep their own spans', () => {
   assert.deepEqual(edges.map((e) => e.spansTx), [[[0, 2]], [[1, null]]]);
 });
 
+test('the same signed transaction on two chains is two transactions', () => {
+  const tx = { hash: H(7), to: A, block: 1 };
+  const m = modelOf({ 1: [{ ts: 1, txs: [tx] }], 2: [{ ts: 1, txs: [tx] }] });
+  assert.equal(m.stats.txs, 2);
+});
+
+test('mined transactions replay in block order, not record-file order', () => {
+  const later = { hash: H(1), to: A, block: 9, logs: [owned(A, D, B)] };
+  const earlier = { hash: H(2), to: A, block: 3, logs: [owned(A, ZERO, D)] };
+  const m = modelOf({ 1: [{ ts: 1, txs: [later] }, { ts: 2, txs: [earlier] }] });
+  assert.deepEqual(at(m, A, 'owner').map((e) => [e.to, e.spans]), [[`1:${D}`, [[0, 1]]], [`1:${B}`, [[1, null]]]]);
+});
+
 test('a log whose indexed layout is not the declared one is skipped and counted', () => {
   const partly = { address: A, topics: [topic('OwnershipTransferred(address,address)'), word(B)], data: word(D) };
   const { edges, stats } = replay([partly, owned(A, ZERO, D)]);

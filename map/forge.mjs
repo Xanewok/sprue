@@ -51,14 +51,15 @@ export function knownSignatures(records) {
   return knownSigs;
 }
 
-// One entry per hash, at its first position, with the last receipt seen.
+// One entry per chain and hash, with the last receipt seen. Mined transactions of a chain are ordered by block and
+// index, not by the record file that holds them; unmined ones keep their place.
 export function mergeTransactions(records) {
   const byHash = new Map();
   const txs = [];
   for (const r of records) {
     const receipts = new Map(r.j.receipts.map((x) => [lc(x.transactionHash), x]));
     r.j.transactions.forEach((t, idx) => {
-      const key = t.hash ? lc(t.hash) : `${r.chain}:${lc(t.transaction?.from)}:${t.transaction?.nonce}:${r.file}:${idx}`;
+      const key = t.hash ? `${r.chain}:${lc(t.hash)}` : `${r.chain}:${lc(t.transaction?.from)}:${t.transaction?.nonce}:${r.file}:${idx}`;
       let e = byHash.get(key);
       if (!e) {
         e = { key, rec: r, t, receipt: null, sig: r.sig };
@@ -72,7 +73,15 @@ export function mergeTransactions(records) {
   }
   // A replaced transaction (same sender and nonce, never mined) gives way to the one that was.
   const mined = new Set(txs.filter((e) => e.receipt).map((e) => `${e.rec.chain}:${lc(e.t.transaction?.from)}:${Number(e.t.transaction?.nonce)}`));
-  return txs.filter((e) => e.receipt || !mined.has(`${e.rec.chain}:${lc(e.t.transaction?.from)}:${Number(e.t.transaction?.nonce)}`));
+  const kept = txs.filter((e) => e.receipt || !mined.has(`${e.rec.chain}:${lc(e.t.transaction?.from)}:${Number(e.t.transaction?.nonce)}`));
+  const pos = (e) => [Number(e.receipt.blockNumber), Number(e.receipt.transactionIndex) || 0];
+  const slots = new Map();
+  kept.forEach((e, k) => e.receipt && slots.set(e.rec.chain, [...(slots.get(e.rec.chain) || []), k]));
+  for (const ks of slots.values()) {
+    const sorted = ks.map((k) => kept[k]).sort((a, b) => pos(a)[0] - pos(b)[0] || pos(a)[1] - pos(b)[1]);
+    ks.forEach((k, n) => (kept[k] = sorted[n]));
+  }
+  return kept;
 }
 
 export class Abis {
