@@ -1315,22 +1315,25 @@ function client(place) {
   }
   const nameOf = (id) => esc(title(byId.get(id)));
   const linkKey = (e) => e.from + '>' + e.to;
-  // One line per change, newest state first: what the step created, then each link it set.
+  // One line per change, newest state first: what the step created, then each link it set. A repeated line gets
+  // its count at the \u0001 mark, else at its end.
   function stepChanges(k) {
     const lines = [];
     for (const i of D.steps[k].txs) {
       const x = D.txs[i];
-      if (x.status === 'reverted') lines.push(`<li class="rev">${esc(x.fn || x.type)} reverted: nothing created or bound</li>`);
+      const fn = x.type === 'CALL' ? (x.fn ? x.fn.split('(')[0] : 'call without data') : x.type;
+      if (x.status === 'reverted') lines.push(`<li class="rev">${esc(fn)} reverted: nothing created or bound</li>`);
       for (const id of x.created) lines.push(`<li><a href="#" data-node="${esc(id)}">+ ${nameOf(id)}</a> created</li>`);
       for (const e of D.edges)
         if (e.kind !== 'created' && e.txs.some((d) => d.i === i))
           lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${e.rule ? ` <span class="pill ctl">${esc(e.rule)}</span>` : ''}</li>`);
       if (!x.created.length && !D.edges.some((e) => e.txs.some((d) => d.i === i)) && x.status !== 'reverted')
-        lines.push(`<li class="muted">${esc(x.fn || x.type)} on ${nameOf(`${x.chain}:${x.to}`)}: no link</li>`);
+        lines.push(`<li class="muted">${esc(fn)}\u0001 on ${nameOf(`${x.chain}:${x.to}`)}</li>`);
     }
     const seen = new Map();
     for (const l of lines) seen.set(l, (seen.get(l) || 0) + 1);
-    return `<ul class="changes">${[...seen].map(([l, n]) => (n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l)).join('')}</ul>`;
+    const count = (l, n) => (l.includes('\u0001') ? l.replace('\u0001', n > 1 ? ` ×${n}` : '') : n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l);
+    return `<ul class="changes">${[...seen].map(([l, n]) => count(l, n)).join('')}</ul>`;
   }
   // The handover question: each address that a control rule points at, and what it holds; outside addresses first.
   function controls() {
