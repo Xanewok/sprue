@@ -808,12 +808,12 @@ export function place(D, G, avail) {
   const hasSide = side.size > 0;
   const x0 = hasSide ? g.pad + g.w : 0, gap0 = hasSide ? gutter : 2 * g.pad + 8;
   const fit = Math.max(1, Math.min(G.cols, Math.floor((avail - x0 - gap0 - g.pad) / (g.w + g.gx))));
-  // Widened gaps can overflow the width: then one column fewer, down to two, then narrower boxes, down to 120px.
+  // Widened gaps can overflow the width: then one column fewer, down to two, then narrower boxes, down to 112px.
   for (let cols = fit; ; cols--) {
     const L = attempt(cols);
     if (L.W <= avail) return L;
     if (cols <= Math.min(2, fit)) {
-      const w = Math.max(120, g.w - Math.ceil((L.W - avail) / cols));
+      const w = Math.max(112, g.w - Math.ceil((L.W - avail) / cols));
       if (w === g.w) return L;
       g.w = w;
       return attempt(cols);
