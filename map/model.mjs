@@ -85,7 +85,7 @@ export function build({ paths, outDir, sprue }) {
     ed.decoded = ed.decoded && decoded;
     if (!ed.txs.some((d) => d.i === x.i)) ed.txs.push({ i: x.i, detail });
   };
-  const stats = { txs: out.length, decode: { record: 0, abi: 0, positional: 0, raw: 0, none: 0, failed: 0 }, events: 0, eventsUnplaced: 0, eventsSkipped: 0 };
+  const stats = { txs: out.length, events: 0, eventsSkipped: 0 };
 
   for (const x of out) {
     const chain = x.chain;
@@ -141,7 +141,6 @@ export function build({ paths, outDir, sprue }) {
       }
     }
     x.decode = mode;
-    stats.decode[mode]++;
     const ls = trees ? leaves(trees) : [];
     x.args = trees ? trees.map((t, k) => ({ name: t.type.name ?? `arg${k}`, type: t.type.k === 'base' ? t.type.t : canonical(t.type), value: show(t) })) : [];
     if (x.status === 'reverted') continue;
@@ -257,15 +256,10 @@ export function build({ paths, outDir, sprue }) {
   stats.nodes = nodeList.length;
   stats.contracts = nodeList.filter((n) => n.kind === 'contract').length;
   stats.edges = edgeList.length;
-  stats.edgesDecoded = edgeList.filter((e) => e.decoded).length;
   stats.control = edgeList.filter((e) => e.rule || (e.event && e.cls !== 'pending')).length;
   stats.controlEvents = edgeList.filter((e) => e.event && e.cls !== 'pending').length;
-  stats.pending = edgeList.filter((e) => e.cls === 'pending').length;
-  stats.renounced = renouncedList.length;
-  stats.rules = edgeList.reduce((a, e) => (e.rule ? ((a[e.rule] = (a[e.rule] || 0) + 1), a) : a), {});
   stats.steps = steps.length;
   stats.reverted = out.filter((x) => x.status === 'reverted').length;
-  stats.verified = edgeList.filter((e) => e.verified).length;
   stats.records = records.length;
   return {
     nodes: nodeList.map(({ refs, firstRef, created, createdBy, sender, lane, ...n }) => ({ ...n, sender: !!sender, createdBy: createdBy ? createdBy.factory : null, via: createdBy?.via ?? null })),

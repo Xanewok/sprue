@@ -98,7 +98,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BU
       }
       if (!words || !/^0{24}[0-9a-f]{40}$/.test(words[ev.holder])) return skip();
       const from = nodeOf(x.chain, log.address);
-      if (!from) { stats.eventsUnplaced++; return; }
+      if (!from) return;
       stats.events++;
       const who = '0x' + words[ev.holder].slice(24);
       const isRole = ev.effect === 'roleGranted' || ev.effect === 'roleRevoked';

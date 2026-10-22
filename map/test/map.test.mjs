@@ -222,7 +222,7 @@ test('a bespoke profile in the same shape drives the replay: Celo\'s OwnerSet(ad
   const replay = (table) => {
     const edges = new Map();
     const nodeOf = (chain, a) => ({ id: `${chain}:${a}` });
-    replayControl([{ i: 0, chain: 1 }], logs, nodeOf, (chain, a) => `${chain}:${a}`, edges, { events: 0, eventsUnplaced: 0 }, table);
+    replayControl([{ i: 0, chain: 1 }], logs, nodeOf, (chain, a) => `${chain}:${a}`, edges, { events: 0 }, table);
     return [...edges.values()].map((e) => [e.from, e.to, e.label, e.event]);
   };
   assert.deepEqual(replay(compile(PROFILES)), [], 'unknown to the built-ins');
@@ -367,7 +367,7 @@ function modelOf(chains) {
 }
 const H = (i) => '0x' + String(i).padStart(64, '0');
 const replay = (logs, table) => {
-  const edges = new Map(), stats = { events: 0, eventsUnplaced: 0, eventsSkipped: 0 };
+  const edges = new Map(), stats = { events: 0, eventsSkipped: 0 };
   const renounced = replayControl(logs.map((_, i) => ({ i, chain: 1 })), logs.map((l) => [l]), (chain, a) => ({ id: `${chain}:${a}` }), (chain, a) => `${chain}:${a}`, edges, stats, table);
   return { edges: [...edges.values()], renounced, stats };
 };
