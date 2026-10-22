@@ -36,7 +36,7 @@ adds names and verified links. The command is `sprue map`.
    holders and proxy admin that the receipts' logs name. They replay in order, so each step shows who
    holds what then. Where no event says it, names come second, as a heuristic: links whose parameter or
    function names control the target (owner, admin, role, minter, treasury, `transferOwnership`,
-   `grantRole`, any `set*`/`bind*` with an address). Control links are drawn first, and contracts that
+   `grantRole`, any `set*`/`bind*` with an address; never from `revoke*` or `renounce*`). Control links are drawn first, and contracts that
    an outside address controls are marked. The panel names each entry's source: the event or the rule
    that matched.
 3. **Focus.** Hovering or selecting an address dims everything but its edges. A side panel lists the
@@ -67,7 +67,9 @@ no step id.
   - `sprue map --help` has the exit codes.
 - Arguments are decoded from the calldata and the function signature, recursively for tuples and
   arrays. A call with no calldata uses the records' argument strings instead. A call whose calldata
-  does not decode, including an array larger than the calldata, is left undecoded.
+  does not decode, including an array larger than the calldata or a fixed array of more than 10000
+  elements, is left undecoded. Where calldata fails to decode and the records hold argument strings,
+  the links read from them are flagged as not decoded.
   Where no signature is known, the map shows the selector. A calldata word that holds a known address
   is still drawn as a link, flagged as not decoded. The same holds for such a word at the end of
   initcode that the records do not split into code and arguments (a factory's `bytes` argument, or a
@@ -94,7 +96,8 @@ no step id.
 - A log counts only from an address on the map. A role id shows by its name where a profile has one,
   else short; roles are told apart by their full id.
 - A pending owner is not control. A transfer of an owner or proxy admin to the zero address shows as
-  renounced. A role granted to the zero address shows as held by "anyone (zero address)".
+  renounced. Only `EXECUTOR_ROLE` granted to the zero address shows as held by "anyone (zero address)", as in
+  `TimelockController`; any other role shows the zero address as its holder, with no claim of open access.
 - An event and a name-rule link that say the same thing in one transaction are one link with both sources.
 - Several runs of one script (`run-<timestamp>.json`) are merged. A transaction is identified by its
   chain and hash, and appears once with its final receipt. Within a chain, mined transactions replay in
