@@ -2,16 +2,14 @@
 // The page: a model drawn as one HTML file with its style, data and script inline, so it loads nothing.
 //
 // The model is embedded as JSON in a script element with `<` escaped, so text from the records cannot close the
-// element; U+2028 and U+2029, which end a line in a JS string literal, are escaped too. The script is `client`
-// called with `place`, both serialised with `toString()`.
+// element; the page reads it with `JSON.parse`, never as script. The script is `client` called with `place`,
+// both serialised with `toString()`.
 
 import { client } from './client.mjs';
 import { GEOM, place } from './layout.mjs';
 
 export function render(model, title) {
-  const data = JSON.stringify({ ...model, geom: GEOM })
-    .replace(/</g, '\\u003c')
-    .replace(/[\u2028\u2029]/g, (c) => '\\u' + c.charCodeAt(0).toString(16));
+  const data = JSON.stringify({ ...model, geom: GEOM }).replace(/</g, '\\u003c');
   const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => escapes[c]);
   const s = model.stats;
