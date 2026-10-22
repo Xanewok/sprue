@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // A static HTML map of a Foundry deployment, from forge's broadcast records. `sprue map`; see MAP.md.
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, basename, dirname, resolve } from 'node:path';
 
@@ -18,17 +19,18 @@ It reads forge's broadcast records; sprue's journals are an add-in.
   <network>         add role names, certificate-verified links and step ids from the journals of that network
                     (<paths.deployments>/<network> of sprue.json); the project must have sprue.json
   --records <path>  a broadcast directory or record file, relative to the current directory; repeatable;
-                    default: broadcast/ of the project, the nearest directory up with foundry.toml or sprue.json
+                    default: the broadcast directory forge reports for the project, the nearest directory up
+                    with foundry.toml or sprue.json (forge must be installed)
   --out <file>      write the page to file, replacing it; without --out the page goes to stdout, which must not
                     be a terminal: redirect it (\`> map.html\`) or name a file
   --title <text>    the page title; default: the project's directory name
 
-Names come from out/ when the project has it. Nothing is sent or changed but the --out file.
+Names come from the project's forge out directory when it exists. Nothing is sent or changed but the --out file.
 
   0   the page was written
   1   no transaction in the records, or the page could not be written
   2   usage error, or a refusal: a flag that does not apply, an unknown network, no project and no --records,
-      stdout is a terminal and there is no --out
+      forge config failed, stdout is a terminal and there is no --out
 `;
 
 class Refusal extends Error {}
@@ -40,6 +42,17 @@ function project(from) {
     if (existsSync(join(d, 'sprue.json')) || existsSync(join(d, 'foundry.toml'))) return d;
     if (dirname(d) === d) return null;
   }
+}
+
+// The project's own paths: foundry.toml, FOUNDRY_PROFILE and FOUNDRY_* can move them.
+function forgePaths(root) {
+  const r = spawnSync('forge', ['config', '--json'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  let config;
+  try { config = JSON.parse(r.stdout); } catch {}
+  if (r.error || r.status !== 0 || typeof config?.out !== 'string' || typeof config?.broadcast !== 'string') {
+    refuse(`forge config --json failed in ${root}: install Foundry, or name the records with --records and drop the project`);
+  }
+  return { out: resolve(root, config.out), broadcast: resolve(root, config.broadcast) };
 }
 
 // Returns the exit code.
@@ -72,10 +85,11 @@ export function cli(argv, cwd = process.cwd()) {
       if (!existsSync(join(dir, network, 'network.json'))) refuse(`unknown network '${network}': no ${join(dir, network, 'network.json')}`);
       sprue = { dir, network };
     }
-    const paths = records.length ? records.map((r) => resolve(cwd, r)) : [join(root, 'broadcast')];
+    const dirs = root ? forgePaths(root) : { out: null, broadcast: null };
+    const paths = records.length ? records.map((r) => resolve(cwd, r)) : [dirs.broadcast];
     for (const p of paths) if (!existsSync(p)) refuse(`${p} does not exist: run the deployment with --broadcast first, or name other records with --records`);
     if (outFile === null && process.stdout.isTTY) refuse('refusing to write a page to the terminal: name a file with --out map.html, or redirect: sprue map > map.html');
-    const model = build({ paths, project: root, sprue });
+    const model = build({ paths, outDir: dirs.out, sprue });
     if (!model.txs.length) { process.stderr.write(`sprue: no broadcast records with transactions under ${paths.join(' ')}: broadcast a script, or name other records with --records\n`); return 1; }
     const scripts = [...new Set(model.txs.map((x) => x.script))];
     const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';

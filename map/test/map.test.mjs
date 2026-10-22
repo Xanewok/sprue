@@ -252,6 +252,43 @@ test('a bare Foundry project maps from foundry.toml and broadcast/ alone', () =>
   }
 });
 
+test('the out and broadcast paths come from forge, not from fixed names', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    cpSync(join(fixture, 'broadcast'), join(dir, 'chain-records'), { recursive: true });
+    writeFileSync(join(dir, 'foundry.toml'), '[profile.default]\nout = "build-out"\nbroadcast = "chain-records"\n');
+    mkdirSync(join(dir, 'build-out', 'Vault.sol'), { recursive: true });
+    writeFileSync(join(dir, 'build-out', 'Vault.sol', 'Vault.json'), JSON.stringify({ abi: [{ type: 'constructor', inputs: [{ name: 'asset', type: 'address', internalType: 'address' }] }] }));
+    const { data } = run([], dir);
+    assert.deepEqual(data.nodes.map((n) => n.name).filter(Boolean).sort(), ['Token', 'Vault']);
+    assert.ok(data.edges.some((e) => e.kind === 'deploy' && e.label === 'asset'), 'names come from the configured out');
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('a project without a working forge is refused with the fix; --records alone needs no forge', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  try {
+    writeFileSync(join(bin, 'forge'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const go = (args, cwd) => spawnSync(process.execPath, [sprue, 'map', ...args], { cwd, env, encoding: 'utf8' });
+    const r = go([], fixture);
+    assert.equal(r.status, 2, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /forge config --json failed.*install Foundry.*--records/);
+    const bare = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+    try {
+      const ok = go(['--records', join(fixture, 'broadcast')], bare);
+      assert.equal(ok.status, 0, ok.stderr);
+    } finally {
+      rmSync(bare, { recursive: true });
+    }
+  } finally {
+    rmSync(bin, { recursive: true });
+  }
+});
+
 test('map refuses what does not apply and names the fix', () => {
   const refused = (args, cwd, re) => {
     const r = exec(args, cwd);

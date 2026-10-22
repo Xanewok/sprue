@@ -55,8 +55,9 @@ no step id.
 
 - `sprue map [--records <path>]... [--out <file>] [--title <text>] [<network>]` writes one offline HTML
   file with the data inlined; the page makes no network calls. The project is the nearest directory up
-  with `foundry.toml` or `sprue.json`; its `broadcast/` holds the records and its `out/`, when present,
-  the parameter names. A network adds the sprue layer from `<paths.deployments>/<network>`. Without a
+  with `foundry.toml` or `sprue.json`; the `broadcast` and `out` paths come from `forge config --json` there (so `foundry.toml`, `FOUNDRY_PROFILE`
+  and `FOUNDRY_*` apply; forge must be installed, else exit 2). The records hold the transactions and `out`,
+  when present, the parameter names. A network adds the sprue layer from `<paths.deployments>/<network>`. Without a
   project, `--records` alone is enough. The page goes to stdout, which must not be a terminal (exit 2):
   redirect it or name a file with `--out`, which replaces that file. `sprue map --help` has the exit codes.
   `node --test map/test/*.test.mjs` runs on `map/test/token-vault`, which `map/test/fixture.sh`
@@ -72,8 +73,8 @@ no step id.
 - Addresses are matched to nodes in a second pass, after every record is read. So a factory's child
   that a later call names is still linked. An address matches only by value.
 - Parameter names: `functionAbi` for calls where forge records it; constructor parameter names from
-  `out/<File>.sol/<Contract>.json` when it exists and its constructor's argument count matches the
-  record; otherwise the argument's position. Many repositories commit records but not `out/`, so the
+  `<out>/<File>.sol/<Contract>.json` when it exists and its constructor's argument count matches the
+  record; otherwise the argument's position. Many repositories commit records but not `out`, so the
   map must work without ABIs.
 - Control events are profiles in `map/control.mjs`: one data shape per standard, with its events, what each
   does (owner, pending owner, proxy admin, implementation, beacon, role granted, role revoked), the

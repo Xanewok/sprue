@@ -5,9 +5,9 @@ import { Abis, knownSignatures, mergeTransactions, readRecords, statusOf } from 
 import { layout } from './layout.mjs';
 import { sprueLayer } from './sprue-layer.mjs';
 
-export function build({ paths, project, sprue }) {
+export function build({ paths, outDir, sprue }) {
   const records = readRecords(paths);
-  const abis = new Abis(project);
+  const abis = new Abis(outDir);
   const warnings = [];
   const knownSigs = knownSignatures(records);
   const kept = mergeTransactions(records);

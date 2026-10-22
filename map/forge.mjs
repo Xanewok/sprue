@@ -76,8 +76,8 @@ export function mergeTransactions(records) {
 }
 
 export class Abis {
-  constructor(dir) {
-    this.out = dir && existsSync(join(dir, 'out')) ? join(dir, 'out') : null;
+  constructor(out) {
+    this.out = out && existsSync(out) ? out : null;
     this.cache = new Map();
     this.selectors = null;
   }
