@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build, keccak256, place, GEOM } from '../index.mjs';
+import { PROFILES, compile, replayControl } from '../control.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const map = join(here, '..', 'index.mjs');
@@ -205,4 +206,17 @@ test('a pending owner is shown but not counted as control; the proxy admin is re
   assert.deepEqual(at(m, P, 'owner').map((e) => [e.to, e.spans]), [[`1:${D}`, [[5, null]]]]);
   assert.deepEqual(at(m, X, 'proxy admin').map((e) => [e.to, e.spans]), [[`1:${B}`, [[7, null]]]]);
   assert.equal(m.stats.control, 6, 'three owners, two roles and the proxy admin; not the pending owner');
+});
+
+test('a bespoke profile in the same shape drives the replay: Celo\'s OwnerSet(address)', () => {
+  const celo = { name: 'Celo Ownable', events: [{ sig: 'OwnerSet(address)', effect: 'owner', holder: 0 }] };
+  const logs = [[{ address: A, logIndex: '0x0', topics: [topic('OwnerSet(address)'), word(D)], data: '0x' }]];
+  const replay = (table) => {
+    const edges = new Map();
+    const nodeOf = (chain, a) => ({ id: `${chain}:${a}` });
+    replayControl([{ i: 0, chain: 1 }], logs, nodeOf, (chain, a) => `${chain}:${a}`, edges, { events: 0, eventsUnplaced: 0 }, table);
+    return [...edges.values()].map((e) => [e.from, e.to, e.label, e.event]);
+  };
+  assert.deepEqual(replay(compile(PROFILES)), [], 'unknown to the built-ins');
+  assert.deepEqual(replay(compile([...PROFILES, celo])), [[`1:${A}`, `1:${D}`, 'owner', 'OwnerSet']]);
 });

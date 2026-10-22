@@ -22,22 +22,45 @@ export function matchRule(fnName, leaf) {
   return null;
 }
 
-const CONTROL_EVENTS = new Map([
-  ['OwnershipTransferred(address,address)', { slot: 'owner' }],
-  ['OwnershipTransferStarted(address,address)', { slot: 'pending owner', pending: true }],
-  ['AdminChanged(address,address)', { slot: 'proxy admin' }],
-  ['RoleGranted(bytes32,address,address)', { role: 'grant' }],
-  ['RoleRevoked(bytes32,address,address)', { role: 'revoke' }],
-].map(([sig, e]) => [topicOf(sig), { ...e, name: sig.split('(')[0] }]));
-// OpenZeppelin's AccessControl and TimelockController names only; a project's own role shows by its short id.
-const ROLES = new Map([['0x' + '0'.repeat(64), 'DEFAULT_ADMIN_ROLE'], ...['ADMIN_ROLE', 'MINTER_ROLE', 'BURNER_ROLE', 'PAUSER_ROLE',
-  'UPGRADER_ROLE', 'OPERATOR_ROLE', 'GOVERNOR_ROLE', 'MANAGER_ROLE', 'SNAPSHOT_ROLE', 'URI_SETTER_ROLE', 'TIMELOCK_ADMIN_ROLE',
-  'PROPOSER_ROLE', 'EXECUTOR_ROLE', 'CANCELLER_ROLE'].map((n) => [topicOf(n), n])]);
-const roleName = (id) => ROLES.get(id) || `role ${id.slice(0, 10)}…`;
+// A standard is data: the events it emits, what each does, and which parameter (by position in the event's
+// declared order, indexed or not) holds the holder and the role. effect: owner | pendingOwner | proxyAdmin
+// (one holder per slot), roleGranted | roleRevoked (any number of holders per role).
+export const PROFILES = [
+  { name: 'Ownable', events: [{ sig: 'OwnershipTransferred(address,address)', effect: 'owner', holder: 1 }] },
+  { name: 'Ownable2Step', events: [{ sig: 'OwnershipTransferStarted(address,address)', effect: 'pendingOwner', holder: 1 }] },
+  {
+    name: 'AccessControl',
+    events: [
+      { sig: 'RoleGranted(bytes32,address,address)', effect: 'roleGranted', role: 0, holder: 1 },
+      { sig: 'RoleRevoked(bytes32,address,address)', effect: 'roleRevoked', role: 0, holder: 1 },
+    ],
+    // OpenZeppelin AccessControl and TimelockController names only; a project's own role shows by its short id.
+    roles: ['DEFAULT_ADMIN_ROLE', 'ADMIN_ROLE', 'MINTER_ROLE', 'BURNER_ROLE', 'PAUSER_ROLE', 'UPGRADER_ROLE', 'OPERATOR_ROLE',
+      'GOVERNOR_ROLE', 'MANAGER_ROLE', 'SNAPSHOT_ROLE', 'URI_SETTER_ROLE', 'TIMELOCK_ADMIN_ROLE', 'PROPOSER_ROLE', 'EXECUTOR_ROLE',
+      'CANCELLER_ROLE'],
+  },
+  { name: 'ERC-1967', events: [{ sig: 'AdminChanged(address,address)', effect: 'proxyAdmin', holder: 1 }] },
+];
+const SLOT = { owner: 'owner', pendingOwner: 'pending owner', proxyAdmin: 'proxy admin' };
+
+export function compile(profiles) {
+  const events = new Map(), roles = new Map();
+  for (const p of profiles) {
+    for (const e of p.events) {
+      const params = e.sig.slice(e.sig.indexOf('(') + 1, -1).split(',').filter(Boolean);
+      events.set(topicOf(e.sig), { ...e, name: e.sig.split('(')[0], arity: params.length, profile: p.name });
+    }
+    // OpenZeppelin defines DEFAULT_ADMIN_ROLE as zero, not as a hash of its name.
+    for (const n of p.roles || []) roles.set(n === 'DEFAULT_ADMIN_ROLE' ? '0x' + '0'.repeat(64) : topicOf(n), n);
+  }
+  return { events, roles };
+}
+const BUILTIN = compile(PROFILES);
 
 // Replays control events in transaction and log order. A slot (owner, pending owner, proxy admin) has one holder,
 // so a new holder ends the last one's span; a role has any number. Spans are [first, end) transaction indices.
-export function replayControl(out, logsOf, nodeOf, ref, edges, stats) {
+export function replayControl(out, logsOf, nodeOf, ref, edges, stats, table = BUILTIN) {
+  const roleName = (id) => table.roles.get(id) || `role ${id.slice(0, 10)}…`;
   const slots = new Map(), renounced = [];
   const isOpen = (r) => r.spansTx.length && r.spansTx[r.spansTx.length - 1][1] === null;
   const begin = (r, x, detail) => {
@@ -51,24 +74,27 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats) {
   for (const x of out) {
     const logs = [...(logsOf[x.i] || [])].sort((a, b) => Number(a.logIndex) - Number(b.logIndex));
     logs.forEach((log, k) => {
-      const ev = CONTROL_EVENTS.get(lc(log.topics?.[0]));
+      const ev = table.events.get(lc(log.topics?.[0]));
       if (!ev) return;
       // Topics after topic0, then data words: the declared order whether a library indexes all, none or the first.
       const words = [...log.topics.slice(1), ...(String(log.data || '0x').slice(2).match(/.{64}/g) || [])].map((w) => lc(w).replace(/^0x/, ''));
-      if (words.length !== (ev.role ? 3 : 2) || !/^0{24}[0-9a-f]{40}$/.test(words[1])) return;
+      if (words.length !== ev.arity || !/^0{24}[0-9a-f]{40}$/.test(words[ev.holder])) return;
       const from = nodeOf(x.chain, log.address);
       if (!from) { stats.eventsUnplaced++; return; }
       stats.events++;
-      const who = '0x' + words[1].slice(24);
-      const label = ev.role ? roleName('0x' + words[0]) : ev.slot;
-      const detail = `${ev.name}${ev.role ? ' ' + label : ''}: ${ev.role === 'revoke' ? 'revoked from' : ev.slot ? 'now' : 'to'} ${who} (log ${log.logIndex !== undefined ? Number(log.logIndex) : k})`;
-      const key = `${from.id}|${label}${ev.role ? '|' + who : ''}`;
+      const who = '0x' + words[ev.holder].slice(24);
+      const isRole = ev.effect === 'roleGranted' || ev.effect === 'roleRevoked';
+      const revoke = ev.effect === 'roleRevoked';
+      const pending = ev.effect === 'pendingOwner';
+      const label = isRole ? roleName('0x' + words[ev.role]) : SLOT[ev.effect];
+      const detail = `${ev.name}${isRole ? ' ' + label : ''}: ${revoke ? 'revoked from' : isRole ? 'to' : 'now'} ${who} (log ${log.logIndex !== undefined ? Number(log.logIndex) : k})`;
+      const key = `${from.id}|${label}${isRole ? '|' + who : ''}`;
       const cur = slots.get(key);
-      if (ev.role === 'revoke') {
+      if (revoke) {
         if (cur && isOpen(cur)) end(cur, x, detail);
         return;
       }
-      if (ev.slot === 'owner') {
+      if (ev.effect === 'owner') {
         const p = slots.get(`${from.id}|pending owner`);
         if (p && isOpen(p)) end(p, x, detail);
       }
@@ -77,7 +103,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats) {
         end(cur, x, detail);
       }
       if (who === ZERO) {
-        if (ev.pending) return;
+        if (pending) return;
         const r = { from: from.id, label, event: ev.name, holder: who, spansTx: [], txs: [] };
         renounced.push(r);
         begin(r, x, detail);
@@ -89,7 +115,7 @@ export function replayControl(out, logsOf, nodeOf, ref, edges, stats) {
       let r = edges.get(id);
       if (!r) {
         // A contract that holds its own slot gets no link, but its span still ends the last holder's.
-        r = { id, from: from.id, to, kind: 'event', label, rule: null, cls: ev.pending ? 'pending' : 'authority', event: ev.name, decoded: true, txs: [], verified: false, spansTx: [], holder: who };
+        r = { id, from: from.id, to, kind: 'event', label, rule: null, cls: pending ? 'pending' : 'authority', event: ev.name, decoded: true, txs: [], verified: false, spansTx: [], holder: who };
         if (to !== from.id) edges.set(id, r);
       }
       begin(r, x, detail);
