@@ -375,6 +375,98 @@ function matchRule(fnName, leaf) {
   return null;
 }
 
+// ---------- control events ----------
+
+const topicOf = (s) => '0x' + keccak256(new TextEncoder().encode(s));
+const CONTROL_EVENTS = new Map([
+  ['OwnershipTransferred(address,address)', { slot: 'owner' }],
+  ['OwnershipTransferStarted(address,address)', { slot: 'pending owner', pending: true }],
+  ['AdminChanged(address,address)', { slot: 'proxy admin' }],
+  ['RoleGranted(bytes32,address,address)', { role: 'grant' }],
+  ['RoleRevoked(bytes32,address,address)', { role: 'revoke' }],
+].map(([sig, e]) => [topicOf(sig), { ...e, name: sig.split('(')[0] }]));
+// OpenZeppelin's AccessControl and TimelockController names only; a project's own role shows by its short id.
+const ROLES = new Map([['0x' + '0'.repeat(64), 'DEFAULT_ADMIN_ROLE'], ...['ADMIN_ROLE', 'MINTER_ROLE', 'BURNER_ROLE', 'PAUSER_ROLE',
+  'UPGRADER_ROLE', 'OPERATOR_ROLE', 'GOVERNOR_ROLE', 'MANAGER_ROLE', 'SNAPSHOT_ROLE', 'URI_SETTER_ROLE', 'TIMELOCK_ADMIN_ROLE',
+  'PROPOSER_ROLE', 'EXECUTOR_ROLE', 'CANCELLER_ROLE'].map((n) => [topicOf(n), n])]);
+const roleName = (id) => ROLES.get(id) || `role ${id.slice(0, 10)}…`;
+const ZERO = '0x' + '0'.repeat(40);
+
+// Replays control events in transaction and log order. A slot (owner, pending owner, proxy admin) has one holder,
+// so a new holder ends the last one's span; a role has any number. Spans are [first, end) transaction indices.
+function replayControl(out, logsOf, nodeOf, ref, edges, stats) {
+  const slots = new Map(), renounced = [];
+  const isOpen = (r) => r.spansTx.length && r.spansTx[r.spansTx.length - 1][1] === null;
+  const begin = (r, x, detail) => {
+    r.spansTx.push([x.i, null]);
+    r.txs.push({ i: x.i, detail });
+  };
+  const end = (r, x, detail) => {
+    r.spansTx[r.spansTx.length - 1][1] = x.i;
+    r.txs.push({ i: x.i, detail, gone: true });
+  };
+  for (const x of out) {
+    const logs = [...(logsOf[x.i] || [])].sort((a, b) => Number(a.logIndex) - Number(b.logIndex));
+    logs.forEach((log, k) => {
+      const ev = CONTROL_EVENTS.get(lc(log.topics?.[0]));
+      if (!ev) return;
+      // Topics after topic0, then data words: the declared order whether a library indexes all, none or the first.
+      const words = [...log.topics.slice(1), ...(String(log.data || '0x').slice(2).match(/.{64}/g) || [])].map((w) => lc(w).replace(/^0x/, ''));
+      if (words.length !== (ev.role ? 3 : 2) || !/^0{24}[0-9a-f]{40}$/.test(words[1])) return;
+      const from = nodeOf(x.chain, log.address);
+      if (!from) { stats.eventsUnplaced++; return; }
+      stats.events++;
+      const who = '0x' + words[1].slice(24);
+      const label = ev.role ? roleName('0x' + words[0]) : ev.slot;
+      const detail = `${ev.name}${ev.role ? ' ' + label : ''}: ${ev.role === 'revoke' ? 'revoked from' : ev.slot ? 'now' : 'to'} ${who} (log ${log.logIndex !== undefined ? Number(log.logIndex) : k})`;
+      const key = `${from.id}|${label}${ev.role ? '|' + who : ''}`;
+      const cur = slots.get(key);
+      if (ev.role === 'revoke') {
+        if (cur && isOpen(cur)) end(cur, x, detail);
+        return;
+      }
+      if (ev.slot === 'owner') {
+        const p = slots.get(`${from.id}|pending owner`);
+        if (p && isOpen(p)) end(p, x, detail);
+      }
+      if (cur && isOpen(cur)) {
+        if (cur.holder === who) return void (cur.txs.some((d) => d.i === x.i) || cur.txs.push({ i: x.i, detail }));
+        end(cur, x, detail);
+      }
+      if (who === ZERO) {
+        if (ev.pending) return;
+        const r = { from: from.id, label, event: ev.name, holder: who, spansTx: [], txs: [] };
+        renounced.push(r);
+        begin(r, x, detail);
+        slots.set(key, r);
+        return;
+      }
+      const to = ref(x.chain, who, x.i);
+      const id = `event|${from.id}|${to}|${label}`;
+      let r = edges.get(id);
+      if (!r) {
+        // A contract that holds its own slot gets no link, but its span still ends the last holder's.
+        r = { id, from: from.id, to, kind: 'event', label, rule: null, cls: ev.pending ? 'pending' : 'authority', event: ev.name, decoded: true, txs: [], verified: false, spansTx: [], holder: who };
+        if (to !== from.id) edges.set(id, r);
+      }
+      begin(r, x, detail);
+      slots.set(key, r);
+    });
+  }
+  // A name-rule link that an event in the same transaction confirms is one link with two sources.
+  const evs = [...edges.values()].filter((e) => e.kind === 'event');
+  for (const n of [...edges.values()]) {
+    if (n.kind === 'event' || n.kind === 'created' || n.cls !== 'authority') continue;
+    const e = evs.find((v) => v.from === n.from && v.to === n.to && n.txs.some((d) => v.txs.some((t) => t.i === d.i && !t.gone)));
+    if (!e) continue;
+    (e.names ||= []).push({ kind: n.kind, label: n.label, rule: n.rule });
+    for (const d of n.txs) if (!e.txs.some((t) => t.i === d.i)) e.txs.push(d);
+    e.txs.sort((a, b) => a.i - b.i);
+    edges.delete(n.id);
+  }
+  return renounced;
+}
+
 // ---------- the model ----------
 
 export function build({ paths, project, sprue }) {
@@ -427,12 +519,13 @@ export function build({ paths, project, sprue }) {
     return n;
   };
 
-  const out = [];
+  const out = [], logsOf = [];
   // Pass 1: transactions and the contracts they create.
   kept.forEach((e, i) => {
     const { t, rec, receipt } = e;
     const tx = t.transaction || {};
     const status = statusOf(receipt);
+    logsOf[i] = status === 'ok' ? receipt.logs || [] : [];
     const chain = rec.chain;
     const type = t.transactionType;
     const input = tx.input ?? tx.data ?? null;
@@ -486,7 +579,7 @@ export function build({ paths, project, sprue }) {
     ed.decoded = ed.decoded && decoded;
     if (!ed.txs.some((d) => d.i === x.i)) ed.txs.push({ i: x.i, detail });
   };
-  const stats = { txs: out.length, decode: { record: 0, abi: 0, positional: 0, raw: 0, none: 0, failed: 0 } };
+  const stats = { txs: out.length, decode: { record: 0, abi: 0, positional: 0, raw: 0, none: 0, failed: 0 }, events: 0, eventsUnplaced: 0 };
 
   for (const x of out) {
     const chain = x.chain;
@@ -597,6 +690,13 @@ export function build({ paths, project, sprue }) {
       n.createdBy.via ? `via ${n.createdBy.via}` : '');
     ensure(n.chain, n.createdBy.factory);
   }
+  const ref = (chain, addr, i) => {
+    const n = ensure(chain, addr);
+    n.refs++;
+    n.firstRef = Math.min(n.firstRef, i);
+    return n.id;
+  };
+  const renounced = replayControl(out, logsOf, nodeOf, ref, edges, stats);
 
   // Node kinds for what the deployment did not create.
   for (const n of nodes.values()) {
@@ -623,7 +723,9 @@ export function build({ paths, project, sprue }) {
     n.createdStep = n.created === null ? null : out[n.created].step;
     n.firstStep = n.created !== null ? n.createdStep : n.firstRef === Infinity ? 0 : out[n.firstRef].step;
   }
-  const edgeList = [...edges.values()].map((e) => ({ ...e, firstStep: Math.min(...e.txs.map((d) => out[d.i].step)) }));
+  const stepSpans = (spans) => spans.map(([a, b]) => [out[a].step, b === null ? null : out[b].step]);
+  const edgeList = [...edges.values()].map(({ spansTx, holder, ...e }) => ({ ...e, firstStep: Math.min(...e.txs.map((d) => out[d.i].step)), ...(spansTx ? { spans: stepSpans(spansTx) } : {}) }));
+  const renouncedList = renounced.map(({ spansTx, holder, ...r }) => ({ ...r, spans: stepSpans(spansTx) }));
 
   // An outside address is named by how the records use it: the deployer, the parameter it was passed as, the
   // factory of a child, or the call it received.
@@ -632,22 +734,17 @@ export function build({ paths, project, sprue }) {
   for (const n of nodes.values()) {
     if (n.kind === 'contract' || n.name) continue;
     if (n.kind === 'sender') { n.label = 'deployer'; continue; }
-    const into = edgeList.filter((e) => e.to === n.id && e.kind !== 'created').sort((a, b) => !!b.rule - !!a.rule || steps1(a) - steps1(b));
+    const weight = (e) => (e.event && e.cls !== 'pending' ? 2 : e.rule ? 1 : 0);
+    const into = edgeList.filter((e) => e.to === n.id && e.kind !== 'created').sort((a, b) => weight(b) - weight(a) || steps1(a) - steps1(b));
     const made = edgeList.find((e) => e.from === n.id && e.kind === 'created');
     const called = out.find((x) => x.type === 'CALL' && x.chain === n.chain && x.to === n.addr && x.fn);
     if (into.length) {
       const e = into[0], src = nameOf(nodes.get(e.from));
       const m = /^(\w+)\((.*)\)$/.exec(e.label);
-      n.label = e.kind === 'deploy' ? (/^initcode/.test(e.label) ? `in ${src} initcode` : `${e.label} of ${src}`)
+      n.label = e.kind === 'event' ? `${e.label} of ${src}` : e.kind === 'deploy' ? (/^initcode/.test(e.label) ? `in ${src} initcode` : `${e.label} of ${src}`)
         : m ? `${m[2]} via ${m[1]}` : `in ${e.label.split(' ')[0]} calldata`;
     } else if (made) n.label = `factory of ${nameOf(nodes.get(made.to))}`;
     else if (called) n.label = `target of ${called.fn.split('(')[0]}`;
-  }
-
-  // Contracts that an outside address controls.
-  for (const e of edgeList) {
-    const to = nodes.get(e.to), from = nodes.get(e.from);
-    if (e.cls === 'authority' && to && from && to.kind !== 'contract') (from.controlledBy ||= []).push({ by: to.id, rule: e.rule });
   }
 
   const { list: nodeList, lanes } = layout([...nodes.values()], out);
@@ -655,7 +752,10 @@ export function build({ paths, project, sprue }) {
   stats.contracts = nodeList.filter((n) => n.kind === 'contract').length;
   stats.edges = edgeList.length;
   stats.edgesDecoded = edgeList.filter((e) => e.decoded).length;
-  stats.control = edgeList.filter((e) => e.rule).length;
+  stats.control = edgeList.filter((e) => e.rule || (e.event && e.cls !== 'pending')).length;
+  stats.controlEvents = edgeList.filter((e) => e.event && e.cls !== 'pending').length;
+  stats.pending = edgeList.filter((e) => e.cls === 'pending').length;
+  stats.renounced = renouncedList.length;
   stats.rules = edgeList.reduce((a, e) => (e.rule ? ((a[e.rule] = (a[e.rule] || 0) + 1), a) : a), {});
   stats.steps = steps.length;
   stats.reverted = out.filter((x) => x.status === 'reverted').length;
@@ -664,6 +764,7 @@ export function build({ paths, project, sprue }) {
   return {
     nodes: nodeList.map(({ refs, firstRef, created, createdBy, sender, lane, ...n }) => ({ ...n, sender: !!sender, createdBy: createdBy ? createdBy.factory : null, via: createdBy?.via ?? null })),
     edges: edgeList,
+    renounced: renouncedList,
     txs: out.map(({ arguments: _a, input, functionAbi, ...x }) => ({ ...x, selector: input && input.length >= 10 ? input.slice(0, 10) : null, bytes: input ? (input.length - 2) / 2 : 0 })),
     steps,
     lanes,
@@ -708,7 +809,7 @@ function sprueLayer({ dir, network }, out, nodes, edges, warnings) {
         const argWords = String(j[k + 'Args'] || '').replace(/^0x/, '').match(/.{64}/g) || [];
         for (const w of argWords) if (/^0{24}/.test(w)) vouched.add('0x' + w.slice(24).toLowerCase());
         for (const e of edges.values())
-          if (e.from === n.id && e.kind === 'deploy' && vouched.has(e.to.split(':')[1])) e.verified = true;
+          if (e.from === n.id && (e.kind === 'deploy' || e.names?.some((m) => m.kind === 'deploy')) && vouched.has(e.to.split(':')[1])) e.verified = true;
       }
     }
   }
@@ -1117,6 +1218,7 @@ svg{display:block}svg text{fill:var(--fg);font-size:12px}
 .edge path{fill:none;stroke:var(--edge);stroke-width:1.3;opacity:.75}.edge.created path{stroke-dasharray:1 3;stroke-linecap:round}
 .edge.call path{stroke-dasharray:6 3}.edge.verified path{stroke-dasharray:none;stroke-width:2}
 .lens .edge path{opacity:.45}.lens .edge.ctl path{opacity:1;stroke:var(--accent);stroke-width:2}
+.edge.event path{stroke:var(--accent);stroke-width:2}.edge.event.pending path{stroke-dasharray:2 3}
 .elabel{font-size:11px;fill:var(--fg);paint-order:stroke;stroke:var(--bg);stroke-width:4px;stroke-linejoin:round;display:none;pointer-events:none}
 .elabel.shown{display:block}
 .edge.now path{stroke:var(--new);stroke-width:2.6;opacity:1}.edge.future{display:none}
@@ -1146,6 +1248,15 @@ function client(place) {
   const cut = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s));
   const clip = (s, n = 90) => (String(s).length > n ? String(s).slice(0, n) + `… (${String(s).length} chars)` : String(s));
   const byId = new Map(D.nodes.map((n) => [n.id, n]));
+  // An event's link holds over its spans of steps; a link from the records' arguments holds from its first step on.
+  const inSpans = (e, s) => e.spans.some(([a, b]) => a <= s && (b === null || s < b));
+  const shownAt = (e, s) => (e.spans ? inSpans(e, s) : e.firstStep <= s);
+  const isCtl = (e) => !!(e.rule || e.event) && e.cls !== 'pending';
+  const ctlAt = (e, s) => isCtl(e) && shownAt(e, s);
+  const outsideCtl = (e) => e.cls === 'authority' && isCtl(e) && byId.get(e.to).kind !== 'contract';
+  const controllers = (id, s) => D.edges.filter((e) => e.from === id && outsideCtl(e) && shownAt(e, s));
+  const sources = (e) => [e.event ? `event ${e.event}` : null, ...(e.rule ? [e.rule] : []).concat((e.names || []).map((m) => m.rule)).map((r) => `name rule ${r}`)].filter(Boolean);
+  const spanText = (e) => e.spans.map(([a, b]) => (b === null ? `from step ${a + 1}` : b === a ? `set and ended in step ${a + 1}` : `steps ${a + 1}–${b}`)).join(', ');
   const title = (n) => n.role || n.name || n.label || { sender: 'deployer', outside: 'outside address', 'outside-contract': 'outside contract' }[n.kind] || 'unnamed';
   const kindText = { contract: 'created here', sender: 'sender (EOA)', outside: 'outside address: an EOA, multisig or contract', 'outside-contract': 'outside contract' };
   const NS = 'http://www.w3.org/2000/svg';
@@ -1159,7 +1270,7 @@ function client(place) {
   const view = $('#mapwrap');
   const svg = el('svg', { role: 'img', 'aria-label': 'Deployment map; the table view lists the same transactions' });
   view.appendChild(svg);
-  const nodeEls = new Map(), edgeEls = new Map();
+  const nodeEls = new Map(), edgeEls = new Map(), markEls = new Map();
   const multiChain = new Set(D.nodes.map((n) => n.chain)).size > 1;
   // Fits an SVG text to a width: smaller type down to `min` px, then shortened, with the whole text as its tooltip.
   const fit = (t, text, w, min) => {
@@ -1195,6 +1306,7 @@ function client(place) {
     svg.replaceChildren();
     nodeEls.clear();
     edgeEls.clear();
+    markEls.clear();
     const defs = el('defs', {}, svg);
     for (const [id, color] of [['arr', 'var(--edge)'], ['arrc', 'var(--accent)']]) {
       const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
@@ -1221,12 +1333,14 @@ function client(place) {
       el('rect', { width: g.w, height: g.h, rx: 7 }, inner);
       // The lane title names the chain, so the name has the box's whole width.
       fit(el('text', { x: 9, y: 18 }, inner), title(n), g.w - 16, 10);
-      const marks = (n.controlledBy ? 14 : 0) + (n.certified ? 14 : 0);
+      const everCtl = D.edges.some((e) => e.from === n.id && outsideCtl(e));
+      const marks = (everCtl ? 14 : 0) + (n.certified ? 14 : 0);
       fit(el('text', { x: 9, y: 35, class: 'addr' }, inner), short(n.addr) + (n.role && n.name ? ' · ' + n.name : ''), g.w - 16 - marks);
-      if (n.controlledBy) {
+      if (everCtl) {
         const m = el('text', { x: g.w - (n.certified ? 30 : 16), y: 36, class: 'mark' }, inner);
         m.textContent = '⚑';
         el('title', {}, m).textContent = 'controlled by an outside address';
+        markEls.set(n.id, m);
       }
       if (n.certified) el('text', { x: g.w - 16, y: 36, class: 'cert' }, inner).textContent = '✓';
       el('title', {}, ng).textContent = `${title(n)}\n${n.addr}\nchain ${n.chain} · ${kindText[n.kind]}`;
@@ -1237,26 +1351,20 @@ function client(place) {
       nodeEls.set(n.id, ng);
     }
 
-    // One drawn link per ordered pair; its style is its strongest edge's.
-    const rank = { deploy: 2, call: 1, created: 0 };
-    for (const r of [...L.routes].sort((a, b) => a.edges.some((e) => e.rule) - b.edges.some((e) => e.rule))) {
-      const kind = r.edges.reduce((a, e) => (rank[e.kind] > rank[a] ? e.kind : a), r.edges[0].kind);
-      const ctl = r.edges.some((e) => e.rule);
-      const cls = ['edge', kind];
-      if (ctl) cls.push('ctl');
-      if (D.sprue && r.edges.some((e) => e.verified)) cls.push('verified');
-      const eg = el('g', { class: cls.join(' ') }, edgesG);
+    // One drawn link per ordered pair; apply() styles it as its strongest edge at the step.
+    for (const r of [...L.routes].sort((a, b) => a.edges.some(isCtl) - b.edges.some(isCtl))) {
+      const eg = el('g', { class: 'edge' + (D.sprue && r.edges.some((e) => e.verified) ? ' verified' : '') }, edgesG);
       const d = rounded(r.pts);
-      el('path', { d, 'marker-end': ctl ? 'url(#arrc)' : 'url(#arr)' }, eg);
+      const path = el('path', { d }, eg);
       el('path', { d, class: 'hit' }, eg);
       const text = r.edges.length === 1 ? r.edges[0].label + (r.edges[0].rule ? ` [${r.edges[0].rule}]` : '') : `${r.edges.length} links: ${r.edges.map((e) => e.label).join(', ')}`;
       const lt = el('text', { x: r.labelAt[0], y: r.labelAt[1] - 3, 'text-anchor': 'middle', class: 'elabel' }, labelsG);
       lt.textContent = cut(text, 46);
-      el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${r.edges.map((e) => e.label + (e.rule ? ` (rule ${e.rule})` : '') + (e.verified ? ' (certificate-verified)' : '')).join('\n')}`;
+      el('title', {}, eg).textContent = `${title(byId.get(r.from))} → ${title(byId.get(r.to))}\n${r.edges.map((e) => e.label + (sources(e).length ? ` (${sources(e).join(', ')})` : '') + (e.verified ? ' (certificate-verified)' : '')).join('\n')}`;
       eg.addEventListener('mouseenter', () => hover({ link: r.key }));
       eg.addEventListener('mouseleave', () => hover(null));
       eg.addEventListener('click', (ev) => { ev.stopPropagation(); select({ link: r.key }); });
-      edgeEls.set(r.key, { g: eg, label: lt, r, firstStep: Math.min(...r.edges.map((e) => e.firstStep)) });
+      edgeEls.set(r.key, { g: eg, path, label: lt, r });
     }
     for (const b of L.badges) {
       const bg = el('g', { class: 'badge', 'data-node': b.to || b.from }, labelsG);
@@ -1288,9 +1396,12 @@ function client(place) {
   }
   function edgeBlock(e) {
     const a = byId.get(e.from), b = byId.get(e.to);
-    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by' }[e.kind]}: <code>${esc(e.label)}</code>
-      ${e.rule ? `<span class="pill ctl">${esc(e.rule)}</span>` : ''}${D.sprue ? (e.verified ? '<span class="pill ok">certificate-verified</span>' : '<span class="pill">not certified</span>') : ''}
-      ${e.decoded ? '' : '<span class="pill bad">found in raw calldata</span>'}</div>${e.txs.map((d) => txLine(d.i, d.detail)).join('')}`;
+    return `<h3>${esc(title(a))} → ${esc(title(b))}</h3><div>${{ deploy: 'set at deploy', call: 'set by call', created: 'created by', event: 'emitted' }[e.kind]}: <code>${esc(e.label)}</code>
+      ${pills(e)}${D.sprue ? (e.verified ? '<span class="pill ok">certificate-verified</span>' : '<span class="pill">not certified</span>') : ''}
+      ${e.decoded ? '' : '<span class="pill bad">found in raw calldata</span>'}</div>${e.names ? `<div class="muted">also ${e.names.map((m) => esc(m.label)).join(', ')}</div>` : ''}${e.spans ? `<div class="muted">holds ${spanText(e)}</div>` : ''}${e.txs.map((d) => txLine(d.i, d.detail)).join('')}`;
+  }
+  function pills(e) {
+    return (e.cls === 'pending' ? '<span class="pill">pending, not control</span>' : '') + sources(e).map((t) => `<span class="pill ctl">${esc(t)}</span>`).join('');
   }
   function panel() {
     const P = $('#panel');
@@ -1298,25 +1409,27 @@ function client(place) {
       const n = byId.get(S.sel.node);
       const es = D.edges.filter((e) => e.from === n.id || e.to === n.id);
       const made = D.txs.find((x) => x.created.includes(n.id));
+      const ctlNow = controllers(n.id, S.step);
       P.innerHTML = `<h2>${esc(title(n))}</h2><div><code>${esc(n.addr)}</code></div><div class="muted">chain ${n.chain} · ${esc(kindText[n.kind])}${n.name && n.role ? ' · ' + esc(n.name) : ''}</div>
         ${n.certified ? '<div><span class="pill ok">certified in its journal</span></div>' : ''}
-        ${n.controlledBy ? `<div><span class="pill ctl">controlled by an outside address</span> ${n.controlledBy.map((c) => esc(title(byId.get(c.by))) + ' (' + esc(c.rule) + ')').join(', ')}</div>` : ''}
+        ${ctlNow.length ? `<div><span class="pill ctl">controlled by an outside address</span> ${ctlNow.map((e) => `${esc(title(byId.get(e.to)))} (${esc(e.label)}; ${esc(sources(e).join(', '))})`).join(', ')}</div>` : ''}
+        ${D.renounced.filter((r) => r.from === n.id && inSpans(r, S.step)).map((r) => `<div><span class="pill">${esc(r.label)} renounced</span> ${spanText(r)} (event ${esc(r.event)})</div>`).join('')}
         ${made ? `<h3>Created</h3>${txLine(made.i)}` : ''}${es.length ? es.map(edgeBlock).join('') : '<p class="muted">No links.</p>'}`;
     } else if (S.sel && S.sel.link) {
       P.innerHTML = linkBlock(S.sel.link);
     } else {
       const s = D.stats;
-      P.innerHTML = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} outside addresses, ${s.edges} links (${s.control} matched a control rule), ${s.steps} steps${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>
+      P.innerHTML = `<h2>Deployment</h2><p>${s.contracts} contracts created, ${s.nodes - s.contracts} outside addresses, ${s.edges} links (${s.control} for control: ${s.controlEvents} from events, ${s.control - s.controlEvents} from names), ${s.steps} steps${s.reverted ? `, ${s.reverted} reverted` : ''}.</p>
         ${D.warnings.map((w) => `<p class="rev">${esc(w)}</p>`).join('')}
         <h3>Step ${S.step + 1}: what changed</h3>${stepChanges(S.step)}
-        <h3>Who controls what</h3>${controls()}
-        <p class="muted">Control is read from function and parameter names (the rule is shown), so it is a heuristic. Select a line, an address or a link for the transactions behind it.</p>`;
+        <h3>Who controls what at step ${S.step + 1}</h3>${controls(S.step)}
+        <p class="muted">Control comes from the events the chain emitted (ownership, roles, proxy admin) and else from function and parameter names, a heuristic. Each line names its source. Select a line, an address or a link for the transactions behind it.</p>`;
     }
   }
   const nameOf = (id) => esc(title(byId.get(id)));
   const linkKey = (e) => e.from + '>' + e.to;
-  // One line per change, newest state first: what the step created, then each link it set. A repeated line gets
-  // its count at the \u0001 mark, else at its end.
+  // One line per change, newest state first: what the step created, then each link it set or ended. A repeated
+  // line gets its count at the \u0001 mark, else at its end.
   function stepChanges(k) {
     const lines = [];
     for (const i of D.steps[k].txs) {
@@ -1324,24 +1437,33 @@ function client(place) {
       const fn = x.type === 'CALL' ? (x.fn ? x.fn.split('(')[0] : 'call without data') : x.type;
       if (x.status === 'reverted') lines.push(`<li class="rev">${esc(fn)} reverted: nothing created or bound</li>`);
       for (const id of x.created) lines.push(`<li><a href="#" data-node="${esc(id)}">+ ${nameOf(id)}</a> created</li>`);
+      let any = x.created.length > 0;
       for (const e of D.edges)
-        if (e.kind !== 'created' && e.txs.some((d) => d.i === i))
-          lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${e.rule ? ` <span class="pill ctl">${esc(e.rule)}</span>` : ''}</li>`);
-      if (!x.created.length && !D.edges.some((e) => e.txs.some((d) => d.i === i)) && x.status !== 'reverted')
-        lines.push(`<li class="muted">${esc(fn)}\u0001 on ${nameOf(`${x.chain}:${x.to}`)}</li>`);
+        for (const d of e.kind === 'created' ? [] : e.txs.filter((d) => d.i === i)) {
+          any = true;
+          lines.push(`<li><a href="#" data-link="${esc(linkKey(e))}">${d.gone ? '− ' : ''}${nameOf(e.from)} · ${esc(e.label)} → ${nameOf(e.to)}</a>${d.gone ? ' ended' : ' ' + pills(e)}</li>`);
+        }
+      for (const r of D.renounced)
+        if (r.txs.some((d) => d.i === i && !d.gone)) {
+          any = true;
+          lines.push(`<li><a href="#" data-node="${esc(r.from)}">${nameOf(r.from)} · ${esc(r.label)} renounced</a> <span class="pill">event ${esc(r.event)}</span></li>`);
+        }
+      if (!any && x.status !== 'reverted') lines.push(`<li class="muted">${esc(fn)}\u0001 on ${nameOf(`${x.chain}:${x.to}`)}</li>`);
     }
     const seen = new Map();
     for (const l of lines) seen.set(l, (seen.get(l) || 0) + 1);
     const count = (l, n) => (l.includes('\u0001') ? l.replace('\u0001', n > 1 ? ` ×${n}` : '') : n > 1 ? l.replace(/<\/li>$/, ` ×${n}</li>`) : l);
     return `<ul class="changes">${[...seen].map(([l, n]) => count(l, n)).join('')}</ul>`;
   }
-  // The handover question: each address that a control rule points at, and what it holds; outside addresses first.
-  function controls() {
+  // The handover question: each address that holds control at step s, and what it holds; outside addresses first.
+  function controls(s) {
     const by = new Map();
-    for (const e of D.edges) if (e.rule) (by.get(e.to) || by.set(e.to, []).get(e.to)).push(e);
-    if (!by.size) return '<p class="muted">No link matched a control rule.</p>';
+    for (const e of D.edges) if (ctlAt(e, s) || (e.cls === 'pending' && shownAt(e, s))) (by.get(e.to) || by.set(e.to, []).get(e.to)).push(e);
+    const gone = D.renounced.filter((r) => inSpans(r, s));
+    if (!by.size && !gone.length) return '<p class="muted">No control event or name rule at this step.</p>';
+    const since = (e) => (e.spans ? e.spans.filter(([a]) => a <= s).pop()[0] : e.firstStep) + 1;
     const order = [...by.keys()].sort((a, b) => (byId.get(a).kind === 'contract') - (byId.get(b).kind === 'contract'));
-    return `<ul class="changes">${order.map((id) => `<li><a href="#" data-node="${esc(id)}"><b>${nameOf(id)}</b></a> <code>${esc(short(byId.get(id).addr))}</code>${multiChain ? ` <span class="muted">chain ${byId.get(id).chain}</span>` : ''}${byId.get(id).kind === 'contract' ? '' : ' <span class="pill">outside</span>'}<ul>${by.get(id).map((e) => `<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)}</a> <span class="muted">step ${e.firstStep + 1}</span></li>`).join('')}</ul></li>`).join('')}</ul>`;
+    return `<ul class="changes">${order.map((id) => `<li><a href="#" data-node="${esc(id)}"><b>${nameOf(id)}</b></a> <code>${esc(short(byId.get(id).addr))}</code>${multiChain ? ` <span class="muted">chain ${byId.get(id).chain}</span>` : ''}${byId.get(id).kind === 'contract' ? '' : ' <span class="pill">outside</span>'}<ul>${by.get(id).map((e) => `<li><a href="#" data-link="${esc(linkKey(e))}">${nameOf(e.from)} · ${esc(e.label)}</a> ${pills(e)} <span class="muted">step ${since(e)}</span></li>`).join('')}</ul></li>`).join('')}${gone.length ? `<li><b>renounced</b><ul>${gone.map((r) => `<li><a href="#" data-node="${esc(r.from)}">${nameOf(r.from)} · ${esc(r.label)}</a> <span class="pill">event ${esc(r.event)}</span> <span class="muted">step ${r.spans.filter(([a]) => a <= s).pop()[0] + 1}</span></li>`).join('')}</ul></li>` : ''}</ul>`;
   }
   function hover(focus) {
     if (!focus && S.sel) return apply();
@@ -1355,7 +1477,7 @@ function client(place) {
 
   function apply(focus = S.sel) {
     const s = S.step, last = s === D.steps.length - 1;
-    svg.classList.toggle('lens', S.lens && D.edges.some((e) => e.rule));
+    svg.classList.toggle('lens', S.lens && D.edges.some(isCtl));
     const stepTx = new Set(D.steps[s].txs);
     const reverted = D.steps[s].txs.filter((i) => D.txs[i].status === 'reverted');
     for (const n of D.nodes) {
@@ -1364,13 +1486,23 @@ function client(place) {
       g.classList.toggle('now', S.moved && n.createdStep === s);
       g.classList.toggle('revnow', reverted.some((i) => `${D.txs[i].chain}:${D.txs[i].to}` === n.id));
       g.classList.toggle('sel', !!(S.sel && S.sel.node === n.id));
-      g.classList.toggle('ctl', !!n.controlledBy && S.lens);
+      const ctl = controllers(n.id, s).length > 0;
+      g.classList.toggle('ctl', ctl && S.lens);
+      markEls.get(n.id)?.classList.toggle('hidden', !ctl);
       g.classList.remove('hot');
     }
-    for (const { g, label, r, firstStep } of edgeEls.values()) {
-      const now = S.moved && r.edges.some((e) => e.txs.some((d) => stepTx.has(d.i)));
+    const rank = { event: 3, deploy: 2, call: 1, created: 0 };
+    for (const { g, path, label, r } of edgeEls.values()) {
+      const vis = r.edges.filter((e) => shownAt(e, s));
+      const kind = vis.reduce((a, e) => (rank[e.kind] > rank[a] ? e.kind : a), (vis[0] || r.edges[0]).kind);
+      const ctl = vis.some((e) => ctlAt(e, s));
+      for (const k in rank) g.classList.toggle(k, k === kind);
+      g.classList.toggle('ctl', ctl);
+      g.classList.toggle('pending', kind === 'event' && !ctl);
+      path.setAttribute('marker-end', kind === 'event' || (ctl && S.lens) ? 'url(#arrc)' : 'url(#arr)');
+      const now = S.moved && vis.some((e) => e.txs.some((d) => stepTx.has(d.i)));
       for (const x of [g, label]) {
-        x.classList.toggle('future', firstStep > s);
+        x.classList.toggle('future', !vis.length);
         x.classList.toggle('now', now);
         x.classList.remove('hot');
       }
@@ -1401,7 +1533,7 @@ function client(place) {
       const x = D.txs[i];
       const what = x.type === 'CALL' ? `<b>${esc(x.fn || '(no data)')}</b> on ${esc(title(byId.get(`${x.chain}:${x.to}`) || {}))}` : `<b>${esc(x.type)}</b> ${esc(x.contractName || '')}`;
       const made = x.created.length ? ` · creates ${x.created.map((id) => esc(title(byId.get(id)))).join(', ')}` : '';
-      const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => d.i === i)).length;
+      const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => d.i === i && !d.gone)).length;
       return `${what}${made}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${x.status === 'reverted' ? ' · <span class="rev">reverted: created and bound nothing</span>' : ''}`;
     });
     const head = `${st.id ? `<b>${esc(st.id)}</b> · ` : ''}${esc(D.txs[st.txs[0]].script)} · `;
@@ -1416,7 +1548,7 @@ function client(place) {
       kinds.set(k, (kinds.get(k) || 0) + 1);
     }
     const made = xs.reduce((a, x) => a + x.created.length, 0), rev = xs.filter((x) => x.status === 'reverted').length;
-    const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => stepTx.has(d.i))).length;
+    const binds = D.edges.filter((e) => e.kind !== 'created' && e.txs.some((d) => stepTx.has(d.i) && !d.gone)).length;
     const what = [...kinds].slice(0, 3).map(([k, n]) => esc(k) + (n > 1 ? ` ×${n}` : '')).join(', ') + (kinds.size > 3 ? `, +${kinds.size - 3} more` : '');
     $('#stepinfo').innerHTML = `<details${S.list ? ' open' : ''}><summary>${head}<b>${xs.length} transactions</b>: ${what}${made ? ` · creates ${made}` : ''}${binds ? ` · binds ${binds} link${binds > 1 ? 's' : ''}` : ''}${rev ? ` · <span class="rev">${rev} reverted</span>` : ''}</summary><ol class="txlist">${parts.map((p) => `<li>${p}</li>`).join('')}</ol></details>`;
     $('#stepinfo details').ontoggle = (e) => (S.list = e.target.open);
@@ -1458,7 +1590,7 @@ function client(place) {
     S.moved = true;
     svg.classList.add('anim');
     apply();
-    if (!S.sel) panel();
+    panel();
   };
   // Sections: runs of steps from one script. Every step has a script, while only some have a sprue unit.
   const sections = [];
@@ -1578,7 +1710,8 @@ export function render(model, title) {
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="1 3" stroke-linecap="round" stroke-width="1.5"/></svg> created by</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-width="1.5"/></svg> set at deploy</span>
 <span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--edge)" stroke-dasharray="6 3" stroke-width="1.5"/></svg> set by call</span>
-<span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-width="2"/></svg> control rule matched</span>
+<span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-width="2"/></svg> control: from an event (owner, role, proxy admin), else a name rule</span>
+<span><svg width="28" height="10"><path d="M0,5 H28" stroke="var(--accent)" stroke-dasharray="2 3" stroke-width="2"/></svg> pending owner</span>
 <span>⚑ controlled by an outside address</span>${model.sprue ? '<span>✓ certified role; thick solid line: certificate-verified link</span>' : ''}
 <span>dashed box: not created by this deployment</span><span>a number: links merging into one entry</span><span>labels show on hover, on selection and for the current step</span></div></details>`;
   return `<!doctype html>
@@ -1624,7 +1757,7 @@ function main(argv) {
   const more = scripts.length > 1 ? ` +${scripts.length - 1} script${scripts.length > 2 ? 's' : ''}` : '';
   process.stdout.write(render(model, title || `Deployment map: ${project ? `${basename(resolve(project))} (${scripts.length} script${scripts.length > 1 ? 's' : ''})` : scripts[0] + more}`));
   const s = model.stats;
-  process.stderr.write(`deploy-map: ${s.nodes} nodes, ${s.edges} edges (${s.edgesDecoded} decoded, ${s.control} control), ${s.steps} steps, ${s.txs} transactions\n`);
+  process.stderr.write(`deploy-map: ${s.nodes} nodes, ${s.edges} edges (${s.edgesDecoded} decoded, ${s.control} control, ${s.controlEvents} of them from events), ${s.steps} steps, ${s.txs} transactions\n`);
   for (const w of model.warnings) process.stderr.write(`deploy-map: ${w}\n`);
   return 0;
 }

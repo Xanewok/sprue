@@ -28,11 +28,14 @@ adds names and verified links. Spike: for discussion, not a supported tool.
 1. **Graph.** A node per deployed contract (name and short address) and per outside address: an EOA,
    a multisig or a contract the deployment did not create. Edges: *created by* (a factory's child),
    *set at deploy* (an address among a CREATE's arguments), *set by call* (an address passed in a call
-   to a deployed contract, labelled with the function). Key every node by chain and address.
-2. **Control lens, on by default.** Edges whose parameter or function names control the target (owner,
-   admin, role, minter, treasury, `transferOwnership`, `grantRole`, any `set*`/`bind*` with an address)
-   are drawn first, and contracts that an outside address controls are marked. Name rules are a
-   heuristic: the lens shows the rule that matched.
+   to a deployed contract, labelled with the function), *emitted* (a holder that a control event names).
+   Key every node by chain and address.
+2. **Control lens, on by default.** Control comes from events first: the owner, pending owner, role
+   holders and proxy admin that the receipts' logs name, replayed in order, so each step shows who holds
+   what then. Where no event says it, names second: links whose parameter or function names control the
+   target (owner, admin, role, minter, treasury, `transferOwnership`, `grantRole`, any `set*`/`bind*` with
+   an address), a heuristic. Control links are drawn first, contracts that an outside address controls
+   are marked, and the panel names each entry's source: the event or the rule that matched.
 3. **Focus.** Hovering or selecting an address dims everything but its edges. A side panel lists the
    transactions behind each edge: step, function, arguments, transaction hash, block, status.
 4. **Step player.** One step per transaction, or per sprue plan step when the project is a sprue one
@@ -68,6 +71,12 @@ no step id.
   `out/<File>.sol/<Contract>.json` when it exists and its constructor's argument count matches the
   record; otherwise the argument's position. Many repositories commit records but not `out/`, so the
   map must work without ABIs.
+- Control events: `OwnershipTransferred`, `OwnershipTransferStarted` (a pending owner, not control),
+  `RoleGranted`, `RoleRevoked` and ERC-1967 `AdminChanged`, matched by topic0 and read from the topics
+  after it, then the data words, so indexed and non-indexed layouts both decode. A log counts only from an
+  address on the map. A role id shows by its OpenZeppelin name where it has one, else short. A transfer
+  to the zero address shows as renounced. An event and a name-rule link that say the same thing in one
+  transaction are one link with both sources.
 - Several runs of one script (`run-<timestamp>.json`) are merged in time order; a resumed or replaced
   transaction appears once, with its final receipt.
 

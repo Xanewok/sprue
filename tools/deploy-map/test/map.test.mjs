@@ -2,12 +2,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { place, GEOM } from '../map.mjs';
+import { build, keccak256, place, GEOM } from '../map.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const map = join(here, '..', 'map.mjs');
@@ -141,4 +141,68 @@ test('no link crosses a lane title', () => {
         assert.ok(!(s.x1 < t.x + t.w && s.x2 > t.x && s.y1 < t.y + t.h && s.y2 > t.y), `${s.r.key} crosses the title of ${key} at width ${width}`);
     }
   }
+});
+
+// A synthetic record: one transaction per entry, each with the logs given.
+const topic = (sig) => '0x' + keccak256(new TextEncoder().encode(sig));
+const word = (a) => '0x' + a.replace(/^0x/, '').padStart(64, '0');
+const A = '0x' + 'a'.repeat(40), P = '0x' + 'c'.repeat(40), R = '0x' + 'e'.repeat(40), X = '0x' + 'f'.repeat(40);
+const D = '0x' + '1'.repeat(40), B = '0x' + '2'.repeat(40), Q = '0x' + '3'.repeat(40), M = '0x' + '4'.repeat(40), U = '0x' + '5'.repeat(40);
+const ZERO = '0x' + '0'.repeat(40);
+const owned = (at, from, to) => ({ address: at, topics: [topic('OwnershipTransferred(address,address)'), word(from), word(to)], data: '0x' });
+const role = (ev, at, id, who) => ({ address: at, topics: [topic(`${ev}(bytes32,address,address)`), id, word(who), word(D)], data: '0x' });
+const MINTER = topic('MINTER_ROLE'), CUSTOM = '0x' + '12345678'.repeat(8);
+const TXS = [
+  ['CREATE', 'Owned', A, [owned(A, ZERO, D)]],
+  ['CALL', 'Owned', A, [owned(A, D, B)]],
+  ['CALL', 'Owned', A, [owned(A, B, ZERO)]],
+  ['CREATE', 'Roles', R, [role('RoleGranted', R, MINTER, M), role('RoleGranted', R, CUSTOM, U)]],
+  ['CALL', 'Roles', R, [role('RoleRevoked', R, MINTER, M)]],
+  ['CREATE', 'Owned2Step', P, [owned(P, ZERO, D)]],
+  ['CALL', 'Owned2Step', P, [{ address: P, topics: [topic('OwnershipTransferStarted(address,address)'), word(D), word(Q)], data: '0x' }]],
+  // ERC-1967's AdminChanged indexes nothing: both addresses are data words.
+  ['CREATE', 'Proxy', X, [{ address: X, topics: [topic('AdminChanged(address,address)')], data: word(ZERO) + word(B).slice(2) }]],
+];
+function controlModel() {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-map-'));
+  const rec = join(dir, 'broadcast', 'Deploy.s.sol', '1');
+  const hash = (i) => '0x' + String(i + 1).padStart(64, '0');
+  const j = {
+    chain: 1, timestamp: 1,
+    transactions: TXS.map(([type, name, at], i) => ({ hash: hash(i), transactionType: type, contractName: name, contractAddress: at,
+      function: type === 'CALL' ? 'touch()' : null, arguments: null, transaction: { from: D, to: type === 'CALL' ? at : null, nonce: '0x' + i.toString(16), input: type === 'CALL' ? '0xa55526db' : '0x00' } })),
+    receipts: TXS.map(([, , , logs], i) => ({ transactionHash: hash(i), status: '0x1', blockNumber: '0x' + (i + 1).toString(16), logs: logs.map((l, k) => ({ ...l, logIndex: '0x' + k.toString(16) })) })),
+  };
+  try {
+    mkdirSync(rec, { recursive: true });
+    writeFileSync(join(rec, 'run-latest.json'), JSON.stringify(j));
+    return build({ paths: [join(dir, 'broadcast')] });
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+}
+const at = (m, from, label) => m.edges.filter((e) => e.kind === 'event' && e.from === `1:${from}` && e.label === label);
+
+test('ownership events replay in order: a later owner replaces the last, a transfer to zero renounces', () => {
+  const m = controlModel();
+  assert.deepEqual(at(m, A, 'owner').map((e) => [e.to, e.spans]), [[`1:${D}`, [[0, 1]]], [`1:${B}`, [[1, 2]]]]);
+  assert.deepEqual(m.renounced.map((r) => [r.from, r.label, r.spans]), [[`1:${A}`, 'owner', [[2, null]]]]);
+});
+
+test('a revoked role ends its span', () => {
+  assert.deepEqual(at(controlModel(), R, 'MINTER_ROLE').map((e) => [e.to, e.spans]), [[`1:${M}`, [[3, 4]]]]);
+});
+
+test('an unknown role id shows short', () => {
+  assert.deepEqual(at(controlModel(), R, 'role 0x12345678…').map((e) => [e.to, e.spans]), [[`1:${U}`, [[3, null]]]]);
+});
+
+test('a pending owner is shown but not counted as control; the proxy admin is read from data words', () => {
+  const m = controlModel();
+  const [pending] = at(m, P, 'pending owner');
+  assert.equal(pending.to, `1:${Q}`);
+  assert.equal(pending.cls, 'pending');
+  assert.deepEqual(at(m, P, 'owner').map((e) => [e.to, e.spans]), [[`1:${D}`, [[5, null]]]]);
+  assert.deepEqual(at(m, X, 'proxy admin').map((e) => [e.to, e.spans]), [[`1:${B}`, [[7, null]]]]);
+  assert.equal(m.stats.control, 6, 'three owners, two roles and the proxy admin; not the pending owner');
 });
