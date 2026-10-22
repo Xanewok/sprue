@@ -24,6 +24,12 @@ export function build({ paths, outDir, sprue }) {
     Object.assign(n, init || {});
     return n;
   };
+  const ref = (chain, addr, i) => {
+    const n = ensure(chain, addr);
+    n.refs++;
+    n.firstRef = Math.min(n.firstRef, i);
+    return n.id;
+  };
 
   const out = [], logsOf = [];
   // Pass 1: transactions and the contracts they create.
@@ -147,12 +153,7 @@ export function build({ paths, outDir, sprue }) {
     if (x.status === 'reverted') continue;
 
     const source = `${chain}:${x.to}`;
-    const touch = (addr) => {
-      const n = ensure(chain, addr);
-      n.refs++;
-      n.firstRef = Math.min(n.firstRef, x.i);
-      return n.id;
-    };
+    const touch = (addr) => ref(chain, addr, x.i);
     if (!isCreate && x.to) touch(x.to);
     const label = (leaf) => (isCreate ? leaf.path : `${fnName}(${leaf.path})`);
     if (mode === 'raw' || mode === 'failed') {
@@ -196,12 +197,6 @@ export function build({ paths, outDir, sprue }) {
       n.createdBy.via ? `via ${n.createdBy.via}` : '');
     ensure(n.chain, n.createdBy.factory);
   }
-  const ref = (chain, addr, i) => {
-    const n = ensure(chain, addr);
-    n.refs++;
-    n.firstRef = Math.min(n.firstRef, i);
-    return n.id;
-  };
   const renounced = replayControl(out, logsOf, nodeOf, ref, edges, stats);
 
   // Node kinds for what the deployment did not create.
