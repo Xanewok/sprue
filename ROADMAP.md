@@ -70,7 +70,7 @@ Behavior we have found and do not yet refuse or fix.
 - **A reverted transaction may be sent again.** A rerun can send a transaction the chain reverted. It
   costs the gas of one reverted transaction per rerun, and forge exits 1. A possible fix compares
   forge's `evm_version` with a hardfork declared per chain in `sprue.json`.
-- **The send runs forge again after the answer.** An attended run compares state around the question,
-  but a file that changed between the question and the send is not refused. The
-  one-run-per-network lock removes the realistic cause; the full fix is the open item
-  "Bind the approval to the previewed transactions" in [DESIGN.md](DESIGN.md#open).
+- **The network's journals are not compared at the question.** An attended run leaves out of its
+  comparison the journals it writes itself, so another process that edits them while the run asks is
+  not seen. The one-run-per-network lock stops the only writer we know of; the full fix is the open
+  item "Bind the approval to the previewed transactions" in [DESIGN.md](DESIGN.md#open).
