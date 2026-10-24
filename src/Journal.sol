@@ -296,10 +296,24 @@ abstract contract Journal is Script {
     function _checked(string memory unit, string memory role) internal view returns (address addr) {
         string memory record = _checkedRecord(unit, role);
         addr = _addr(record, string.concat(".checked.", role));
-        require(addr.code.length != 0, string.concat(role, " has no code"));
+        _requireCode(addr, role);
         require(
             addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
             string.concat(role, "'s code differs from ", unit, ".json's check")
+        );
+    }
+
+    /// @dev Checked before the code hash: an RPC that lags behind the node that took the send shows no
+    ///      code, which is not other code.
+    function _requireCode(address addr, string memory role) internal view {
+        require(
+            addr.code.length != 0,
+            string.concat(
+                role,
+                " at ",
+                vm.toString(addr),
+                " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+            )
         );
     }
 

@@ -1,12 +1,21 @@
 """Serves <upstream>'s JSON-RPC at 127.0.0.1:<port>, answering web3_clientVersion as Geth: an Anvil that
-both the runner and forge, which the units ask in process, take for a live node."""
+both the runner and forge, which the units ask in process, take for a live node. With $LAG it answers
+reads of the head as that many blocks behind, as a load-balanced endpoint that asks a lagging node;
+receipts and sends still reach the upstream's head."""
 
 import http.server
 import json
+import os
 import sys
 import urllib.request
 
 port, upstream = int(sys.argv[1]), sys.argv[2]
+lag = int(os.environ.get("LAG", "0"))
+
+
+def ask(body):
+    request = urllib.request.Request(upstream, body, {"Content-Type": "application/json"})
+    return urllib.request.urlopen(request).read()
 
 
 class Proxy(http.server.BaseHTTPRequestHandler):
@@ -15,9 +24,16 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         call = json.loads(body)
         if isinstance(call, dict) and call.get("method") == "web3_clientVersion":
             data = json.dumps({"jsonrpc": "2.0", "id": call["id"], "result": "Geth/stub"}).encode()
+        elif lag:
+            head = int(json.loads(ask(b'{"jsonrpc":"2.0","id":0,"method":"eth_blockNumber","params":[]}'))["result"], 16)
+            head = hex(max(0, head - lag))
+            if call["method"] == "eth_blockNumber":
+                data = json.dumps({"jsonrpc": "2.0", "id": call["id"], "result": head}).encode()
+            else:
+                call["params"] = [head if p == "latest" else p for p in call.get("params") or []]
+                data = ask(json.dumps(call).encode())
         else:
-            request = urllib.request.Request(upstream, body, {"Content-Type": "application/json"})
-            data = urllib.request.urlopen(request).read()
+            data = ask(body)
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))

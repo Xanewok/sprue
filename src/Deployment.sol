@@ -97,8 +97,9 @@ abstract contract Deployment is ForgeBroadcasts {
         string memory hashKey = string.concat(".", role, "CodeHash");
         require(_has(journal, hashKey), string.concat(_unit(), ".json records no ", role, "CodeHash"));
         addr = _addr(journal, string.concat(".", role));
+        _requireCode(addr, role);
         require(
-            addr.code.length != 0 && addr.codehash == vm.parseJsonBytes32(journal, hashKey),
+            addr.codehash == vm.parseJsonBytes32(journal, hashKey),
             string.concat(role, "'s code differs from ", _unit(), ".json")
         );
     }
