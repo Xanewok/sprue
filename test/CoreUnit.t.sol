@@ -321,6 +321,12 @@ contract CoreUnitTest is Test {
         unit.landed(network, ops);
         vm.expectRevert(bytes("toy's code differs from toy.json"));
         unit.recordedRole(network);
+        address toy = _journalOf("toy", ".toy");
+        bytes memory code = toy.code;
+        vm.etch(toy, "");
+        vm.expectRevert(bytes(_noCode("toy", toy)));
+        unit.check(network);
+        vm.etch(toy, code);
 
         vm.writeFile(path, vm.replace(journal, '"toyCodeHash"', '"toyCodeHashX"'));
         vm.expectRevert(bytes("toy.json records no toyCodeHash"));
@@ -775,7 +781,7 @@ contract CoreUnitTest is Test {
 
         vm.writeFile(path, checked);
         vm.writeJson(vm.toString(makeAddr("no code")), path, ".checked.toy");
-        vm.expectRevert(bytes("toy has no code"));
+        vm.expectRevert(bytes(_noCode("toy", makeAddr("no code"))));
         unit.checkedToy(network);
 
         vm.writeFile(path, string.concat('{"toy": "', vm.toString(_journalOf("toy", ".toy")), '"}'));
@@ -829,7 +835,7 @@ contract CoreUnitTest is Test {
         vm.etch(spare, hex"00");
         vm.expectRevert(bytes("spare has code since toy.json recorded it absent: a person must resolve it"));
         unit.checkedOptional(network, "spare");
-        vm.expectRevert(bytes("toy has no code"));
+        vm.expectRevert(bytes(_noCode("toy", at)));
         unit.checkedToy(network);
 
         vm.etch(at, hex"00");
@@ -949,6 +955,15 @@ contract CoreUnitTest is Test {
         vm.writeJson(
             vm.serializeBytes32(role, string.concat(role, "CodeHash"), addr.codehash),
             string.concat(dir, "/", role, ".json")
+        );
+    }
+
+    function _noCode(string memory role, address at) private pure returns (string memory) {
+        return string.concat(
+            role,
+            " at ",
+            vm.toString(at),
+            " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
         );
     }
 

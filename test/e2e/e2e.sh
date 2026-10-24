@@ -821,13 +821,13 @@ scenario_lag() {
   for i in 1 2 3 4 5 6; do
     rc=0; out=$(env -u DEPLOYER G run lag vault.check 2>&1) || rc=$?
     [ "$rc" = 0 ] && break
-    ! grep -aq "token at 0x[0-9a-fA-F]* has no code yet" <<<"$out" || seen=yes
-    grep -aq "token at 0x[0-9a-fA-F]* has no code yet: run again\|its plan is unchanged after sending it\|the vault is not funded" <<<"$out" \
+    ! grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags" <<<"$out" || seen=yes
+    grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|the vault is not funded" <<<"$out" \
       || die "lag: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
     cast rpc evm_mine --rpc-url "$up" >/dev/null
   done
   [ "$rc" = 0 ] || die "lag: not done after $i runs"
-  [ "$seen" = yes ] || die "lag: no run said a role has no code yet, so the node did not lag"
+  [ "$seen" = yes ] || die "lag: no run said a role has no code, so the node did not lag"
   [ "$(cast nonce "$OPS" --rpc-url "$up")" = 3 ] || die "lag: $(cast nonce "$OPS" --rpc-url "$up") transactions, not 3"
   [ "$(cast call "$(jq -r .token deployments/lag/token.json)" 'balanceOf(address)(uint256)' "$(jq -r .vault deployments/lag/vault.json)" --rpc-url "$up")" = 1 ] \
     || die "lag: the vault was not funded once"
