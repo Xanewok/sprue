@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide rl; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link"
 }
 trap cleanup EXIT
 
@@ -226,8 +226,16 @@ scenario_failure() {
   mv foundry.toml foundry.toml.ok; { echo '[profile.default]'; echo 'broadcast = "elsewhere"'; tail -n +2 foundry.toml.ok; } >foundry.toml
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
   mv foundry.toml.ok foundry.toml
-  [ "$(nonce)" = "$n0" ] || die "failure: a send with records elsewhere sent"
-  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records would go elsewhere is refused"
+  # The units read each artifact and its metadata from out/, so a build elsewhere would journal an earlier one.
+  refused 'forge would build into elsewhere, not out' env FOUNDRY_OUT=elsewhere G run elsewhere token.check
+  rm -rf elsewhere
+  [ "$(nonce)" = "$n0" ] || die "failure: a send with records or build elsewhere sent"
+  # Each spelling of out/ is out/, through a symbolic link too.
+  ln -s "$(pwd -P)" "$W.link"; local o i=0
+  for o in ./out/ "$(pwd -P)/out" "$W.link/out"; do
+    fresh "$RPC"; network "spelled$((i += 1))" 31337; exits 0 env FOUNDRY_OUT="$o" G run "spelled$i" token.check
+  done
+  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches

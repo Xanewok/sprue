@@ -66,6 +66,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
+| A send builds into `out/`, as `forge config` resolves it. | e2e `scenario_failure` |
 | A send writes its records where its units read them, as `forge config` resolves it; a rehearsal network's records and resume data, a dry run's too, are only under its own directory, never in `broadcast/` or `cache/`. | e2e `scenario_attended`, `scenario_failure`, `scenario_grammar` |
 | `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
