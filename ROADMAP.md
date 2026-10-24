@@ -66,10 +66,11 @@ prototype exists) or **researched** (the problem is understood, the design is no
 
 Behavior we have found and do not yet refuse or fix.
 
-- **A reverted transaction may be sent again.** A rerun can send a transaction the chain reverted. It
-  costs the gas of one reverted transaction per rerun, and forge exits 1. A possible fix compares
-  forge's `evm_version` with a hardfork declared per chain in `sprue.json`.
-- **The network's journals are not compared at the question.** An attended run leaves out of its
-  comparison the journals it writes itself, so another process that edits them while the run asks is
-  not seen. The one-run-per-network lock stops the only writer we know of; the full fix is the open
-  item "Bind the approval to the previewed transactions" in [DESIGN.md](DESIGN.md#open).
+- **A reverted transaction may be sent again.** Forge's simulation can accept a transaction that the
+  chain reverts, for example when forge simulates a later hardfork than the chain runs. The step then
+  stays due, and each rerun sends the transaction again, pays for one more revert and exits 1. A possible fix
+  compares forge's `evm_version` with a hardfork declared per chain in `sprue.json`.
+- **An attended run does not compare its own journals while it asks.** The run leaves the journals it
+  writes out of the state it compares around the approval question, so it does not see another process
+  that edits them meanwhile. The one-run-per-network lock stops the only such writer we know of. The full
+  fix is the open item "Bind the approval to the previewed transactions" in [DESIGN.md](DESIGN.md#open).
