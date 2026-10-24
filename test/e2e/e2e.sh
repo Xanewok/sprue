@@ -348,11 +348,14 @@ scenario_concurrent() {
     done
     die "concurrent: no forge with $2 under pid $1"
   }
+  # held <network> <runner pid> <command...>: refused, naming the runner or the forge it sends with. Both
+  # hold a lock file, and the refusal names whichever the directory lists first.
+  held() { local net=$1 run=$2; shift 2; forge_of "$run" --broadcast; refused "a run of $net is running, as pid \($run\|$step\);" "$@"; }
   fresh "$RPC"; network conc 31337; n0=$(nonce)
   cast rpc evm_setAutomine false --rpc-url "$RPC" >/dev/null
   G run conc vault.check >"$W.a" 2>&1 & a=$!
   pending
-  refused "a run of conc is running, as pid $a" G run conc vault.check
+  held conc "$a" G run conc vault.check
   mine
   rc=0; wait "$a" || rc=$?
   [ "$rc" = 0 ] || die "concurrent: the first run exited $rc: $(tail -c 600 "$W.a")"
@@ -388,9 +391,9 @@ scenario_concurrent() {
   cast rpc evm_setAutomine false --rpc-url "$fork" >/dev/null
   G run rehearsal-rl vault.check >"$W.a" 2>&1 & a=$!
   pending "$fork"
-  refused "a run of rehearsal-rl is running, as pid $a" G rehearse rl token.check
-  refused "a run of rehearsal-rl is running, as pid $a" G rehearse --stop rl
-  refused "a run of rehearsal-rl is running, as pid $a" G plan rehearsal-rl vault.check
+  held rehearsal-rl "$a" G rehearse rl token.check
+  held rehearsal-rl "$a" G rehearse --stop rl
+  held rehearsal-rl "$a" G plan rehearsal-rl vault.check
   [ -f deployments/rehearsal-rl/token.json ] && cast chain-id --rpc-url "$fork" >/dev/null || die "concurrent: rehearse touched a copy in use"
   mine "$fork"
   rc=0; wait "$a" || rc=$?
