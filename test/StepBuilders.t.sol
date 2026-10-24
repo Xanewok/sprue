@@ -222,6 +222,15 @@ contract CheckedGraph is BuilderGraph {
     }
 }
 
+/// @dev Only `token.json` is checked.
+contract TokenCheckedGraph is BuilderGraph {
+    constructor(Registration memory u, Step[] memory s) BuilderGraph(u, s) {}
+
+    function _journalChecked(string memory, string memory unit) internal pure override returns (bool) {
+        return keccak256(bytes(unit)) == keccak256("token");
+    }
+}
+
 /// @dev A driver that claims progress and meets only `Counting.fresh`, for 10 seconds per call.
 contract DriverGraph is BuilderGraph {
     Counting private immutable counting;
@@ -456,17 +465,23 @@ contract StepBuildersTest is Test, Declares {
         g.plan("anvil", "vault.late");
     }
 
-    /// @dev `vault.open` waits for `token.deploy` through `vault.deploy`: the plan sends `vault.check`, which
-    ///      certifies `vault.deploy`, but no check of `token`.
-    function test_plan_refusesADueStepBehindACertificateOfAnotherUnitsNeed() public {
-        Step[] memory s = new Step[](5);
+    /// @dev `vault.open` needs `vault.deploy`, which `vault.check` certifies first, and, with `transitive`,
+    ///      `token.deploy` through it.
+    function _certificateOfAnotherUnit(bool transitive) private view returns (Step[] memory s) {
+        s = new Step[](5);
         s[0] = _step("token.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("vault.deploy", StepFunctions.deploy.selector).needs("token.deploy");
+        s[1] = _step("vault.deploy", StepFunctions.deploy.selector);
+        if (transitive) s[1] = s[1].needs("token.deploy");
         s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.deploy");
         s[3] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
         s[3] = s[3].due(StepFunctions.fundDue.selector);
         s[4] = _step("token.check", StepFunctions.check.selector).needs("vault.open").needs("vault.check");
-        BuilderGraph g = new BuilderGraph(unit, s);
+        s[4] = s[4].needs("token.deploy");
+    }
+
+    /// @dev The plan sends `vault.check` but no check of `token`.
+    function test_plan_refusesADueStepBehindACertificateOfAnotherUnitsNeed() public {
+        BuilderGraph g = new BuilderGraph(unit, _certificateOfAnotherUnit(true));
         vm.expectRevert(
             bytes(
                 "cannot reach token.check: vault.open waits for token.deploy, which only a check of its unit marks "
@@ -474,6 +489,19 @@ contract StepBuildersTest is Test, Declares {
             )
         );
         g.plan("anvil", "token.check");
+    }
+
+    /// @dev Only the waiting step's undone needs count: `token.deploy` is done, or not a need of `vault.open`.
+    function test_plan_acceptsADueStepWhoseOtherCertifiedNeedsAreDoneOrNotItsNeeds() public {
+        string memory waits = "# then plan again vault.open";
+        assertTrue(
+            vm.contains(
+                new TokenCheckedGraph(unit, _certificateOfAnotherUnit(true)).plan("anvil", "token.check"), waits
+            )
+        );
+        assertTrue(
+            vm.contains(new BuilderGraph(unit, _certificateOfAnotherUnit(false)).plan("anvil", "token.check"), waits)
+        );
     }
 
     function test_predicateSelectorMatchesItsSignature() public {
