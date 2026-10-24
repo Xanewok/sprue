@@ -62,3 +62,15 @@ prototype exists) or **researched** (the problem is understood, the design is no
 - **More than one instance of an artifact**, each with its own role identity. Today two roles that
   share an artifact and a sender make recovery from the broadcast records ambiguous.
 - **CI on macOS and a consumer install** from `npm pack` and `forge install`, running an example.
+
+## Known gaps
+
+Behavior we have found and do not yet refuse or fix.
+
+- **A reverted transaction may be sent again.** A rerun can send a transaction the chain reverted. It
+  costs the gas of one reverted transaction per rerun, and forge exits 1. A possible fix compares
+  forge's `evm_version` with a hardfork declared per chain in `sprue.json`.
+- **The send runs forge again after the answer.** An attended run compares state around the question,
+  but a file that changed between the question and the send is not refused. The
+  one-run-per-network lock removes the realistic cause; the full fix is the open item
+  "Bind the approval to the previewed transactions" in [DESIGN.md](DESIGN.md#open).
