@@ -5,11 +5,11 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync,
-  writeFileSync, writeSync,
+  closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync,
+  statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { constants, homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -118,6 +118,10 @@ const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const readJson = (file) => {
   try { return JSON.parse(readFileSync(file, "utf8")); } catch {}
+};
+// A path not yet built still compares by where it would be.
+const real = (p) => {
+  try { return realpathSync(p); } catch { return resolve(p); }
 };
 const isFile = (f) => {
   try { return statSync(f).isFile(); } catch { return false; }
@@ -966,6 +970,10 @@ async function main(argv) {
         if (result.status !== 0 || !isObject(config)) fail(2, "refusing: forge config --json failed");
         const over = overriding(config, process.env);
         if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (the environment, .env or foundry.toml) over the line's --rpc-url or --sender: unset it: ${line}`);
+        // The units read each artifact and its metadata from out/: a build elsewhere would journal another's.
+        if (real(config.out) !== real("out")) {
+          fail(2, `refusing: forge would build into ${config.out}, not out, where the units read artifacts; check foundry.toml, FOUNDRY_PROFILE and FOUNDRY_OUT: ${line}`);
+        }
         if (config.broadcast !== (broadcastDir ?? "broadcast")) {
           fail(2, `refusing: forge would keep this run's records in ${config.broadcast}, not ${broadcastDir ?? "broadcast"}; check foundry.toml and FOUNDRY_BROADCAST: ${line}`);
         }

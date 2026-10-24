@@ -13,6 +13,8 @@ runs, waits for it to exit, then exits with 128 plus the signal's number: SIGTER
 `rehearse`'s 130. Before, a signal to `run` alone ended it and left its forge sending, or a dry run
 writing journals, with no lock held.
 
+Fixed: `run` refuses a line whose forge build goes elsewhere than `out/`, where the units read artifacts.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
