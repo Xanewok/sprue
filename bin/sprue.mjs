@@ -8,7 +8,7 @@ import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync,
   writeFileSync, writeSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { constants, homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const NAME = "sprue";
@@ -53,6 +53,10 @@ and every step is asked: it is sent only after \`yes\` is typed at the terminal,
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
 .env and ~/.foundry/foundry.toml unchanged since before the dry run. Nothing skips the question.
 
+One run of a network runs at a time, a rehearse of its copy and a plan of a copy included: a second
+refuses while the first, or a forge the first started, runs. A signal stops the running forge, and the run ends once that forge
+has exited.
+
 --allow-dirty skips only the clean-checkout check at the start, with a warning, and never on a live
 chain; the per-step comparison and the question stay.
 
@@ -73,11 +77,13 @@ skips every node already done, rehearse starts over from network's files:
   0   the target is done
   1   a step or a clock read failed
   2   usage error, unknown target, \`--wait\` on the unlocked chain, an unknown plan line, or a refusal: no terminal,
-      CI set, a development node, a signer other than the step's sender, a pending transaction
+      CI set, a development node, a signer other than the step's sender, a pending transaction, another run
+      of the network
   3   a node it cannot reach yet (\`# cannot reach\`)
   4   a date the chain has not reached; --wait waits for it instead
   5   the target is not done: a plan is unchanged after its sends
   6   the person did not answer \`yes\`; the step was not sent
+  128+n  signal n (130 SIGINT, 143 SIGTERM), once the forge it stopped has exited
   *   forge's own code, when a step refuses
 `;
 
@@ -116,6 +122,14 @@ const readJson = (file) => {
 const isFile = (f) => {
   try { return statSync(f).isFile(); } catch { return false; }
 };
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
 
 // A short tool's stdout without its trailing newlines, like `$(...)`.
 function exec(bin, args, stdio = ["ignore", "pipe", "inherit"]) {
@@ -148,25 +162,9 @@ const overriding = (config, env) => {
   ];
 };
 
-// forge's stdout and stderr share one file, so the output keeps the order forge wrote it in.
-function forge(args, env) {
-  const dir = mkdtempSync(join(tmpdir(), "sprue-"));
-  const file = join(dir, "out");
-  const fd = openSync(file, "w");
-  let r;
-  try {
-    r = spawnSync("forge", args, { stdio: ["ignore", fd, fd], env: { ...process.env, ...env } });
-  } finally {
-    closeSync(fd);
-  }
-  const text = readFileSync(file, "utf8");
-  rmSync(dir, RM_TREE);
-  if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
-  return { status: r.status ?? 1, text: text.replace(/\n+$/, "") };
-}
-
-// `forge`, but a compile's lines are also copied to stderr while forge runs: forge reports a compile on
-// the stdout that is captured, so a cold build of a large graph would otherwise wait in silence.
+// forge's stdout and stderr share one file, so the output keeps the order forge wrote it in. A compile's
+// lines are also copied to stderr while forge runs: forge reports a compile on the stdout that is
+// captured, so a cold build of a large graph would otherwise wait in silence.
 function forgeShowingCompile(args, env) {
   const dir = mkdtempSync(join(tmpdir(), "sprue-"));
   const file = join(dir, "out");
@@ -190,14 +188,12 @@ function forgeShowingCompile(args, env) {
     return text;
   };
   return new Promise((resolve) => {
-    // Tracked so that an interrupt stops it before rehearse releases its lock.
-    const child = (forgeStep = spawn("forge", args, { stdio: ["ignore", fd, fd], env: { ...process.env, ...env } }));
+    const child = track(spawn("forge", args, { stdio: ["ignore", fd, fd], env: { ...process.env, ...env } }));
     const timer = setInterval(follow, 200);
     let ended = false;
     const end = (status, error) => {
       if (ended) return;
       ended = true;
-      forgeStep = undefined;
       clearInterval(timer);
       const text = follow();
       closeSync(fd);
@@ -207,6 +203,57 @@ function forgeShowingCompile(args, env) {
     child.on("error", (e) => end(1, e));
     child.on("close", (code) => end(code));
   });
+}
+
+// Two runs of one network would interleave their writes to its journals and forge's records, and fail on
+// each other's nonces. A run holds the lock through a file named by its pid, and through one for each
+// forge it starts, so a forge that outlives a killed runner still holds it. A run writes its own file
+// before it reads the others', so of two runs at once at least one sees the other: both may refuse,
+// never both go on. A file whose pid has exited holds nothing, and any run removes it. The directory is
+// in the git directory, outside the tree that git status reads, and named by the network alone, so that
+// two spellings of the project's path cannot give one network two locks.
+let lockDir;
+function lock(network) {
+  const git = must("git", ["rev-parse", "--absolute-git-dir"], "refusing: git rev-parse --absolute-git-dir failed");
+  lockDir = join(git, "sprue-locks", network);
+  mkdirSync(lockDir, { recursive: true });
+  const mine = String(process.pid);
+  writeFileSync(join(lockDir, mine), "");
+  // Removed only so that a later process given this pid is not taken for this run.
+  process.on("exit", () => rmSync(join(lockDir, mine), { force: true }));
+  for (const f of readdirSync(lockDir)) {
+    if (f === mine) continue;
+    if (alive(Number(f))) fail(2, `refusing: a run of ${network} is running, as pid ${f}; wait for it to end, or, if no run of ${network} runs, remove ${join(lockDir, f)}`);
+    rmSync(join(lockDir, f), { force: true });
+  }
+}
+// The signals that end a run. A forge child writes journals until it exits, a dry run's too on a
+// rehearsal network, so it is stopped first and the lock released only after it.
+const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", ...(WIN ? ["SIGBREAK"] : [])];
+function onSignal(sig) {
+  const done = () => {
+    atExit();
+    process.exit(128 + constants.signals[sig]);
+  };
+  if (forgeStep) {
+    forgeStep.once("exit", done);
+    forgeStep.kill();
+  } else done();
+}
+// A listener runs only once the event loop is free, so the terminal's question turns them off.
+const handleSignals = (on) => {
+  for (const s of SIGNALS) process[on ? "on" : "off"](s, onSignal);
+};
+// The forge child that a signal waits for.
+function track(child) {
+  forgeStep = child;
+  const file = lockDir && child.pid && join(lockDir, String(child.pid));
+  if (file) writeFileSync(file, "");
+  child.once("exit", () => {
+    forgeStep = undefined;
+    if (file) rmSync(file, { force: true });
+  });
+  return child;
 }
 
 // The graph script's lines that start with `<tag> `, without the tag.
@@ -234,6 +281,7 @@ function ask(prompt) {
   if (!tty) fail(2, "refusing: no terminal to ask on");
   const [rd, wr] = tty;
   write(wr, prompt);
+  handleSignals(false);
   const bytes = [];
   const b = Buffer.alloc(1);
   for (;;) {
@@ -247,6 +295,7 @@ function ask(prompt) {
     if (n === 0 || b[0] === 10) break;
     bytes.push(b[0]);
   }
+  handleSignals(true);
   closeSync(rd);
   closeSync(wr);
   const answer = Buffer.from(bytes).toString();
@@ -397,6 +446,14 @@ async function main(argv) {
   const netfile = `${DEPLOYMENTS}/${network}/network.json`;
   if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
   if (!stopOnly) known(target);
+  // rehearse locks its copy before it stops a kept fork or restages a file that a run of it may use. A
+  // plan of a copy locks too, since its simulations write the copy's journals.
+  const locked = rehearsing ? `${rehearsal}-${network}` : network;
+  if (verb !== "plan" || locked === rehearsal || locked.startsWith(`${rehearsal}-`)) {
+    lock(locked);
+    // Before any forge starts: without a listener, a signal would end the runner and leave forge running.
+    handleSignals(true);
+  }
   const isLocal = (id) => Array.isArray(project.chains.local) && project.chains.local.includes(id);
   function chainsOf(name) {
     const file = `${DEPLOYMENTS}/${name}/network.json`;
@@ -431,16 +488,7 @@ async function main(argv) {
     if (source === rehearsal || source.startsWith(`${rehearsal}-`)) fail(2, `refusing ${source}: it is a rehearsal network; rehearse the network it copies`);
     if (!ignored(`${dir}/`)) fail(2, `refusing: git does not ignore ${dir}/, where rehearse writes`);
     const recordFile = `${dir}/.sprue/rehearsal.json`;
-    const lock = `${dir}/.sprue/lock`;
     const save = (m) => writeFileSync(recordFile, `${JSON.stringify(m, null, 2)}\n`);
-    const alive = (pid) => {
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (e) {
-        return e.code === "EPERM";
-      }
-    };
     const anvilMetadata = (url) => {
       const r = exec("cast", ["rpc", "anvil_metadata", "--rpc-url", url], ["ignore", "pipe", "ignore"]);
       try { return r.status === 0 ? JSON.parse(r.out) : undefined; } catch {}
@@ -448,30 +496,6 @@ async function main(argv) {
     if (!existsSync(dir) && stopOnly) fail(2, `no rehearsal of ${source}: no ${dir}`);
     if (existsSync(dir) && !existsSync(dirname(recordFile))) fail(2, `refusing: ${dir} exists and no rehearse staged it; move it away`);
     mkdirSync(dirname(recordFile), { recursive: true });
-    // Exclusive, and read under it: two rehearses of one network would share its journals over different
-    // forks. A stale lock is not taken over, since two runs could both take it.
-    try {
-      writeFileSync(lock, String(process.pid), { flag: "wx" });
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      const pid = Number(readFileSync(lock, "utf8"));
-      if (alive(pid)) fail(2, `refusing: a rehearse of ${source} is running, as pid ${pid}`);
-      fail(2, `refusing: ${lock} names pid ${pid}, which has exited; remove it if no rehearse of ${source} runs`);
-    }
-    atExit = () => rmSync(lock, { force: true });
-    for (const sig of ["SIGINT", "SIGTERM"]) {
-      process.on(sig, () => {
-        const done = () => {
-          atExit();
-          process.exit(130);
-        };
-        // A step writes its journal until it exits, so the lock is held until then.
-        if (forgeStep?.exitCode === null && forgeStep.signalCode === null) {
-          forgeStep.once("exit", done);
-          forgeStep.kill();
-        } else done();
-      });
-    }
     const previous = readJson(recordFile) ?? { source, forks: [] };
     if (!isObject(previous) || !Array.isArray(previous.forks)) fail(2, `refusing: ${recordFile} is not a rehearse's record; move ${dir} away`);
     // A kept fork's pid may since name another process: signal it only while its URL answers as its instance.
@@ -516,7 +540,7 @@ async function main(argv) {
     const over = overriding(JSON.parse(must("forge", ["config", "--json"], "refusing: forge config --json failed")), process.env);
     if (over.length) fail(2, `refusing: forge would take ${over.join(", ")} (.env or foundry.toml) over the forks and senders the lines name`);
 
-    // .sprue/ holds the lock.
+    // .sprue/ holds the forks' record and logs.
     for (const f of readdirSync(dir)) if (f !== ".sprue") rmSync(`${dir}/${f}`, RM_TREE);
     const forks = [];
     const record = (kept = forks) => ({ source, forks: kept.map(({ child, ...f }) => f) });
@@ -526,7 +550,6 @@ async function main(argv) {
       // A fork that has not answered yet is not kept: no record could stop it.
       for (const f of forks) if (!keep || !f.instanceId) f.child.kill();
       save(record(keep ? forks.filter((f) => f.instanceId) : []));
-      rmSync(lock, { force: true });
       if (keep && forks.every((f) => f.instanceId)) {
         err(`${NAME}: the forks keep running, and ${dir}/network.json names them; stop them with ${NAME} rehearse --stop ${source}\n`);
       }
@@ -749,8 +772,7 @@ async function main(argv) {
   // Runs forge with its output streaming.
   const step = async ({ env, args }) => {
     const { code, log } = await new Promise((resolve) => {
-      const child = spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
-      forgeStep = child;
+      const child = track(spawn("forge", [...args, "--broadcast", ...signer], { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] }));
       let log = "";
       for (const s of [child.stdout, child.stderr]) {
         s.setEncoding("utf8");
@@ -765,7 +787,6 @@ async function main(argv) {
       });
       child.on("close", (code) => resolve({ code: code ?? 1, log }));
     });
-    forgeStep = undefined;
     if (code !== 0) stop(log, code);
   };
 
@@ -780,7 +801,8 @@ async function main(argv) {
     // recovery.
     if (changes().some((l) => !ours.has(l))) process.env.DEPLOY_TREE_DIRTY = "1";
     else delete process.env.DEPLOY_TREE_DIRTY;
-    const dry = forge(cmd.args, cmd.env);
+    const dry = await forgeShowingCompile(cmd.args, cmd.env);
+    if (dry.error) fail(1, `cannot run forge: ${dry.error.message}`);
     out(`${dry.text}\n`);
     if (dry.status !== 0) stop(dry.text, dry.status);
     // Forge saves a dry run that has transactions and names the file. If the output says it has
@@ -959,7 +981,7 @@ async function main(argv) {
   }
 }
 
-// What a rehearse leaves when it ends, however it ends, and the step a signal waits for.
+// What a run leaves when it ends, however it ends, and the forge child a signal waits for.
 let atExit = () => {};
 let forgeStep;
 

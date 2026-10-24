@@ -48,7 +48,6 @@ prototype exists) or **researched** (the problem is understood, the design is no
 - **Recovery from the chain alone.** Recovery reads forge's broadcast records today. Without
   them, it would need a log or trace search, and so an archive RPC.
 - **Contracts a factory created,** found from the factory's nonce, its events or traces.
-- **Concurrent runs** on one network: whether two runs need a lock.
 - **What an attended run's approval covers.** The run stops if the state it compares
   ([SECURITY.md](SECURITY.md)) changes while it asks. Forge reads other state that a send could see
   differently from the dry run the person approved.
