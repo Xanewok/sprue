@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+`run` and `rehearse` refuse a second run of a network while the first, or a forge the first started,
+runs (exit 2); `rehearse` takes its copy's lock before it touches the copy, and so does a `plan` of a
+copy, whose simulations write its journals. Before, two runs both reached forge, and the later one
+failed inside it or stopped at exit 3. A crash needs no cleanup: the lock replaces the rehearsal copy's
+`.sprue/lock`, which a crash left for a person to remove.
+
+A signal (SIGINT, SIGTERM, SIGHUP; SIGBREAK on Windows) to `run` or `rehearse` stops the forge that
+runs, waits for it to exit, then exits with 128 plus the signal's number: SIGTERM is now 143, not
+`rehearse`'s 130. Before, a signal to `run` alone ended it and left its forge sending, or a dry run
+writing journals, with no lock held.
+
 ## 0.1.4
 
 Breaking: `run` and `rehearse` refuse at the start, before any send, a `DEPLOYER` that differs from
