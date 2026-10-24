@@ -219,6 +219,7 @@ abstract contract Graph is Script {
                 visit.status = Status.Done;
             } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
+                _requireCertificateAhead(target, i, statuses, visits, count);
             } else {
                 if (bytes(n.gate).length != 0) {
                     require(
@@ -253,6 +254,44 @@ abstract contract Graph is Script {
             statuses[i] = visit.status;
             visits[count++] = visit;
             if (visit.status == Status.NotJudged) break;
+        }
+    }
+
+    /// @dev `nodeIndex` stops the plan until its needs are done. A need that only its unit's certificate
+    ///      marks done stays undone unless this plan sends a `check` of that unit before `nodeIndex`, and
+    ///      every later plan would stop at `nodeIndex` again.
+    function _requireCertificateAhead(
+        string memory target,
+        uint256 nodeIndex,
+        Status[] memory statuses,
+        Visit[] memory visits,
+        uint256 count
+    ) private view {
+        bool[] memory needed = _closure(nodeIndex);
+        for (uint256 c; c < nodeIndex; ++c) {
+            Node storage certified = _nodes[c];
+            if (!needed[c] || statuses[c] == Status.Done || !certified.certified) continue;
+            bytes32 journal = keccak256(bytes(vm.split(certified.id, ".")[0]));
+            bool ahead;
+            for (uint256 v; v < count && !ahead; ++v) {
+                Node storage check = _nodes[visits[v].node];
+                ahead = !check.due && keccak256(bytes(check.step)) == keccak256("check")
+                    && keccak256(bytes(vm.split(check.id, ".")[0])) == journal;
+            }
+            require(
+                ahead,
+                _cannotReach(
+                    target,
+                    string.concat(
+                        _nodes[nodeIndex].id,
+                        " waits for ",
+                        certified.id,
+                        ", which only a check of its unit marks done, and none is sent before it: give ",
+                        certified.id,
+                        " a Due view, or plan such a check first"
+                    )
+                )
+            );
         }
     }
 

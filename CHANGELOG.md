@@ -28,6 +28,11 @@ just deployed, is refused with "<role> at <address> has no code: if the RPC lags
 again once it shows the deployment". Before, `_requireRecordedCode` said that the role's code differs
 from the journal, and `_checked` said only "<role> has no code".
 
+Fixed: `plan`, `run` and `rehearse` refuse a plan that would stop at a step with a `Due` view or a
+predicate that waits for a step only its unit's `check` marks done, when the plan sends no such `check`
+before it. Before, `run` sent the earlier steps and then exited 5 with "plan is unchanged after sending
+it", and `rehearse` passed. Give the earlier step a `Due` view, or plan such a check first.
+
 [ROADMAP.md](ROADMAP.md) gains a "Known gaps" section: behavior that sprue does not yet refuse or fix.
 
 ## 0.1.4
