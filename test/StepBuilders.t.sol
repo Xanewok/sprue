@@ -222,6 +222,15 @@ contract CheckedGraph is BuilderGraph {
     }
 }
 
+/// @dev Only `token.json` is checked.
+contract TokenCheckedGraph is BuilderGraph {
+    constructor(Registration memory u, Step[] memory s) BuilderGraph(u, s) {}
+
+    function _journalChecked(string memory, string memory unit) internal pure override returns (bool) {
+        return keccak256(bytes(unit)) == keccak256("token");
+    }
+}
+
 /// @dev A driver that claims progress and meets only `Counting.fresh`, for 10 seconds per call.
 contract DriverGraph is BuilderGraph {
     Counting private immutable counting;
@@ -403,6 +412,96 @@ contract StepBuildersTest is Test, Declares {
         s[3] = _step("fixture.recheck", "check", StepFunctions.check.selector).needs("fixture.configure");
         vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.recheck"));
         new BuilderGraph(unit, s);
+    }
+
+    string private constant WAITS_FOR_DEPLOY = "vault.deploy, which only a check of its unit marks done, and none is "
+        "sent before it: give vault.deploy a Due view, or plan such a check first";
+
+    function _dueBehindCertificate(bool deployHasDue) private returns (BuilderGraph) {
+        Step[] memory s = new Step[](3);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        if (deployHasDue) s[0] = s[0].due(StepFunctions.deployDue.selector);
+        s[1] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        s[1] = s[1].due(StepFunctions.fundDue.selector);
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.open");
+        return new BuilderGraph(unit, s);
+    }
+
+    /// @dev Sending `vault.deploy` would leave the plan unchanged: `vault.open` waits for the certificate,
+    ///      and the only `check` needs `vault.open`.
+    function test_plan_refusesADueStepBehindACertificateNoEarlierCheckWrites() public {
+        BuilderGraph g = _dueBehindCertificate(false);
+        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.open waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.check");
+
+        assertTrue(
+            vm.contains(_dueBehindCertificate(true).plan("anvil", "vault.check"), "# then plan again vault.open")
+        );
+    }
+
+    function test_plan_refusesAPredicateBehindACertificateNoEarlierCheckWrites() public {
+        Step[] memory s = new Step[](3);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        s[1] = _until("vault.observed", "observed", StepFunctions.observed.selector).needs("vault.deploy");
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.observed");
+        BuilderGraph g = new BuilderGraph(unit, s);
+        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.observed waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.check");
+    }
+
+    /// @dev The refusal follows the target: `vault.early` comes before `vault.open` and writes the certificate.
+    function test_plan_acceptsADueStepBehindACertificateAnEarlierCheckWrites() public {
+        Step[] memory s = new Step[](5);
+        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
+        s[1] = _step("vault.early", "check", StepFunctions.check.selector).needs("vault.deploy");
+        s[2] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        s[2] = s[2].due(StepFunctions.fundDue.selector);
+        s[3] = _step("vault.late", "check", StepFunctions.check.selector).needs("vault.open");
+        s[4] = _node("vault.all").needs("vault.early").needs("vault.late");
+        BuilderGraph g = new BuilderGraph(unit, s);
+        assertTrue(vm.contains(g.plan("anvil", "vault.all"), "# then plan again vault.open"));
+
+        vm.expectRevert(bytes(string.concat("cannot reach vault.late: vault.open waits for ", WAITS_FOR_DEPLOY)));
+        g.plan("anvil", "vault.late");
+    }
+
+    /// @dev `vault.open` needs `vault.deploy`, which `vault.check` certifies first, and, with `transitive`,
+    ///      `token.deploy` through it.
+    function _certificateOfAnotherUnit(bool transitive) private view returns (Step[] memory s) {
+        s = new Step[](5);
+        s[0] = _step("token.deploy", StepFunctions.deploy.selector);
+        s[1] = _step("vault.deploy", StepFunctions.deploy.selector);
+        if (transitive) s[1] = s[1].needs("token.deploy");
+        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.deploy");
+        s[3] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
+        s[3] = s[3].due(StepFunctions.fundDue.selector);
+        s[4] = _step("token.check", StepFunctions.check.selector).needs("vault.open").needs("vault.check");
+        s[4] = s[4].needs("token.deploy");
+    }
+
+    /// @dev The plan sends `vault.check` but no check of `token`.
+    function test_plan_refusesADueStepBehindACertificateOfAnotherUnitsNeed() public {
+        BuilderGraph g = new BuilderGraph(unit, _certificateOfAnotherUnit(true));
+        vm.expectRevert(
+            bytes(
+                "cannot reach token.check: vault.open waits for token.deploy, which only a check of its unit marks "
+                "done, and none is sent before it: give token.deploy a Due view, or plan such a check first"
+            )
+        );
+        g.plan("anvil", "token.check");
+    }
+
+    /// @dev Only the waiting step's undone needs count: `token.deploy` is done, or not a need of `vault.open`.
+    function test_plan_acceptsADueStepWhoseOtherCertifiedNeedsAreDoneOrNotItsNeeds() public {
+        string memory waits = "# then plan again vault.open";
+        assertTrue(
+            vm.contains(
+                new TokenCheckedGraph(unit, _certificateOfAnotherUnit(true)).plan("anvil", "token.check"), waits
+            )
+        );
+        assertTrue(
+            vm.contains(new BuilderGraph(unit, _certificateOfAnotherUnit(false)).plan("anvil", "token.check"), waits)
+        );
     }
 
     function test_predicateSelectorMatchesItsSignature() public {
