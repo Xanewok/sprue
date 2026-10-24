@@ -27,14 +27,11 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         elif lag:
             head = int(json.loads(ask(b'{"jsonrpc":"2.0","id":0,"method":"eth_blockNumber","params":[]}'))["result"], 16)
             head = hex(max(0, head - lag))
-            replies = []
-            for c in call if isinstance(call, list) else [call]:
-                if c.get("method") == "eth_blockNumber":
-                    replies.append({"jsonrpc": "2.0", "id": c.get("id"), "result": head})
-                else:
-                    c["params"] = [head if p == "latest" else p for p in c.get("params") or []]
-                    replies.append(json.loads(ask(json.dumps(c).encode())))
-            data = json.dumps(replies if isinstance(call, list) else replies[0]).encode()
+            if call["method"] == "eth_blockNumber":
+                data = json.dumps({"jsonrpc": "2.0", "id": call["id"], "result": head}).encode()
+            else:
+                call["params"] = [head if p == "latest" else p for p in call.get("params") or []]
+                data = ask(json.dumps(call).encode())
         else:
             data = ask(body)
         self.send_response(200)
