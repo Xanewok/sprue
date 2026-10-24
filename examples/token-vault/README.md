@@ -19,7 +19,7 @@ script/deploy/graph.generated.json      saved `sprue json`; regenerate it after 
 Copy this directory out of the sprue checkout, then:
 
 ```sh
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.5
 anvil &                                  # chain 31337 on :8545
 sprue() { node lib/sprue/bin/sprue.mjs "$@"; }
 sprue plan local vault.check             # the next commands; sends nothing

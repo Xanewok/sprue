@@ -1,29 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.1.5
 
-`run` and `rehearse` refuse a second run of a network while the first, or a forge the first started,
-runs (exit 2); `rehearse` takes its copy's lock before it touches the copy, and so does a `plan` of a
-copy, whose simulations write its journals. Before, two runs both reached forge, and the later one
-failed inside it or stopped at exit 3. A crash needs no cleanup: the lock replaces the rehearsal copy's
+Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM
+exits 143, not 130.
+
+`run` and `rehearse` refuse to start (exit 2) while another run of the same network, or a forge that it
+started, still runs. `rehearse` takes its copy's lock before it touches the copy, and so does a `plan` of
+a copy, whose simulations write its journals. Before, both runs reached forge, and the later one failed
+inside it or stopped at exit 3. A crash needs no cleanup: the lock replaces the rehearsal copy's
 `.sprue/lock`, which a crash left for a person to remove.
 
 A signal (SIGINT, SIGTERM, SIGHUP; SIGBREAK on Windows) to `run` or `rehearse` stops the forge that
-runs, waits for it to exit, then exits with 128 plus the signal's number: SIGTERM is now 143, not
-`rehearse`'s 130. Before, a signal to `run` alone ended it and left its forge sending, or a dry run
-writing journals, with no lock held.
+runs and waits for it to exit. Before, a signal to `run` ended it alone and left its forge sending, or a
+dry run writing journals, with no lock held.
 
-Fixed: `run` refuses a line whose forge build goes elsewhere than `out/`, where the units read artifacts.
+Fixed: `plan`, `run` and `rehearse` read the graph itself, not the saved `graph.generated.json`, to judge
+a target, to compare a rehearsal's certificates with its forks, and to choose the journals that an
+attended run leaves out of its git status and offers tags for. A target the graph lacks exits 2 with one
+line, and a rehearsal checks every journal of its copy. Only `mermaid` reads the saved file.
 
-Fixed: `plan`, `run` and `rehearse` no longer read the saved `graph.generated.json` to judge a target, to
-check a rehearsal's certificates against its forks, or to choose which journals an attended run
-leaves out of its git status and offers tags for. They use the graph itself (a target it lacks exits 2
-with a one-line message), and a rehearsal checks every journal of its copy. Only `mermaid` reads the saved file.
+Fixed: `run` refuses a command whose forge build goes elsewhere than `out/` (through `foundry.toml`,
+`FOUNDRY_PROFILE` or `FOUNDRY_OUT`), because the units read their artifacts from `out/`.
 
-Fixed: a role whose journaled address has no code, as an RPC that lags behind the chain shows a role it
-just deployed, is refused with "has no code: if the RPC lags behind the chain, run again once it shows the
-deployment", not "its code differs". A certified role that `_checked` reads is refused with the same
-words, not "has no code".
+Fixed: a role whose recorded address has no code, as an RPC that lags behind the chain shows a role it
+just deployed, is refused with "<role> at <address> has no code: if the RPC lags behind the chain, run
+again once it shows the deployment". Before, `_requireRecordedCode` said that the role's code differs
+from the journal, and `_checked` said only "<role> has no code".
+
+[ROADMAP.md](ROADMAP.md) gains a "Known gaps" section: behavior that sprue does not yet refuse or fix.
 
 ## 0.1.4
 

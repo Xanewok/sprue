@@ -68,7 +68,7 @@ This runs [`examples/token-vault`](examples/token-vault), a complete project tha
 ```sh
 git clone https://github.com/Xanewok/sprue && cd sprue
 cp -R examples/token-vault ../my-deploy && cd ../my-deploy
-git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4
+git init && forge install foundry-rs/forge-std Xanewok/sprue@v0.1.5
 anvil &                                   # chain 31337 on :8545
 node lib/sprue/bin/sprue.mjs plan local vault.check   # the next commands; sends nothing
 node lib/sprue/bin/sprue.mjs run local vault.check    # the token's two steps, then the vault's three
@@ -91,7 +91,7 @@ rebuilds it.
 
 ## Install
 
-Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.4`. The remapping is
+Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.5`. The remapping is
 `sprue/=lib/sprue/src/` and the runner is `node lib/sprue/bin/sprue.mjs`. With npm
 (`npm i -D @xanewok/sprue`) they are `sprue/=node_modules/@xanewok/sprue/src/` and `npx sprue`.
 

@@ -1,6 +1,6 @@
 {
   "name": "@xanewok/sprue",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Deploy graphs for Foundry",
   "license": "MIT",
   "author": "Igor Matuszewski",
