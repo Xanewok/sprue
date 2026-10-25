@@ -23,13 +23,16 @@ contract DeployVault is Unit {
 
     function deployDue(string calldata network) external returns (bool) {
         string memory journal = _use(network);
-        return _reuseForDue(journal, "vault", "Vault", abi.encode(_checked("token", "token"))) == address(0);
+        bytes memory args = abi.encode(_checked("token", "token"));
+        address recorded = _reuseForDue(journal, "vault", "Vault", args);
+        if (recorded != address(0)) _requireCreatedFrom(journal, "vault", "Vault", args);
+        return recorded == address(0);
     }
 
     function fund(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
-        _proveCreation(journal, "vault", "Vault", abi.encode(token));
+        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         if (short) {
             _startBroadcast();
             require(Token(token).transfer(vault, 1), "the transfer failed");
@@ -42,7 +45,7 @@ contract DeployVault is Unit {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
         require(!short, "the vault is not funded");
-        _proveCreation(journal, "vault", "Vault", abi.encode(token));
+        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         _recordReceipt(journal, "vault", vault);
         return _certifyRole(_beginChecked("vault", vault), "vault", vault);
     }

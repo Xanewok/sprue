@@ -39,7 +39,9 @@ end-to-end scenario for each invariant.
 - Steps must be idempotent: a rerun sends nothing that the chain already has. The library cannot tell
   a step that repeats a send from one that does not.
 - `_authenticate` must check the constructor arguments and state of a contract the journal reuses. The
-  library checks its code, not its state.
+  library checks its code, not its state. `_requireCreatedFrom` checks the constructor arguments, as
+  the creation transaction on the chain shows them; the state that later transactions change stays
+  with the unit.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
@@ -48,6 +50,10 @@ end-to-end scenario for each invariant.
 - A step journals each role's intent and address before forge sends. If the broadcast fails partway,
   some journaled addresses have no code yet. Rerun the step; a pending intent is sent again only as
   the same transaction.
+- `_requireCreatedFrom` finds a CREATE2 role's transaction only in its broadcast records or the
+  journal's `<role>Tx`, and a CREATE's on the chain only through an RPC that serves the deployer's
+  nonce at past blocks. Where it finds none, it refuses, except under `forge test` and for a role
+  that only the run's simulation has.
 - Chains in `chains.local` and `chains.test` have no nonce fence. Losing a journal and its broadcast
   records there can deploy a role twice.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that

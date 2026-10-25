@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+`_requireCreatedFrom(journal, role, artifact, args)` proves that a role was created from this build's
+artifact with the step's constructor arguments: it compares the creation transaction's whole input, as
+the chain shows it, with the initcode. It reads only the transaction's hash from the journal, a
+broadcast record or the chain. `_deployRole` without an `authenticate` argument runs it on a reused
+role; with one, nothing changes. `_findCreationInput(journal, role)` returns that input for a unit
+that compares it with something else.
+
+Fixed: `_recordReceipt` finds a CREATE's transaction on the chain, by the journal's deployer and
+nonce, when no broadcast record holds its receipt, as after a killed forge. Before, the role had no
+`<role>Tx` until the records came back.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM

@@ -23,7 +23,7 @@ contract DeployToken is Unit {
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         address token = _requireRecordedCode(journal, "token");
-        _proveCreation(journal, "token", "Token", abi.encode(SUPPLY));
+        _requireCreatedFrom(journal, "token", "Token", abi.encode(SUPPLY));
         _recordReceipt(journal, "token", token);
         return _certifyRole(_beginChecked("token", token), "token", token);
     }

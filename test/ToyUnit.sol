@@ -89,8 +89,17 @@ contract ToyUnit is ToyJournal {
         sentInput = input;
     }
 
-    function creationInput(string calldata network) external returns (bytes memory) {
-        return _creationInput(_use(network), "toy");
+    function findCreationInput(string calldata network) external returns (bytes memory) {
+        return _findCreationInput(_use(network), "toy");
+    }
+
+    function requireCreatedFrom(string calldata network) external {
+        _requireCreatedFrom(_use(network), "toy", "ToyPayload", abi.encode(tag));
+    }
+
+    function deployByCreation(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create);
+        return _done(sent);
     }
 
     function deploy(string calldata network) external returns (string memory) {
@@ -183,10 +192,6 @@ contract ToyUnit is ToyJournal {
         return confirmed[hash] && !create2 ? 5 : 0;
     }
 
-    function _sentAt(address, uint256) internal pure override returns (bytes32) {
-        return 0;
-    }
-
     /// @dev Unless a test chose an input, the journal's intent was sent.
     function _sentInput(bytes32) internal view virtual override returns (bytes memory) {
         if (sentInput.length != 0) return sentInput;
@@ -209,18 +214,6 @@ contract ToyUnit is ToyJournal {
 
     function _unit() internal pure override returns (string memory) {
         return "toy";
-    }
-}
-
-/// @dev Trusts the journal's record of the send in place of this build with the step's arguments.
-contract JournalCreationToyUnit is ToyUnit {
-    function _creationInitcodeHash(string memory role, string memory, bytes memory)
-        internal
-        view
-        override
-        returns (bytes32)
-    {
-        return vm.parseJsonBytes32(_journal(), string.concat(".", role, "InitcodeHash"));
     }
 }
 

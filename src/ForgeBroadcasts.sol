@@ -228,8 +228,7 @@ abstract contract ForgeBroadcasts is Journal {
     ///      nonce is unused. It searches back from the head, doubling the step, then halves the
     ///      interval, so that a recent transaction needs only the recent state a full node keeps. Zero
     ///      too with no RPC, or if the RPC cannot answer for a block, as a full node for old state.
-    ///      Virtual only so a test can answer.
-    function _sentAt(address deployer, uint256 nonce) internal virtual returns (bytes32) {
+    function _sentAt(address deployer, uint256 nonce) private returns (bytes32) {
         // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
         // `block.number` can be a rollup's parent chain's number.
         uint256 hi;

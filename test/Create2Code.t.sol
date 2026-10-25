@@ -116,6 +116,6 @@ contract Create2CodeTest is Test {
         vm.writeJson(vm.toString(deployed), string.concat(dir, "/toy.json"), ".toy");
         bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(3)));
         unit.send(bytes.concat(bytes32(uint256(1)), initcode));
-        assertEq(unit.creationInput(net), initcode, "the creation input keeps the salt");
+        assertEq(unit.findCreationInput(net), initcode, "the creation input is the initcode after the salt");
     }
 }
