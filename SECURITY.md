@@ -40,8 +40,10 @@ end-to-end scenario for each invariant.
   a step that repeats a send from one that does not.
 - `_authenticate` must check the constructor arguments and state of a contract the journal reuses. The
   library checks its code, not its state. `_requireCreatedFrom` checks the constructor arguments, as
-  the creation transaction on the chain shows them; the state that later transactions change stays
-  with the unit.
+  the creation transaction on the chain shows them, and that the code is this build's;
+  `_requireCreatedWith` checks the arguments after the code the journal records, so its code's
+  identity rests on the journal and the certified code hash. The state that later transactions change
+  stays with the unit.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 

@@ -480,6 +480,68 @@ contract CoreUnitTest is Test {
         unit.requireCreatedFrom(network);
     }
 
+    /// @dev The arguments are the chain's, after the code the journal records, so a source changed after
+    ///      the deployment passes where `_requireCreatedFrom` refuses it.
+    function test_requireCreatedWith_provesTheArgumentsAfterTheJournaledCode() public {
+        _network("created-with", FREE, "");
+        unit.deployByCreation(network);
+        string memory path = string.concat(dir, "/toy.json");
+        assertEq(
+            vm.parseJsonBytes32(vm.readFile(path), ".toyCreationCodeHash"),
+            keccak256(vm.getCode("ToyPayload.sol:ToyPayload"))
+        );
+        string memory refusal = "toy was not created with the step's arguments from the code toy.json records";
+        unit.requireCreatedWith(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedWith(network);
+
+        // Another instance has no record of this run: the chain's input decides.
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
+        later.confirm(hash);
+        bytes memory edited = bytes.concat(hex"6080", vm.getCode("ToyPayload.sol:ToyPayload"));
+        later.send(bytes.concat(edited, abi.encode(uint256(1))));
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+        vm.writeJson(vm.toString(keccak256(edited)), path, ".toyCreationCodeHash");
+        later.requireCreatedWith(network);
+        vm.expectRevert(
+            bytes(
+                "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
+            )
+        );
+        later.requireCreatedFrom(network);
+        later.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+        later.setTag(1);
+        later.send(hex"00");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+
+        // A journal without the key: the whole input against the initcode hash.
+        vm.writeFile(
+            path,
+            vm.replace(
+                vm.readFile(path), string.concat('"toyCreationCodeHash": "', vm.toString(keccak256(edited)), '",'), ""
+            )
+        );
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyCreationCodeHash"), "the key is still there");
+        later.send(_initcode(1));
+        later.requireCreatedWith(network);
+        // A suffix of the arguments is not the arguments.
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWithArgs(network, "");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWithArgs(network, hex"01");
+        later.send(bytes.concat(edited, abi.encode(uint256(1))));
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+    }
+
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
     /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
     ///      clean send over the dirty mark that intent left clears it.

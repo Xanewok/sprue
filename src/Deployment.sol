@@ -37,10 +37,15 @@ abstract contract Deployment is ForgeBroadcasts {
     /// @dev The broadcaster of the step's first broadcast, and its nonce then. `_done` clears it.
     address private _stepSender;
     uint256 private _stepNonce;
-    /// @dev The initcode hash of each contract this unit's `_deployRole` created in this run, by chain
-    ///      and address. A role that a simulation created has no transaction for `_requireCreatedFrom`
-    ///      to read.
-    mapping(bytes32 deployment => bytes32) private _createdThisRun;
+    /// @dev The initcode and argument hashes of each contract this unit's `_deployRole` created in this
+    ///      run, by chain and address. A role that a simulation created has no transaction for
+    ///      `_requireCreatedFrom` or `_requireCreatedWith` to read.
+    mapping(bytes32 deployment => Created) private _createdThisRun;
+
+    struct Created {
+        bytes32 initcodeHash;
+        bytes32 argsHash;
+    }
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
@@ -174,7 +179,7 @@ abstract contract Deployment is ForgeBroadcasts {
         internal
     {
         bytes32 expected = _initcodeHash(artifact, args);
-        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))];
+        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))].initcodeHash;
         if (created == 0) {
             bytes32 hash = _creationTx(journal, role);
             if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
@@ -189,6 +194,51 @@ abstract contract Deployment is ForgeBroadcasts {
                 " with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
             )
         );
+    }
+
+    /// @dev `role` was created with `args` from the code its journal records: by this unit's
+    ///      `_deployRole` in this run, or by the transaction `_findCreationInput` reads, whose input must
+    ///      be code that hashes to `<role>CreationCodeHash` followed by `args`. Unlike
+    ///      `_requireCreatedFrom`, a role whose source changed after its deployment passes; the code's
+    ///      identity rests on the journal. A journal without that key, written by an older sprue, has the
+    ///      whole input proven against `<role>InitcodeHash` and `args` against `<role>Args`, which the
+    ///      same write recorded. A role with neither passes under forge's test commands, as for
+    ///      `_requireCreatedFrom`.
+    function _requireCreatedWith(string memory journal, string memory role, bytes memory args) internal {
+        string memory key = string.concat(".", role);
+        Created memory run = _createdThisRun[_deployment(_addr(journal, key))];
+        bool created;
+        if (run.initcodeHash != 0) {
+            created = run.argsHash == keccak256(args);
+        } else {
+            bytes32 hash = _creationTx(journal, role);
+            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            bytes memory input = _inputOf(journal, role, hash);
+            if (input.length >= args.length) {
+                (bytes32 code, bytes32 tail) = _hashSplit(input, args.length);
+                created = tail == keccak256(args)
+                    && (_has(journal, string.concat(key, "CreationCodeHash"))
+                            ? code == vm.parseJsonBytes32(journal, string.concat(key, "CreationCodeHash"))
+                            : keccak256(input) == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))
+                            && keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args));
+            }
+        }
+        require(
+            created,
+            string.concat(role, " was not created with the step's arguments from the code ", _unit(), ".json records")
+        );
+    }
+
+    /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
+    function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
+        // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
+        // within `input`.
+        assembly ("memory-safe") {
+            let start := add(input, 32)
+            let cut := sub(mload(input), tail)
+            code := keccak256(start, cut)
+            rest := keccak256(add(start, cut), tail)
+        }
     }
 
     function _creationTx(string memory journal, string memory role) private returns (bytes32 hash) {
@@ -598,6 +648,11 @@ abstract contract Deployment is ForgeBroadcasts {
         _recordSender(role, found.addr, found.from, found.nonce);
         _put(string.concat(".", role, "Args"), vm.toString(found.args));
         _put(string.concat(".", role, "InitcodeHash"), vm.toString(keccak256(input)));
+        require(
+            input.length >= found.args.length, string.concat("the recovered ", role, "'s arguments exceed its input")
+        );
+        (bytes32 code,) = _hashSplit(input, found.args.length);
+        _put(string.concat(".", role, "CreationCodeHash"), vm.toString(code));
         _recordBuild(role, found.addr, artifact);
         (bool hasCommit, string memory commit) = _commit(found);
         if (hasCommit) _put(string.concat(".", role, "Commit"), string.concat('"', commit, '"'));
@@ -749,6 +804,10 @@ abstract contract Deployment is ForgeBroadcasts {
     function _recordIntent(string memory role, string memory name, bytes memory args) internal {
         _put(string.concat(".", role, "Args"), vm.toString(args));
         _put(string.concat(".", role, "InitcodeHash"), vm.toString(_initcodeHash(name, args)));
+        _put(
+            string.concat(".", role, "CreationCodeHash"),
+            vm.toString(keccak256(vm.getCode(string.concat(name, ".sol:", name))))
+        );
     }
 
     function _initcodeHash(string memory name, bytes memory args) internal view returns (bytes32) {
@@ -892,7 +951,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireDeployable();
             addr = create(args);
             _requireBuild(addr, artifact);
-            _createdThisRun[_deployment(addr)] = _initcodeHash(artifact, args);
+            _createdThisRun[_deployment(addr)] = Created(_initcodeHash(artifact, args), keccak256(args));
         } else {
             addr = recorded;
             if (byCreation) _requireCreatedFrom(journal, role, artifact, args);

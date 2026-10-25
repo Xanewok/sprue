@@ -61,7 +61,9 @@ certificates, and `MissingDoneRule` for a step with neither.
 
 Order: E, then B with C, then D. Each is independent of A's internals and can be adopted alone.
 
-- **E. Prove creation against the journal's own record** (take, changed). Proving against this build's
+- **E. Prove creation against the journal's own record** (take, changed; built as
+  `_requireCreatedWith`, after a fresh adversarial review: its fallback accepted a suffix of the
+  journaled arguments until it also required `<role>Args`). Proving against this build's
   initcode orphans a role after any later source edit. Prove instead that the chain's creation input hashes
   to the journal's `<role>InitcodeHash` and ends with the arguments the step expects. The chain then fixes
   the arguments, and the code rests on the build the journal recorded (`<role>CodeHash`, the metadata).

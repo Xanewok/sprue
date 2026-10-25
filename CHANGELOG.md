@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`_requireCreatedWith(journal, role, args)` proves a role's constructor arguments without this build's
+code: the creation input must be code that hashes to the journal's new `<role>CreationCodeHash`,
+followed by `args`. A role whose source changed after its deployment passes. A journal written before
+that key has the input proven against `<role>InitcodeHash` and `args` against `<role>Args`.
+
 `plan` judges a step that has no `Due` view by running it as its sender in a probe that reverts its EVM
 state: the step
 is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with its reason

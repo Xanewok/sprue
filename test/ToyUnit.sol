@@ -97,6 +97,14 @@ contract ToyUnit is ToyJournal {
         _requireCreatedFrom(_use(network), "toy", "ToyPayload", abi.encode(tag));
     }
 
+    function requireCreatedWith(string calldata network) external {
+        _requireCreatedWith(_use(network), "toy", abi.encode(tag));
+    }
+
+    function requireCreatedWithArgs(string calldata network, bytes calldata args) external {
+        _requireCreatedWith(_use(network), "toy", args);
+    }
+
     function deployByCreation(string calldata network) external returns (string memory) {
         (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create);
         return _done(sent);
