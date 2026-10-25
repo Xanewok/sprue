@@ -422,13 +422,20 @@ contract CoreUnitTest is Test {
     }
 
     /// @dev Only a unit that asks for the proof gets it: the `_deployRole` without `authenticate`, or a
-    ///      call. A role this run created passes; a test's role with no known transaction passes too, as
-    ///      forge's test commands keep no transaction history. A refusal comes before any journal write.
+    ///      call. This run's record of a role it created decides, even in a test; a test's role with no
+    ///      record and no known transaction passes, as forge's test commands keep no transaction history.
+    ///      A refusal comes before any journal write.
     function test_requireCreatedFrom_refusesAnotherCreationInput_onlyWhereAUnitAsks() public {
         _network("created-from", FREE, "");
         unit.deployByCreation(network);
         unit.send(_initcode(2));
         unit.requireCreatedFrom(network);
+        string memory refusal =
+            "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from";
+        unit.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedFrom(network);
+        unit.setTag(1);
         ToyUnit later = new ToyUnit();
         later.setTestSender(ops);
         later.requireCreatedFrom(network);
@@ -439,8 +446,6 @@ contract CoreUnitTest is Test {
         later.send(_initcode(2));
         string memory path = string.concat(dir, "/toy.json");
         string memory journal = vm.readFile(path);
-        string memory refusal =
-            "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from";
         vm.expectRevert(bytes(refusal));
         later.deployByCreation(network);
         vm.stopBroadcast();

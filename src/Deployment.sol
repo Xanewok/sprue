@@ -118,18 +118,21 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `role` was created from this build's `artifact` with `args`: by this unit's `_deployRole`
-    ///      in this run, or by the transaction `_findCreationInput` reads. A role with no known transaction passes
-    ///      under forge's test commands, which keep no transaction history. For a role created
-    ///      otherwise, compare `_findCreationInput` with what it was created from.
+    ///      in this run, whose record decides, or by the transaction `_findCreationInput` reads. A role
+    ///      with neither passes under forge's test commands, which keep no transaction history. For a
+    ///      role created otherwise, compare `_findCreationInput` with what it was created from.
     function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
         bytes32 expected = _initcodeHash(artifact, args);
-        if (_createdThisRun[_deployment(_addr(journal, string.concat(".", role)))] == expected) return;
-        bytes32 hash = _creationTx(journal, role);
-        if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))];
+        if (created == 0) {
+            bytes32 hash = _creationTx(journal, role);
+            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            created = keccak256(_inputOf(journal, role, hash));
+        }
         require(
-            keccak256(_inputOf(journal, role, hash)) == expected,
+            created == expected,
             string.concat(
                 role,
                 " was not created from this build's ",
