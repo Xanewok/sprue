@@ -56,6 +56,18 @@ abstract contract Deployment is ForgeBroadcasts {
         _testCreationsTrusted = true;
     }
 
+    /// @dev `trustTestCreations` for one role only: the creation proofs take `journal`'s intent for
+    ///      `role` as its creation in this run, so a test still refuses a tampered intent and every other
+    ///      role. Reverts outside forge's test commands.
+    function trustTestCreationOf(string calldata journal, string calldata role) external {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
+        string memory key = string.concat(".", role);
+        _createdThisRun[_deployment(_addr(journal, key))] = Created(
+            vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash")),
+            keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args")))
+        );
+    }
+
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
     function setTestSender(address sender) external {
@@ -248,24 +260,36 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev The journal's record of `role` is consistent with a CREATE of `args` by the deployer that
-    ///      `network.json` pins, if it pins one: the recorded arguments are `args`, and the recorded
-    ///      deployer and nonce give the recorded address. It proves what the journal says, not what the
+    ///      `network.json` pins: the recorded arguments are `args`, and the recorded deployer and nonce give
+    ///      the address the journal records, which is the one a step reuses. Refused on a network that pins
+    ///      no deployer, where any key's record would pass. It proves what the journal says, not what the
     ///      chain shows: `_requireCreatedWith` reads the creation itself, where the input is the code
     ///      followed by `args` alone.
     function _requireJournaledCreate(string memory journal, string memory role, bytes memory args) internal view {
-        string memory key = string.concat(".", role);
-        require(
-            keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
-            string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
-        );
-        address sender = _addr(journal, string.concat(key, "Deployer"));
+        _requireJournaledCreate(_unit(), journal, role, args);
+    }
+
+    /// @dev `_requireJournaledCreate` of `unit`'s journal `record`, as `_journalOf(unit)` reads it.
+    function _requireJournaledCreate(string memory unit, string memory record, string memory role, bytes memory args)
+        internal
+        view
+    {
         address pinned = _pinnedDeployer();
         require(
-            pinned == address(0) || sender == pinned,
+            pinned != address(0),
+            string.concat("network.json pins no deployer, so ", unit, ".json alone cannot prove ", role, "'s creation")
+        );
+        string memory key = string.concat(".", role);
+        require(
+            keccak256(vm.parseJsonBytes(record, string.concat(key, "Args"))) == keccak256(args),
+            string.concat(role, "'s constructor arguments differ from ", unit, ".json")
+        );
+        require(
+            _addr(record, string.concat(key, "Deployer")) == pinned,
             string.concat(role, "'s recorded deployer is not network.json's deployer")
         );
         require(
-            vm.computeCreateAddress(sender, _uint(journal, string.concat(key, "Nonce"))) == _addr(journal, key),
+            vm.computeCreateAddress(pinned, _uint(record, string.concat(key, "Nonce"))) == _addr(record, key),
             string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
         );
     }
@@ -963,12 +987,14 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev How `_deployRole` proves a reused role, before anything is journaled: by the unit's
-    ///      `authenticate`, by `_requireCreatedFrom` (this build's code), or by `_requireCreatedWith` (the
-    ///      code the journal records, so a later source edit does not orphan the role).
+    ///      `authenticate`, by `_requireCreatedFrom` (this build's code), by `_requireCreatedWith` (the
+    ///      code the journal records, so a later source edit does not orphan the role), or by
+    ///      `_requireJournaledCreate` (the journal's own record, with no read of the creation).
     enum Proof {
         Authenticate,
         FromBuild,
-        WithArgs
+        WithArgs,
+        Journaled
     }
 
     /// @dev `_deployRole` for a role whose creation proves what a reuse needs, as when its state is the
@@ -983,7 +1009,7 @@ abstract contract Deployment is ForgeBroadcasts {
         return _deployRole(journal, role, artifact, args, create, _noState, Proof.FromBuild, false);
     }
 
-    /// @dev `_deployRole` with the creation proof named: `Proof.FromBuild` or `Proof.WithArgs`.
+    /// @dev `_deployRole` with the creation proof named.
     function _deployRole(
         string memory journal,
         string memory role,
@@ -1006,8 +1032,21 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         Proof proof
     ) internal returns (address addr, bool sent) {
-        require(proof != Proof.Authenticate, "pass create and authenticate functions instead");
+        require(proof != Proof.Authenticate, "pass the authenticate function instead");
         return _deployRole(journal, role, artifact, args, _noCreate, _noState, proof, true);
+    }
+
+    /// @dev `_deployRole` from the initcode, whose reuse must also pass `check` after `proof`, for state
+    ///      that later transactions change. `Proof.Authenticate` leaves `check` the only proof.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        Proof proof,
+        function(address, bytes memory) internal view check
+    ) internal returns (address addr, bool sent) {
+        return _deployRole(journal, role, artifact, args, _noCreate, check, proof, true);
     }
 
     function _noState(address, bytes memory) private view {}
@@ -1094,7 +1133,8 @@ abstract contract Deployment is ForgeBroadcasts {
     ) private {
         if (proof == Proof.FromBuild) _requireCreatedFrom(journal, role, artifact, args);
         else if (proof == Proof.WithArgs) _requireCreatedWith(journal, role, args);
-        else authenticate(addr, args);
+        else if (proof == Proof.Journaled) _requireJournaledCreate(journal, role, args);
+        authenticate(addr, args);
     }
 
     /// @dev Starts the certificate of `role` at `addr`, after it journals the role's receipt.

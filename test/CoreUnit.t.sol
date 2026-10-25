@@ -1063,7 +1063,7 @@ contract CoreUnitTest is Test {
     }
 
     function test_requireJournaledCreate_holdsTheRecordToItsArgumentsPinAndNonce() public {
-        _network("journaled-create", FREE, "");
+        _network("journaled-create", FREE, vm.toString(ops));
         unit.deploy(network);
         unit.requireJournaledCreate(network);
         unit.setTag(2);
@@ -1086,6 +1086,59 @@ contract CoreUnitTest is Test {
         );
         vm.expectRevert(bytes("toy's recorded deployer is not network.json's deployer"));
         unit.requireJournaledCreate(network);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":', vm.toString(FREE), "}}}")
+        );
+        vm.expectRevert(bytes("network.json pins no deployer, so toy.json alone cannot prove toy's creation"));
+        unit.requireJournaledCreate(network);
+    }
+
+    function test_requireJournaledCreate_namesTheJournalItReads() public {
+        _network("journaled-create-of", FREE, vm.toString(ops));
+        unit.deploy(network);
+        vm.writeFile(string.concat(dir, "/other.json"), vm.readFile(string.concat(dir, "/toy.json")));
+        unit.requireJournaledCreateOf(network, "other");
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from other.json"));
+        unit.requireJournaledCreateOf(network, "other");
+        vm.expectRevert(bytes("absent.json is missing"));
+        unit.requireJournaledCreateOf(network, "absent");
+    }
+
+    /// @dev The journaled proof runs first, then the check, both before anything is journaled.
+    function test_deployRole_journaled_provesAReuseByTheRecordThenTheCheck() public {
+        _network("deploy-journaled", FREE, vm.toString(ops));
+        unit.deployJournaled(network);
+        uint256 nonce = vm.getNonce(ops);
+        unit.deployJournaled(network);
+        assertEq(vm.getNonce(ops), nonce, "a reuse sent");
+        string memory path = string.concat(dir, "/toy.json");
+        string memory recorded = vm.toString(vm.parseJsonUint(vm.readFile(path), ".toyNonce"));
+        vm.writeJson("7", path, ".toyNonce");
+        string memory journal = vm.readFile(path);
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
+        unit.deployJournaled(network);
+        vm.stopBroadcast();
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+        vm.writeJson(recorded, path, ".toyNonce");
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deployJournaled(network);
+        vm.stopBroadcast();
+    }
+
+    function test_trustTestCreationOf_trustsTheJournaledIntentOfOneRoleOnly() public {
+        _network("trust-creation-of", FREE, "");
+        unit.deploy(network);
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        later.trustTestCreationOf(vm.readFile(string.concat(dir, "/toy.json")), "toy");
+        later.requireCreatedFrom(network);
+        later.requireCreatedWith(network);
+        later.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        later.requireCreatedWith(network);
     }
 
     function test_inputFile_namesTheUnitWhoseInputIsRead() public {

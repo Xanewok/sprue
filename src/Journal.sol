@@ -405,21 +405,27 @@ abstract contract Journal is Script, IProbe {
     ///      journal is stamped with, with the code hash it records. Unlike `_checked`, nothing vouches for
     ///      the role's configuration, so read through it only what the role's code fixes.
     function _recorded(string memory unit, string memory role) internal view returns (address addr) {
-        string memory path = string.concat(_dir(), "/", unit, ".json");
-        string memory record = vm.exists(path) ? vm.readFile(path) : "{}";
+        string memory record = _journalOf(unit);
         string memory key = string.concat(".", role);
         require(_has(record, key), string.concat(unit, ".json records no ", role));
-        string memory stamp = _stampKey(_networkJson());
-        require(
-            _has(record, stamp) && _uint(record, stamp) == block.chainid,
-            string.concat(unit, ".json is not this chain's")
-        );
         addr = _addr(record, key);
         _requireCode(addr, role);
         require(
             _has(record, string.concat(key, "CodeHash"))
                 && addr.codehash == vm.parseJsonBytes32(record, string.concat(key, "CodeHash")),
             string.concat(role, "'s code differs from ", unit, ".json")
+        );
+    }
+
+    /// @dev `unit`'s journal on this network, refused unless it is stamped with this chain.
+    function _journalOf(string memory unit) internal view returns (string memory record) {
+        string memory path = string.concat(_dir(), "/", unit, ".json");
+        require(vm.exists(path), string.concat(unit, ".json is missing"));
+        record = vm.readFile(path);
+        string memory stamp = _stampKey(_networkJson());
+        require(
+            _has(record, stamp) && _uint(record, stamp) == block.chainid,
+            string.concat(unit, ".json is not this chain's")
         );
     }
 

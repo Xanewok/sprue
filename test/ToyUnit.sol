@@ -81,6 +81,12 @@ contract ToyUnit is ToyJournal {
         tag = tag_;
     }
 
+    bool public refuseReuse;
+
+    function setRefuseReuse(bool refuse) external {
+        refuseReuse = refuse;
+    }
+
     function confirm(bytes32 hash) external {
         confirmed[hash] = true;
     }
@@ -112,6 +118,16 @@ contract ToyUnit is ToyJournal {
 
     function requireJournaledCreate(string calldata network) external {
         _requireJournaledCreate(_use(network), "toy", abi.encode(tag));
+    }
+
+    function requireJournaledCreateOf(string calldata network, string calldata unit) external {
+        _use(network);
+        _requireJournaledCreate(unit, _journalOf(unit), "toy", abi.encode(tag));
+    }
+
+    function deployJournaled(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.Journaled, _refusable);
+        return _done(sent);
     }
 
     function otherInputUint(string calldata network, string calldata unit, string calldata key)
@@ -260,6 +276,10 @@ contract ToyUnit is ToyJournal {
 
     function _create(bytes memory args) private returns (address) {
         return address(new ToyPayload(abi.decode(args, (uint256))));
+    }
+
+    function _refusable(address, bytes memory) private view {
+        require(!refuseReuse, "the check refused the reuse");
     }
 
     function _authenticate(address addr, bytes memory args) private view {
