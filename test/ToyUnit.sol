@@ -139,7 +139,8 @@ contract ToyUnit is ToyJournal {
         string memory m = _use(network);
         address addr = _requireRecordedCode(m, "toy");
         _authenticate(addr, abi.encode(tag));
-        Certificate memory c = _certificate(m, "toy", addr);
+        Certificate memory c = spare == address(1) ? _certificate("toy", addr) : _certificate(m, "toy", addr);
+        if (spare == address(1)) spare = address(0);
         if (spare != address(0)) c = c.withCode("spare", spare).withUint("tag", tag);
         return _certify(c);
     }

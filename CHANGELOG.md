@@ -5,6 +5,8 @@
 Breaking, for tests: a creation proof that finds no transaction now refuses in a test as in a script.
 A test that relies on forge keeping no transaction history calls `unit.trustTestCreations()`.
 `_deployRole(..., create, Proof.WithArgs)` proves a reused role with `_requireCreatedWith`.
+`_certificate(role, addr)` starts a certificate without journaling a receipt, for a contract the unit
+did not deploy.
 
 For tests, `Probes.due(unit, step, sender)` judges a step as the plan does: true while due, false once
 done, and the step's own revert otherwise.

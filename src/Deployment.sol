@@ -1045,6 +1045,12 @@ abstract contract Deployment is ForgeBroadcasts {
         return Certificate(_beginChecked(role, addr), role, addr);
     }
 
+    /// @dev `_certificate` without a receipt: for a contract the unit did not deploy, or a role whose
+    ///      receipt the unit journals itself (`_recordCreate2Receipt`).
+    function _certificate(string memory role, address addr) internal returns (Certificate memory) {
+        return Certificate(_beginChecked(role, addr), role, addr);
+    }
+
     /// @dev Writes `c` on its role's code hash, prints it, and ends the step.
     function _certify(Certificate memory c) internal returns (string memory) {
         string memory checked = vm.serializeBytes32(c.obj, string.concat(c.role, "CodeHash"), c.addr.codehash);

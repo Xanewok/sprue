@@ -1070,6 +1070,9 @@ contract CoreUnitTest is Test {
         string memory journal = vm.readFile(path);
         unit.checkBuilt(network, address(0));
         assertEq(vm.readFile(path), journal);
+        // Without the receipt step: the certificate is the same.
+        unit.checkBuilt(network, address(1));
+        assertEq(vm.readFile(path), journal);
 
         address spare = address(new ToyPayload(7));
         unit.checkBuilt(network, spare);
