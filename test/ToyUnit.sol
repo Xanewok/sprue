@@ -110,6 +110,11 @@ contract ToyUnit is ToyJournal {
         _requireCreatedWith(_use(network), "toy", args);
     }
 
+    function deployFromInitcode(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.WithArgs);
+        return _done(sent);
+    }
+
     function deployWithArgs(string calldata network) external returns (string memory) {
         (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create, Proof.WithArgs);
         return _done(sent);

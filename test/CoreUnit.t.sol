@@ -1035,6 +1035,19 @@ contract CoreUnitTest is Test {
         assertTrue(present, "the certificate kept toyAbsent");
     }
 
+    function test_deployRole_fromInitcode_createsTheArtifactWithTheArguments() public {
+        _network("from-initcode", FREE, "");
+        unit.deployFromInitcode(network);
+        address toy = _journalOf("toy", ".toy");
+        assertEq(ToyPayload(toy).tag(), 1);
+        uint256 nonce = vm.getNonce(ops);
+        unit.deployFromInitcode(network);
+        assertEq(vm.getNonce(ops), nonce, "a reuse sent");
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        unit.deployFromInitcode(network);
+    }
+
     /// @dev The proof runs before anything is journaled.
     function test_deployRole_withArgs_provesAReuseByItsArguments() public {
         _network("deploy-with-args", FREE, "");

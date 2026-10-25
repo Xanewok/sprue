@@ -4,7 +4,6 @@ pragma solidity ^0.8.27;
 import {Unit} from "sprue/Unit.sol";
 import {Step} from "sprue/graph/Step.sol";
 import {Token} from "../token/Token.sol";
-import {Vault} from "./Vault.sol";
 
 /// @dev The vault is funded once its date (`vault.input.json`'s `openAt`) has passed.
 contract DeployVault is Unit {
@@ -17,7 +16,7 @@ contract DeployVault is Unit {
 
     function deploy(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
-        (, bool sent) = _deployRole(journal, "vault", "Vault", abi.encode(_checked("token", "token")), _create);
+        (, bool sent) = _deployRole(journal, "vault", "Vault", abi.encode(_checked("token", "token")), Proof.FromBuild);
         return _done(sent);
     }
 
@@ -39,10 +38,6 @@ contract DeployVault is Unit {
         token = _checked("token", "token");
         vault = _reuse(journal, "vault", abi.encode(token));
         short = Token(token).balanceOf(vault) == 0;
-    }
-
-    function _create(bytes memory args) private returns (address) {
-        return address(new Vault(abi.decode(args, (address))));
     }
 
     function _unit() internal pure override returns (string memory) {

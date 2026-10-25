@@ -912,10 +912,10 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev A unit's deploy step for one role. It reuses the journaled deployment, resends its
-    ///      pending intent as the same transaction, or sends a new one. `create` must contain the
-    ///      typed `new` expression, which is how forge names the broadcast's contract, and pass it
-    ///      `args`: the journaled intent, and `_requireCreatedFrom` within this run, take them as the
-    ///      constructor's.
+    ///      pending intent as the same transaction, or sends a new one. `create` must create
+    ///      `artifact` and pass it `args`: the journaled intent, and the creation proofs within this
+    ///      run, take them as the constructor's. forge names the broadcast's contract by its bytecode,
+    ///      a typed `new` or not.
     ///      `authenticate` runs on a reused address before anything is journaled. `journal` is the
     ///      journal that `_use` returned. `sent` is whether this run creates a transaction, which a
     ///      simulation counts.
@@ -927,7 +927,7 @@ abstract contract Deployment is ForgeBroadcasts {
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, authenticate, Proof.Authenticate);
+        return _deployRole(journal, role, artifact, args, create, authenticate, Proof.Authenticate, false);
     }
 
     /// @dev How `_deployRole` proves a reused role, before anything is journaled: by the unit's
@@ -948,7 +948,7 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, _noState, Proof.FromBuild);
+        return _deployRole(journal, role, artifact, args, create, _noState, Proof.FromBuild, false);
     }
 
     /// @dev `_deployRole` with the creation proof named: `Proof.FromBuild` or `Proof.WithArgs`.
@@ -961,10 +961,38 @@ abstract contract Deployment is ForgeBroadcasts {
         Proof proof
     ) internal returns (address addr, bool sent) {
         require(proof != Proof.Authenticate, "pass the authenticate function instead");
-        return _deployRole(journal, role, artifact, args, create, _noState, proof);
+        return _deployRole(journal, role, artifact, args, create, _noState, proof, false);
+    }
+
+    /// @dev `_deployRole` that creates `artifact` from its initcode with `args`, with no `create`
+    ///      callback, and proves a reuse by `proof`. The unit's script then holds no copy of the
+    ///      contract's bytecode.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        Proof proof
+    ) internal returns (address addr, bool sent) {
+        require(proof != Proof.Authenticate, "pass create and authenticate functions instead");
+        return _deployRole(journal, role, artifact, args, _noCreate, _noState, proof, true);
     }
 
     function _noState(address, bytes memory) private view {}
+
+    function _noCreate(bytes memory) private pure returns (address) {}
+
+    /// @dev CREATE of `initcode` in the caller's broadcast. Bubbles the constructor's revert.
+    function _createFrom(bytes memory initcode) private returns (address at) {
+        assembly ("memory-safe") {
+            at := create(0, add(initcode, 0x20), mload(initcode))
+            if iszero(at) {
+                let ptr := mload(0x40)
+                returndatacopy(ptr, 0, returndatasize())
+                revert(ptr, returndatasize())
+            }
+        }
+    }
 
     function _deployment(address addr) private view returns (bytes32) {
         return keccak256(abi.encode(block.chainid, addr));
@@ -977,7 +1005,8 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate,
-        Proof proof
+        Proof proof,
+        bool fromInitcode
     ) private returns (address addr, bool sent) {
         if (_inProbe()) {
             return (_reuseInProbe(journal, role, artifact, args, authenticate, proof), false);
@@ -988,7 +1017,7 @@ abstract contract Deployment is ForgeBroadcasts {
         sent = recorded == address(0);
         if (sent) {
             _requireDeployable();
-            addr = create(args);
+            addr = fromInitcode ? _createFrom(_initcode(artifact, args)) : create(args);
             _requireBuild(addr, artifact);
             _createdThisRun[_deployment(addr)] = Created(_initcodeHash(artifact, args), keccak256(args));
         } else {

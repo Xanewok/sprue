@@ -88,10 +88,11 @@ Order: E, then B with C, then D. Each is independent of A's internals and can be
   own `steps()`, and forge refuses `address(this)` in the top-level script contract, which a unit is when
   a person runs its step. The plan already refuses a test-only node off a test chain; a test step keeps
   its one `_requireTestChain()` line.
-- **H. `_deployRole` from `type(C).creationCode`** (reject). forge names a CREATE in its records only
-  through a typed `new`, and the stray guard and `recover` find a role's records by that name, so a lost
-  record could be deployed twice. `_requireBuild` needs the artifact too: `runtimeCode` is unavailable
-  for a contract with immutables.
+- **H. `_deployRole` with no `create` callback** (take, from the artifact's initcode, not
+  `type(C).creationCode`). forge names a CREATE in its records by its bytecode, a typed `new` or not: a raw
+  CREATE of `vm.getCode(artifact) ++ args` records the artifact's name, so the stray guard and `recover`
+  still find it (forge 1.8.5, and e2e `recover` with the vault created so). An earlier verdict here said
+  otherwise; it was wrong. `type(C).creationCode` stays out: it puts the bytecode in the unit's script.
 - **I. One generic `recover` from a role table** (reject). A one-role unit's `recover` is already a call
   of `_recover`. A unit whose later role takes an earlier role's recovered address needs callbacks a
   table cannot hold, for a cut of a few lines on a path that guards against a second deployment.

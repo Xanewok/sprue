@@ -289,6 +289,11 @@ scenario_recover() {
   G run local vault.check >/dev/null 2>>log || die "recover: the rerun failed"
   all_done recover "$(G plan local vault.check 2>>log)"
   [ -n "$(jq -r '.token // empty' deployments/local/token.json)" ] || die "recover: the journal lacks the token"
+  # The vault is created from its initcode, not a typed new: forge's record still names it, so its lost
+  # journal is refused too.
+  rm deployments/local/vault.json
+  if out=$(G run local vault.check 2>&1); then die "recover: a run went on without the vault's journal"; fi
+  grep -q "holds a CREATE of Vault" <<<"$out" || die "recover: the vault's record went unseen: ${out: -400}"
   echo "ok  a lost journal is refused with its recover command, which rebuilds it, and the rerun is done"
 }
 

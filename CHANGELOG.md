@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_deployRole(journal, role, artifact, args, proof)` creates `artifact` from its initcode with `args`, so
+a unit needs no `create` callback, and proves a reuse by `proof`.
+
 Breaking, for tests: a creation proof that finds no transaction now refuses in a test as in a script.
 A test that relies on forge keeping no transaction history calls `unit.trustTestCreations()`.
 `_deployRole(..., create, Proof.WithArgs)` proves a reused role with `_requireCreatedWith`.
