@@ -422,28 +422,42 @@ contract CoreUnitTest is Test {
     }
 
     /// @dev Only a unit that asks for the proof gets it: the `_deployRole` without `authenticate`, or a
-    ///      call. `forge test` keeps no transaction history, so a role with none known passes.
+    ///      call. A role this run created passes; a test's role with no known transaction passes too, as
+    ///      forge's test commands keep no transaction history. A refusal comes before any journal write.
     function test_requireCreatedFrom_refusesAnotherCreationInput_onlyWhereAUnitAsks() public {
         _network("created-from", FREE, "");
         unit.deployByCreation(network);
+        unit.send(_initcode(2));
         unit.requireCreatedFrom(network);
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        later.requireCreatedFrom(network);
+
         bytes32 hash = keccak256("the payload's creation");
         _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
-        unit.confirm(hash);
-        unit.deployByCreation(network);
-        unit.requireCreatedFrom(network);
+        later.confirm(hash);
+        later.send(_initcode(2));
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
         string memory refusal =
             "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from";
-
-        unit.send(_initcode(2));
         vm.expectRevert(bytes(refusal));
-        unit.requireCreatedFrom(network);
-        vm.expectRevert(bytes(refusal));
-        unit.deployByCreation(network);
+        later.deployByCreation(network);
         vm.stopBroadcast();
-        unit.deploy(network);
-        unit.recordedRole(network);
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedFrom(network);
+        later.deploy(network);
+        later.recordedRole(network);
 
+        later.send("");
+        later.deployByCreation(network);
+        later.requireCreatedFrom(network);
+        later.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedFrom(network);
+
+        unit.confirm(hash);
         unit.send("");
         unit.setTag(2);
         vm.expectRevert(bytes(refusal));

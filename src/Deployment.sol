@@ -34,6 +34,9 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
+    /// @dev The initcode hash of each role this run's `_deployRole` created. A role that a simulation
+    ///      created has no transaction for `_requireCreatedFrom` to read.
+    mapping(string role => bytes32) private _createdThisRun;
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
@@ -113,17 +116,19 @@ abstract contract Deployment is ForgeBroadcasts {
         return _inputOf(journal, role, _creationTx(journal, role));
     }
 
-    /// @dev `role` was created from this build's `artifact` with `args`. A role with no known
-    ///      transaction passes while it has no code on the chain, only in this run's simulation, and
-    ///      under `forge test`, which keeps no transaction history. For a role created otherwise,
-    ///      compare `_findCreationInput` with what it was created from.
+    /// @dev `role` was created from this build's `artifact` with `args`: by this run's `_deployRole`,
+    ///      or by the transaction `_findCreationInput` reads. A role with no known transaction passes
+    ///      under forge's test commands, which keep no transaction history. For a role created
+    ///      otherwise, compare `_findCreationInput` with what it was created from.
     function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
+        bytes32 expected = _initcodeHash(artifact, args);
+        if (_createdThisRun[role] == expected) return;
         bytes32 hash = _creationTx(journal, role);
-        if (hash == 0 && (vm.isContext(VmSafe.ForgeContext.Test) || !_hasCodeOnChain(journal, role))) return;
+        if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
         require(
-            keccak256(_inputOf(journal, role, hash)) == _initcodeHash(artifact, args),
+            keccak256(_inputOf(journal, role, hash)) == expected,
             string.concat(
                 role,
                 " was not created from this build's ",
@@ -131,11 +136,6 @@ abstract contract Deployment is ForgeBroadcasts {
                 " with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
             )
         );
-    }
-
-    function _hasCodeOnChain(string memory journal, string memory role) private returns (bool) {
-        string memory at = vm.toString(_addr(journal, string.concat(".", role)));
-        return vm.rpc("eth_getCode", string.concat('["', at, '", "latest"]')).length != 0;
     }
 
     function _creationTx(string memory journal, string memory role) private returns (bytes32 hash) {
@@ -830,6 +830,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireDeployable();
             addr = create(args);
             _requireBuild(addr, artifact);
+            _createdThisRun[role] = _initcodeHash(artifact, args);
         } else {
             addr = recorded;
             if (byCreation) _requireCreatedFrom(journal, role, artifact, args);

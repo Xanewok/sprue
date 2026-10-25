@@ -104,8 +104,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    decides due or done; making the contract enforce the condition when the step runs is the unit author's
    job. A script reads during simulation and sends later, so its read is never a lock.
 9. **No step needs historical state.** The library reads the current state of the fork it creates at the
-   head, a transaction by hash, and its receipt. Rejected: an archive RPC; recovery from the chain alone
-   is ROADMAP.
+   head, a transaction by hash, and its receipt. One fallback reads the past: with no broadcast record,
+   a CREATE's transaction is found through the deployer's nonce at earlier blocks, which a full node
+   keeps only for recent ones; past that, it finds none. Rejected: an archive RPC; recovery from the
+   chain alone is ROADMAP.
 10. **The graph's order derives from units.** Kahn's algorithm: of the ready nodes, the first-registered
     unit, then the first declared. A unit orders only its own nodes. A cycle, a duplicate id, an unresolved
     need, an unlisted unit and a selector that does not match the function name are refused at
