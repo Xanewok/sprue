@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_requireJournaledCreate(journal, role, args)` holds a role's record to the step's arguments, the pinned
+deployer and the CREATE address of its recorded nonce. It reads the journal only.
+
 `_recorded(unit, role)` reads another unit's role before its `check`: the journal must record it on this
 chain, and its code must have the recorded hash.
 

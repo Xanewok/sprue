@@ -247,6 +247,29 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
+    /// @dev The journal's record of `role` is consistent with a CREATE of `args` by the deployer that
+    ///      `network.json` pins, if it pins one: the recorded arguments are `args`, and the recorded
+    ///      deployer and nonce give the recorded address. It proves what the journal says, not what the
+    ///      chain shows: `_requireCreatedWith` reads the creation itself, where the input is the code
+    ///      followed by `args` alone.
+    function _requireJournaledCreate(string memory journal, string memory role, bytes memory args) internal view {
+        string memory key = string.concat(".", role);
+        require(
+            keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
+            string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
+        );
+        address sender = _addr(journal, string.concat(key, "Deployer"));
+        address pinned = _pinnedDeployer();
+        require(
+            pinned == address(0) || sender == pinned,
+            string.concat(role, "'s recorded deployer is not network.json's deployer")
+        );
+        require(
+            vm.computeCreateAddress(sender, _uint(journal, string.concat(key, "Nonce"))) == _addr(journal, key),
+            string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
+        );
+    }
+
     /// @dev The role's recorded address, for a step after the role's deploy step: its code must be the
     ///      journal's (`_requireRecordedCode`) and its creation must have taken `args`
     ///      (`_requireCreatedWith`).

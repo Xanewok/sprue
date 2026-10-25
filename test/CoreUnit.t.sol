@@ -1062,6 +1062,32 @@ contract CoreUnitTest is Test {
         assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
     }
 
+    function test_requireJournaledCreate_holdsTheRecordToItsArgumentsPinAndNonce() public {
+        _network("journaled-create", FREE, "");
+        unit.deploy(network);
+        unit.requireJournaledCreate(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from toy.json"));
+        unit.requireJournaledCreate(network);
+        unit.setTag(1);
+        string memory path = string.concat(dir, "/toy.json");
+        vm.writeJson("7", path, ".toyNonce");
+        vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
+        unit.requireJournaledCreate(network);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat(
+                '{"chains":{"main":{"rpc":"main","id":',
+                vm.toString(FREE),
+                '}},"deployer":"',
+                vm.toString(makeAddr("pin")),
+                '"}'
+            )
+        );
+        vm.expectRevert(bytes("toy's recorded deployer is not network.json's deployer"));
+        unit.requireJournaledCreate(network);
+    }
+
     function test_recorded_readsAnotherUnitsRoleOnlyWithItsChainAndCode() public {
         _network("recorded", FREE, "");
         unit.deploy(network);
