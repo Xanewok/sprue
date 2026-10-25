@@ -423,7 +423,7 @@ contract CoreUnitTest is Test {
 
     /// @dev Only a unit that asks for the proof gets it: the `_deployRole` without `authenticate`, or a
     ///      call. This run's record of a role it created decides, even in a test; a test's role with no
-    ///      record and no known transaction passes, as forge's test commands keep no transaction history.
+    ///      record and no known transaction is refused unless the test trusts creations.
     ///      A refusal comes before any journal write.
     function test_requireCreatedFrom_refusesAnotherCreationInput_onlyWhereAUnitAsks() public {
         _network("created-from", FREE, "");
@@ -438,6 +438,13 @@ contract CoreUnitTest is Test {
         unit.setTag(1);
         ToyUnit later = new ToyUnit();
         later.setTestSender(ops);
+        vm.expectRevert(
+            bytes(
+                "neither toy.json, a broadcast record nor the chain shows the transaction that created toy: journal it as toyTx"
+            )
+        );
+        later.requireCreatedFrom(network);
+        later.trustTestCreations();
         later.requireCreatedFrom(network);
 
         bytes32 hash = keccak256("the payload's creation");

@@ -34,6 +34,7 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
+    bool private _testCreationsTrusted;
     /// @dev The broadcaster of the step's first broadcast, and its nonce then. `_done` clears it.
     address private _stepSender;
     uint256 private _stepNonce;
@@ -45,6 +46,14 @@ abstract contract Deployment is ForgeBroadcasts {
     struct Created {
         bytes32 initcodeHash;
         bytes32 argsHash;
+    }
+
+    /// @dev Lets a test pass the creation proofs of roles whose creation no transaction shows, as forge's
+    ///      test commands keep none. Without it, a test refuses them as a script does, so a test that
+    ///      tampers with a role's creation proves something. Reverts outside forge's test commands.
+    function trustTestCreations() external {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
+        _testCreationsTrusted = true;
     }
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
@@ -173,8 +182,8 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev `role` was created from this build's `artifact` with `args`: by this unit's `_deployRole`
     ///      in this run, whose record decides, or by the transaction `_findCreationInput` reads. A role
-    ///      with neither passes under forge's test commands, which keep no transaction history. For a
-    ///      role created otherwise, compare `_findCreationInput` with what it was created from.
+    ///      with neither passes only in a test that called `trustTestCreations`. For a role created
+    ///      otherwise, compare `_findCreationInput` with what it was created from.
     function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
@@ -182,7 +191,7 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))].initcodeHash;
         if (created == 0) {
             bytes32 hash = _creationTx(journal, role);
-            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            if (hash == 0 && _testCreationsTrusted) return;
             created = keccak256(_inputOf(journal, role, hash));
         }
         require(
@@ -202,8 +211,8 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      `_requireCreatedFrom`, a role whose source changed after its deployment passes; the code's
     ///      identity rests on the journal. A journal without that key, written by an older sprue, has the
     ///      whole input proven against `<role>InitcodeHash` and `args` against `<role>Args`, which the
-    ///      same write recorded. A role with neither passes under forge's test commands, as for
-    ///      `_requireCreatedFrom`.
+    ///      same write recorded. A role with neither passes only in a test that called
+    ///      `trustTestCreations`.
     function _requireCreatedWith(string memory journal, string memory role, bytes memory args) internal {
         string memory key = string.concat(".", role);
         Created memory run = _createdThisRun[_deployment(_addr(journal, key))];
@@ -212,7 +221,7 @@ abstract contract Deployment is ForgeBroadcasts {
             created = run.argsHash == keccak256(args);
         } else {
             bytes32 hash = _creationTx(journal, role);
-            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            if (hash == 0 && _testCreationsTrusted) return;
             bytes memory input = _inputOf(journal, role, hash);
             if (input.length >= args.length) {
                 (bytes32 code, bytes32 tail) = _hashSplit(input, args.length);

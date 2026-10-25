@@ -54,7 +54,7 @@ end-to-end scenario for each invariant.
   the same transaction.
 - `_requireCreatedFrom` finds a CREATE2 role's transaction only in its broadcast records or the
   journal's `<role>Tx`, and a CREATE's on the chain only through an RPC that serves the deployer's
-  nonce at past blocks. Where it finds none, it refuses, except under forge's test commands. A
+  nonce at past blocks. Where it finds none, it refuses, in a test too unless the test calls `trustTestCreations()`. A
   contract that the same unit's `_deployRole` created in this run is judged by that unit's record of
   the chain, address and initcode, since a simulation's deployment has no transaction; another unit
   proving it is refused.
