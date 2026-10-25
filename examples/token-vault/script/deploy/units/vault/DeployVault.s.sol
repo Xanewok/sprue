@@ -25,12 +25,8 @@ contract DeployVault is Unit {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
         _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
-        if (short) {
-            _startBroadcast();
-            require(Token(token).transfer(vault, 1), "the transfer failed");
-            vm.stopBroadcast();
-        }
-        return _done(short);
+        _want(!short, token, abi.encodeCall(Token.transfer, (vault, 1)));
+        return _done();
     }
 
     function check(string calldata network) external returns (string memory) {

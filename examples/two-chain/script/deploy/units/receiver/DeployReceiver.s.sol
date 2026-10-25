@@ -26,13 +26,8 @@ contract DeployReceiver is Unit {
         _selectChain("source");
         address source = _checked("source", "source");
         Receiver receiver = _receiver();
-        bool opens = receiver.opened(window) == address(0);
-        if (opens) {
-            _startBroadcast();
-            receiver.open(window, source);
-            vm.stopBroadcast();
-        }
-        return _done(opens);
+        _want(receiver.opened(window) != address(0), address(receiver), abi.encodeCall(Receiver.open, (window, source)));
+        return _done();
     }
 
     /// @dev A gate view must leave the gate's chain (here the receiver's) selected: the graph compares

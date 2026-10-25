@@ -9,6 +9,10 @@ if it reverts. `Due` views stay as the explicit form. Breaking: in a unit that a
 judged by their probe. A step that calls `vm.startBroadcast` directly waits until it calls
 `_startBroadcast()`, gets a `Due` view, or is marked. The export's `doneRule` has the kind `probe`.
 
+`_want(holds, target, call)` sends `call` in the step's broadcast unless `holds`. `_startBroadcast()`
+opens a broadcast only when forge has none open, and `_done()` closes it and reports whether the step
+created a transaction, from the broadcaster's nonce.
+
 `_requireCreatedFrom(journal, role, artifact, args)` proves that a role was created from this build's
 artifact with the step's constructor arguments: it compares the creation transaction's whole input, as
 the chain shows it, with the initcode. It reads only the transaction's hash from the journal, a

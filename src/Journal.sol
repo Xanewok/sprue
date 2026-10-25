@@ -201,6 +201,7 @@ abstract contract Journal is Script, IProbe {
     ///         next, which it returns. The graph owns the order, so a step never names its
     ///         successor.
     function _done(bool sends) internal returns (string memory command) {
+        _stepEnded();
         if (_probing) return "";
         if (!sends) console.log("nothing to send");
         else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
@@ -217,6 +218,9 @@ abstract contract Journal is Script, IProbe {
         );
         console.log(string.concat("next: ", command));
     }
+
+    /// @dev Called by `_done`, so that the next step of a run starts afresh.
+    function _stepEnded() internal virtual {}
 
     // ==== Files ====
 

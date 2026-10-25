@@ -34,6 +34,9 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
+    /// @dev The broadcaster of the step's first broadcast, and its nonce then. `_done` clears it.
+    address private _stepSender;
+    uint256 private _stepNonce;
     /// @dev The initcode hash of each contract this unit's `_deployRole` created in this run, by chain
     ///      and address. A role that a simulation created has no transaction for `_requireCreatedFrom`
     ///      to read.
@@ -46,10 +49,49 @@ abstract contract Deployment is ForgeBroadcasts {
         _testSender = sender;
     }
 
+    /// @dev Opens the step's broadcast unless forge has one open. `_done()` closes it.
     function _startBroadcast() internal {
         if (_inProbe()) revert StepDue();
+        (VmSafe.CallerMode mode,,) = vm.readCallers();
+        if (mode == VmSafe.CallerMode.RecurrentBroadcast) return;
         if (_testSender == address(0)) vm.startBroadcast();
         else vm.startBroadcast(_testSender);
+        if (_stepSender != address(0)) return;
+        (, _stepSender,) = vm.readCallers();
+        _stepNonce = vm.getNonce(_stepSender);
+    }
+
+    /// @dev `_done(_sentThisStep())`, after it closes the step's broadcast.
+    function _done() internal returns (string memory) {
+        (VmSafe.CallerMode mode,,) = vm.readCallers();
+        if (mode == VmSafe.CallerMode.RecurrentBroadcast) vm.stopBroadcast();
+        return _done(_sentThisStep());
+    }
+
+    /// @dev Whether this step created a transaction: forge counts each one, simulated or sent, in the
+    ///      broadcaster's nonce.
+    function _sentThisStep() internal view returns (bool) {
+        return _stepSender != address(0) && vm.getNonce(_stepSender) != _stepNonce;
+    }
+
+    function _stepEnded() internal override {
+        _stepSender = address(0);
+    }
+
+    /// @dev Sends `call` to `target` unless `holds`, in the step's broadcast. Wants run in order, so a
+    ///      later one sees the earlier ones' effects. Only a revert fails it: a contract that reports
+    ///      failure by its return value needs the step's own check.
+    function _want(bool holds, address target, bytes memory call) internal {
+        if (holds) return;
+        // As a typed call would: a call to an address without code succeeds and does nothing.
+        require(target.code.length != 0, string.concat(vm.toString(target), " has no code"));
+        _startBroadcast();
+        (bool ok, bytes memory ret) = target.call(call);
+        if (!ok) {
+            assembly ("memory-safe") {
+                revert(add(ret, 0x20), mload(ret))
+            }
+        }
     }
 
     /// @dev The deployer that `network.json` pins with `deployer`, or zero when it pins none. Reverts

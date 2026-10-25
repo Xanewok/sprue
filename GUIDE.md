@@ -39,7 +39,9 @@ then differ from the commit, the build is not the commit's, and an attended `run
    work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
    A step that opens the broadcast before it decides is always due, and `run` stops when its plan
    repeats. Use `vm.startBroadcast` only through `_startBroadcast()`: a probe refuses forge's
-   cheatcode. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the probe for a step
+   cheatcode. `_want(holds, target, abi.encodeCall(...))` sends a call only where `holds` is false,
+   in order, so a later want sees what an earlier one sent; end the step with `_done()`, which closes
+   the broadcast and reports whether the step sent. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the probe for a step
    whose decision is cheaper to state apart. `.doneByCheck()` hands a step that cannot decide to the
    certificate of a later `check` of its unit. A plan that stops at a step behind such a step without
    sending that `check` first would repeat forever, so the plan refuses it.
