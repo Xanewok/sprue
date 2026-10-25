@@ -24,22 +24,20 @@ contract DeployVault is Unit {
     function fund(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
-        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         _want(!short, token, abi.encodeCall(Token.transfer, (vault, 1)));
         return _done();
     }
 
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
-        (address token, address vault, bool short) = _funding(journal);
+        (, address vault, bool short) = _funding(journal);
         require(!short, "the vault is not funded");
-        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         return _certify(_certificate(journal, "vault", vault));
     }
 
-    function _funding(string memory journal) private view returns (address token, address vault, bool short) {
+    function _funding(string memory journal) private returns (address token, address vault, bool short) {
         token = _checked("token", "token");
-        vault = _requireRecordedCode(journal, "vault");
+        vault = _reuse(journal, "vault", abi.encode(token));
         short = Token(token).balanceOf(vault) == 0;
     }
 

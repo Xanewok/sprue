@@ -229,6 +229,14 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
+    /// @dev The role's recorded address, for a step after the role's deploy step: its code must be the
+    ///      journal's (`_requireRecordedCode`) and its creation must have taken `args`
+    ///      (`_requireCreatedWith`).
+    function _reuse(string memory journal, string memory role, bytes memory args) internal returns (address addr) {
+        addr = _requireRecordedCode(journal, role);
+        _requireCreatedWith(journal, role, args);
+    }
+
     /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
     function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
         // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_reuse(journal, role, args)` returns a role's recorded address for a step after its deploy step, once
+its code is the journal's and its creation took `args` (`_requireCreatedWith`).
+
 A `check` step builds its certificate with `_certify(_certificate(journal, role, addr).withCode("vault",
 vault).withUint(...))`: `_certificate` journals the role's receipt and starts the certificate, each
 `with...` adds a key, and `_certify` writes it on the role's code hash, prints it once and ends the step.
