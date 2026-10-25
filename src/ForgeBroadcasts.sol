@@ -224,12 +224,18 @@ abstract contract ForgeBroadcasts is Journal {
     /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
     ///      nonce is unused. It searches back from the head, doubling the step, then halves the
     ///      interval, so that a recent transaction needs only the recent state a full node keeps. Zero
-    ///      too if the RPC cannot answer for a block, as a full node for old state. Virtual only so a
-    ///      test with no RPC can answer.
+    ///      too with no RPC, or if the RPC cannot answer for a block, as a full node for old state.
+    ///      Virtual only so a test can answer.
     function _sentAt(address deployer, uint256 nonce) internal virtual returns (bytes32) {
         // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
         // `block.number` can be a rollup's parent chain's number.
-        uint256 hi = _rpcUint(vm.rpc("eth_blockNumber", "[]"));
+        uint256 hi;
+        try vm.rpc("eth_blockNumber", "[]") returns (bytes memory head) {
+            hi = _rpcUint(head);
+        } catch {
+            // No RPC, as under `forge test`.
+            return 0;
+        }
         (bool landed, uint256 sent) = _nonceAt(deployer, hi);
         if (!landed || sent <= nonce) return 0;
         // The nonce is used, so the head is past genesis.
