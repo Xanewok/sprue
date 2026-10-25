@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+`plan` judges a step that has no `Due` view by running it in a probe and reverting everything: the step
+is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with its reason
+if it reverts. `Due` views stay as the explicit form. Breaking: in a unit that answers the probe, a
+`check` certifies only itself and the steps marked `.doneByCheck()`; other steps it follows are now
+judged by their probe. A step that calls `vm.startBroadcast` directly waits until it calls
+`_startBroadcast()`, gets a `Due` view, or is marked. The export's `doneRule` has the kind `probe`.
+
 `_requireCreatedFrom(journal, role, artifact, args)` proves that a role was created from this build's
 artifact with the step's constructor arguments: it compares the creation transaction's whole input, as
 the chain shows it, with the initcode. It reads only the transaction's hash from the journal, a

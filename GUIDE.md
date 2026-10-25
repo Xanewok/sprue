@@ -14,7 +14,10 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 - **Step**: an external function of a unit that takes the network name (and an index, for a step per
   index), with an id such as `token.deploy`. Each step runs as its own `forge script` command.
 - **Certificate**: the journal's `checked` object, which the unit's `check` step writes. It marks done
-  the unit's steps that `check` follows and that have no `Due` view; other units read addresses from it.
+  the `check` itself and the steps marked `.doneByCheck()`; other units read addresses from it.
+- **Probe**: how `plan` judges a step that has no `Due` view: it runs the step and reverts everything.
+  The step is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with
+  its own reason if it reverts.
 - **Graph**: a script that inherits `FileGraph`, registers the units, and orders their steps by
   `.needs(...)`.
 
@@ -32,11 +35,14 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's
    [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) as a
-   template. Every step needs a done rule: a `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, or
-   a `check` step of the same unit that reaches it through `.needs(...)`.
-   A step with a `Due` view is read only after everything it needs is done, and a step without one is done
-   only when a `check` of its unit runs. A plan that stops at such a `Due` step without sending a `check`
-   of that unit first would repeat forever, so the plan refuses it. Give the earlier step a `Due` view.
+   template. A step is judged by a probe once everything it needs is done, so it must decide its own
+   work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
+   A step that opens the broadcast before it decides is always due, and `run` stops when its plan
+   repeats. Use `vm.startBroadcast` only through `_startBroadcast()`: a probe refuses forge's
+   cheatcode. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the probe for a step
+   whose decision is cheaper to state apart. `.doneByCheck()` hands a step that cannot decide to the
+   certificate of a later `check` of its unit. A plan that stops at a step behind such a step without
+   sending that `check` first would repeat forever, so the plan refuses it.
 4. Register the units in a graph script whose contract is named like its file: its constructor calls
    `_add(address(new DeployToken()), "<path>:DeployToken")` for each unit, then `_validateGraph()`, as in
    the example's [`DeployGraph.s.sol`](examples/token-vault/script/deploy/DeployGraph.s.sol).
@@ -68,8 +74,8 @@ send as `DEPLOYER`, or as the run's own signer when it cannot sign as the pin. `
 
 A unit's directory, its `_unit()` and the prefix of its step ids are one name, and a contract `<Name>`
 that it deploys is declared in the project's only file named `<Name>.sol`. The typed forms
-`_step(id, this.fn)`, `_step(id, this.fn, this.fnDue)` and `_step(id, name, this.fn, this.fnDue, i)`
-let the compiler check each function and its `Due` view. The selector forms, such as
+`_step(id, this.fn)`, `_step(id, name, this.fn, i)` and their forms with a `Due` view after `this.fn`
+let the compiler check each function and its view. The selector forms, such as
 `_step(id, X.fn.selector)`, remain for other signatures, and [`src/graph/Step.sol`](src/graph/Step.sol)
 holds the other builders. A unit pins every contract it reads but does not deploy, by code hash or by
 behaviour, in its own checks. Where such a contract may not exist on a chain, the check records it
@@ -135,5 +141,6 @@ Each refusal names its remedy. These need a person:
   delete records or switch keys to get past it.
 
 A node that a `check` certified stays done while the journal holds `checked`, whatever the chain holds.
+A probed step is judged on the chain every time.
 After resetting a development chain, delete the network's journals and that chain's records under
 `broadcast/`, or a rehearsal network's whole directory.

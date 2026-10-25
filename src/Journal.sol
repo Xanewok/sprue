@@ -6,6 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, chainKind, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
 import {cheats} from "./DeployChecks.sol";
+import {IProbe} from "./graph/Step.sol";
 
 /// @dev The unit's own parameters, `<root>/<network>/<unit>.input.json`.
 function inputPath(string memory root, string memory network, string memory unit) pure returns (string memory) {
@@ -59,8 +60,26 @@ function stageInputs(string memory from, string memory to) {
 
 /// @dev A unit's journal `<unit>.json` records what the unit deployed and certified. The unit's
 ///      inputs, `<unit>.input.json`, and the network's `network.json` sit beside it.
-abstract contract Journal is Script {
+abstract contract Journal is Script, IProbe {
     string internal _usedNetwork;
+    /// @dev Set only inside `probe`, whose revert clears it.
+    bool private _probing;
+
+    /// @dev The step's first broadcast (`_startBroadcast`) or journal write (`_put`, `_certify`) reverts
+    ///      with `StepDue`. While the prank is active forge refuses `vm.startBroadcast` and
+    ///      `vm.broadcast`, so a step that calls them directly cannot queue a transaction: forge keeps
+    ///      the transactions of a reverted call in the dry run, which `--resume` would send.
+    function probe(bytes calldata step) external {
+        _probing = true;
+        vm.startPrank(tx.origin);
+        (bool returned, bytes memory result) = address(this).call(step);
+        vm.stopPrank();
+        revert Probed(returned, result);
+    }
+
+    function _inProbe() internal view returns (bool) {
+        return _probing;
+    }
 
     /// @dev The journal's name without `.json`; also the prefix of the unit's input file.
     function _unit() internal pure virtual returns (string memory);
@@ -95,8 +114,12 @@ abstract contract Journal is Script {
         _usedNetwork = network;
         // Here and not in `_use`: a step that selects its own forks never calls `_use`. A dry run too, the
         // graph's plan and rehearse included: `--resume` sends a saved dry run when no broadcast was
-        // saved, and no caller tells a probe from a step that broadcasts.
-        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun)) {
+        // saved, and no caller tells a `Due` view from a step that broadcasts. A probe queues no
+        // transaction, and the runner checks the step's own command.
+        if (
+            !_probing
+                && (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun))
+        ) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
             if (_rehearsal()) {
                 _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
@@ -178,6 +201,7 @@ abstract contract Journal is Script {
     ///         next, which it returns. The graph owns the order, so a step never names its
     ///         successor.
     function _done(bool sends) internal returns (string memory command) {
+        if (_probing) return "";
         if (!sends) console.log("nothing to send");
         else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
         else console.log("simulated: rerun with --broadcast to send");
@@ -258,6 +282,7 @@ abstract contract Journal is Script {
     }
 
     function _put(string memory key, string memory value) internal virtual {
+        if (_probing) revert StepDue();
         string memory p = _path();
         if (!vm.exists(p)) {
             vm.createDir(_dir(), true);
@@ -282,10 +307,11 @@ abstract contract Journal is Script {
     function _rehearsal() internal view virtual returns (bool);
 
     /// @dev Whether this run records deployments in the journal: a broadcast, a resumed broadcast,
-    ///      or any run on a rehearsal network. `_certify` consults it.
+    ///      or any run on a rehearsal network. `_certify` consults it. True in a probe, which judges the
+    ///      step as its send would run, and refuses the write itself.
     function _writing() internal view virtual returns (bool) {
-        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume)
-            || _rehearsal();
+        return _probing || vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+            || vm.isContext(VmSafe.ForgeContext.ScriptResume) || _rehearsal();
     }
 
     /// @dev The address of `unit`'s `role`, as that unit's `check` step certified it. Reverts unless
@@ -361,6 +387,7 @@ abstract contract Journal is Script {
         if (!_writing()) return;
         string memory journal = _journal();
         if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
+        if (_probing) revert StepDue();
         vm.writeJson(checked, _path(), ".checked");
     }
 

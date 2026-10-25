@@ -10,8 +10,8 @@ import {Vault} from "./Vault.sol";
 contract DeployVault is Unit {
     function steps() external view returns (Step[] memory s) {
         s = new Step[](3);
-        s[0] = _step("vault.deploy", this.deploy, this.deployDue).needs("token.check");
-        s[1] = _step("vault.fund", this.fund, this.fundDue).needs("vault.deploy").notBefore("vault.openAt");
+        s[0] = _step("vault.deploy", this.deploy).needs("token.check");
+        s[1] = _step("vault.fund", this.fund).needs("vault.deploy").notBefore("vault.openAt");
         s[2] = _step("vault.check", this.check).needs("vault.fund");
     }
 
@@ -19,14 +19,6 @@ contract DeployVault is Unit {
         string memory journal = _use(network);
         (, bool sent) = _deployRole(journal, "vault", "Vault", abi.encode(_checked("token", "token")), _create);
         return _done(sent);
-    }
-
-    function deployDue(string calldata network) external returns (bool) {
-        string memory journal = _use(network);
-        bytes memory args = abi.encode(_checked("token", "token"));
-        address recorded = _reuseForDue(journal, "vault", "Vault", args);
-        if (recorded != address(0)) _requireCreatedFrom(journal, "vault", "Vault", args);
-        return recorded == address(0);
     }
 
     function fund(string calldata network) external returns (string memory) {
@@ -48,11 +40,6 @@ contract DeployVault is Unit {
         _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         _recordReceipt(journal, "vault", vault);
         return _certifyRole(_beginChecked("vault", vault), "vault", vault);
-    }
-
-    function fundDue(string calldata network) external returns (bool) {
-        (,, bool short) = _funding(_use(network));
-        return short;
     }
 
     function _funding(string memory journal) private view returns (address token, address vault, bool short) {

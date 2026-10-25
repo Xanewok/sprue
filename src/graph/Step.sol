@@ -11,6 +11,18 @@ interface IUnitSteps {
     function steps() external view returns (Step[] memory);
 }
 
+/// @dev How a graph judges a step that has no `Due` view.
+interface IProbe {
+    /// @dev The step would send a transaction or change its unit's journal.
+    error StepDue();
+    /// @dev `probe`'s only outcome: whether the step returned, and its return or revert data.
+    error Probed(bool returned, bytes result);
+
+    /// @dev Runs `step`, a call of one of the unit's steps, as a plan judges it, and reverts with
+    ///      `Probed`, so that nothing the step did remains.
+    function probe(bytes calldata step) external;
+}
+
 enum StepKind {
     Empty,
     Call,
@@ -18,7 +30,8 @@ enum StepKind {
 }
 
 /// @dev A step as a unit declares it. A step with `fn` `check` and no `.due` is the certifier (see
-///      `Graph._validateGraph`), so use that name for nothing else. `onChain`, `readChains`, `isSlow`
+///      `Graph._validateGraph`), so use that name for nothing else. A step with neither `.due` nor
+///      `.doneByCheck`, of a unit that answers `IProbe.probe`, is judged by a probe. `onChain`, `readChains`, `isSlow`
 ///      and `dueSelector` stand for `on`, `reads`, `slow` and `due`: solc rejects a member that shares
 ///      a name with a library function attached to the struct.
 struct Step {
@@ -38,6 +51,7 @@ struct Step {
     string onChain;
     string[] readChains;
     bool ownForks;
+    bool byCheck;
 }
 
 using StepLib for Step global;
@@ -128,6 +142,13 @@ library StepLib {
         s.ownForks = true;
         return s;
     }
+
+    /// @dev The certificate of a later `check` of the step's unit marks it done, and no probe judges
+    ///      it: for a step that cannot tell its own work is done.
+    function doneByCheck(Step memory s) internal pure returns (Step memory) {
+        s.byCheck = true;
+        return s;
+    }
 }
 
 abstract contract Declares {
@@ -175,10 +196,19 @@ abstract contract Declares {
         string memory id,
         string memory name,
         function(string memory, uint8) external returns (string memory) fn,
+        uint8 arg
+    ) internal pure returns (Step memory) {
+        return _step(id, name, fn.selector).withArg(arg);
+    }
+
+    function _step(
+        string memory id,
+        string memory name,
+        function(string memory, uint8) external returns (string memory) fn,
         function(string memory, uint8) external returns (bool) due,
         uint8 arg
     ) internal pure returns (Step memory) {
-        return _step(id, name, fn.selector).withArg(arg).due(due.selector);
+        return _step(id, name, fn, arg).due(due.selector);
     }
 
     /// @dev A predicate node: it sends nothing, and `fn` is a view that returns whether the condition

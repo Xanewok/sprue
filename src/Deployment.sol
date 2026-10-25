@@ -47,6 +47,7 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     function _startBroadcast() internal {
+        if (_inProbe()) revert StepDue();
         if (_testSender == address(0)) vm.startBroadcast();
         else vm.startBroadcast(_testSender);
     }
@@ -832,6 +833,9 @@ abstract contract Deployment is ForgeBroadcasts {
         function(address, bytes memory) internal view authenticate,
         bool byCreation
     ) private returns (address addr, bool sent) {
+        if (_inProbe()) {
+            return (_reuseInProbe(journal, role, artifact, args, authenticate, byCreation), false);
+        }
         _startBroadcast();
         (address deployer, uint256 nonce) = _broadcaster();
         address recorded = _reuseForSend(journal, role, artifact, args, deployer, nonce);
@@ -855,6 +859,23 @@ abstract contract Deployment is ForgeBroadcasts {
             }
             _recordDeployment(journal, role, artifact, addr, recorded, deployer, nonce);
         }
+    }
+
+    /// @dev A probe has no broadcaster, so it decides as a `Due` view does: a role that
+    ///      `_reuseForDue` cannot reuse is due, whether the step would resend its pending intent or
+    ///      send anew, and the step decides which.
+    function _reuseInProbe(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(address, bytes memory) internal view authenticate,
+        bool byCreation
+    ) private returns (address addr) {
+        addr = _reuseForDue(journal, role, artifact, args);
+        if (addr == address(0)) revert StepDue();
+        if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
+        else authenticate(addr, args);
     }
 
     /// @dev The new contract's code must be the artifact's, with immutables read back from it. Override
