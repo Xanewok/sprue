@@ -396,7 +396,8 @@ abstract contract Graph is Script {
     }
 
     function _probe(string memory network, Node storage n) private returns (Status, string memory) {
-        (, bytes memory ret) = n.unit.call(abi.encodeCall(IProbe.probe, (_calldata(n, n.step, network))));
+        address sender = bytes(n.sender).length == 0 ? msg.sender : _senderAddress(network, n.sender);
+        (, bytes memory ret) = n.unit.call(abi.encodeCall(IProbe.probe, (_calldata(n, n.step, network), sender)));
         require(bytes4(ret) == IProbe.Probed.selector, string.concat(n.id, ": its unit's probe did not answer"));
         (bool returned, bytes memory result) = abi.decode(_strip(ret), (bool, bytes));
         if (returned) return (Status.Done, "");
@@ -472,9 +473,9 @@ abstract contract Graph is Script {
         }
     }
 
-    function _answersProbe(address unit) private returns (bool) {
-        (, bytes memory ret) = unit.call(abi.encodeCall(IProbe.probe, ("")));
-        return ret.length >= 4 && bytes4(ret) == IProbe.Probed.selector;
+    function _answersProbe(address unit) private view returns (bool) {
+        (bool ok, bytes memory ret) = unit.staticcall(abi.encodeCall(IProbe.probes, ()));
+        return ok && ret.length == 32 && bytes4(ret) == IProbe.probe.selector;
     }
 
     /// @dev The script is `<path>` or `<path>:<Contract>`: a non-empty path that does not start with

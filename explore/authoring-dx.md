@@ -24,9 +24,9 @@ s[1] = _step("vault.fund", this.fund).needs("vault.deploy").notBefore("vault.ope
 
 How it works:
 
-- The graph calls `IProbe(unit).probe(stepCalldata)`. `probe` sets a flag and calls the step on the unit
-  itself under `vm.startPrank(tx.origin)`, then reverts with `Probed(returned, result)`, so no EVM state the
-  step changed remains.
+- The graph calls `IProbe(unit).probe(stepCalldata, sender)`. `probe` sets a flag and calls the step on
+  the unit itself under `vm.startPrank(sender, sender)`, then reverts with `Probed(returned, result)`, so
+  no EVM state the step changed remains. The sender is the step's `.by`, or the plan's own.
 - In a probe, `_startBroadcast()`, `_put` and `_certify` (when the certificate would change) revert with
   `StepDue()`. The step is due at its first send or journal write, done if it returns, and waits with its
   own revert reason otherwise, as a `Due` view's revert does today.
@@ -46,9 +46,13 @@ Hazards found, and what answers each:
 | A receipt is in forge's record only after the run, so counting it as work plans every deploy twice and `run` stops on a repeated plan | e2e `scenario_rerun` failed before `_recordReceipt` skipped probes | `_recordReceipt` does nothing in a probe; the next run or `check` journals it |
 | Without its `Due` view, a step that a `check` follows became certified: printed before its needs landed, and done after the certificate whatever the chain says | e2e `scenario_lag` sent `vault.fund` before the lagging node showed the vault | In a unit that answers the probe, a `check` certifies only itself and `.doneByCheck()` steps; `test_check_certifiesOnlyTheStepsNoProbeJudges` |
 | `_adopt` refuses a plan whose environment moves forge's records, so a probe turned the runner's config refusal (exit 2) into a step refusal (exit 3) | e2e `scenario_failure` | A probe skips that check: it queues nothing, and the runner checks the step's own command |
-| Fork selection and created forks survive a revert | Foundry | As today's `Due` views, which select forks too |
 | A step's own `console.log` lines print during `plan` | design | `_done` is silent in a probe; a unit's own logs are its author's |
 | A step catching its own `StepDue` revert would read as done | design | Not guarded: a step must not catch a revert of its own sends |
+| The probe ran as the plan's sender, so a step whose work depends on its `.by` sender read as done | cross-family review: a forge dry run of the declared sender sent | `probe(step, sender)` pranks as the step's sender; `test_plan_probesAsTheStepsSender` |
+| `_recordBuild` wrote the metadata file before its `_put` refused | review | It refuses first; `test_plan_countsABuildRecordAsWork_andWritesNoMetadata` |
+| Asking a unit whether it answers the probe ran a test double's fallback | review: its `Due` view changed by registration | A static call of `probes()`; `test_add_asksAUnitWhetherItProbesWithoutRunningIt` |
+| A step that reads `<role>Tx` to decide sees no receipt in a probe | review | Documented: a decision must not read receipt keys. Counting the receipt as work brings back the repeated plan |
+| `vm.warp`, fork selection, serialized objects and direct file writes survive a probe | review | Documented, as for a `Due` view |
 
 A unit that does not answer the probe, such as a test double, keeps every rule it had: `Due` views and
 certificates, and `MissingDoneRule` for a step with neither.

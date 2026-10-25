@@ -69,12 +69,16 @@ abstract contract Journal is Script, IProbe {
     ///      with `StepDue`. While the prank is active forge refuses `vm.startBroadcast` and
     ///      `vm.broadcast`, so a step that calls them directly cannot queue a transaction: forge keeps
     ///      the transactions of a reverted call in the dry run, which `--resume` would send.
-    function probe(bytes calldata step) external {
+    function probe(bytes calldata step, address sender) external {
         _probing = true;
-        vm.startPrank(tx.origin);
+        vm.startPrank(sender, sender);
         (bool returned, bytes memory result) = address(this).call(step);
         vm.stopPrank();
         revert Probed(returned, result);
+    }
+
+    function probes() external pure returns (bytes4) {
+        return IProbe.probe.selector;
     }
 
     function _inProbe() internal view returns (bool) {

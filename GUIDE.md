@@ -15,9 +15,10 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
   index), with an id such as `token.deploy`. Each step runs as its own `forge script` command.
 - **Certificate**: the journal's `checked` object, which the unit's `check` step writes. It marks done
   the `check` itself and the steps marked `.doneByCheck()`; other units read addresses from it.
-- **Probe**: how `plan` judges a step that has no `Due` view: it runs the step and reverts everything.
-  The step is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with
-  its own reason if it reverts.
+- **Probe**: how `plan` judges a step that has no `Due` view: it runs the step as its sender and
+  reverts its EVM state. The step is due at its first `_startBroadcast()` or journal write, done if it
+  returns, and waits with its own reason if it reverts. Cheatcode state stays, as after a `Due` view:
+  the clock, the selected fork, and a file written other than through `_put` or `_certify`.
 - **Graph**: a script that inherits `FileGraph`, registers the units, and orders their steps by
   `.needs(...)`.
 
@@ -39,7 +40,7 @@ then differ from the commit, the build is not the commit's, and an attended `run
    work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
    A step that opens the broadcast before it decides is always due, and `run` stops when its plan
    repeats. Use `vm.startBroadcast` only through `_startBroadcast()`: a probe refuses forge's
-   cheatcode. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the probe for a step
+   cheatcode. A probe journals no receipt, so a decision must not read `<role>Tx` or `<role>Block`. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the probe for a step
    whose decision is cheaper to state apart. `.doneByCheck()` hands a step that cannot decide to the
    certificate of a later `check` of its unit. A plan that stops at a step behind such a step without
    sending that `check` first would repeat forever, so the plan refuses it.

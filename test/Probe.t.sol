@@ -36,10 +36,47 @@ contract ProbeUnit is ToyUnit {
         return "";
     }
 
+    address public owner;
+
+    function setOwner(address owner_) external {
+        owner = owner_;
+    }
+
+    /// @dev Its work depends on who sends it.
+    function claim(string calldata network) external returns (string memory) {
+        _use(network);
+        if (msg.sender != owner) {
+            _startBroadcast();
+            vm.stopBroadcast();
+        }
+        return _done(msg.sender != owner);
+    }
+
+    function build(string calldata network) external returns (string memory) {
+        _use(network);
+        _recordBuild("toy", address(1), "ToyPayload");
+        return _done(false);
+    }
+
     function mark(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         if (!_has(journal, ".marked")) _put(".marked", "true");
         return _done(false);
+    }
+}
+
+/// @dev Not a sprue unit: asking whether it answers a probe must not run its fallback.
+contract FallbackUnit {
+    uint256 public calls;
+
+    fallback() external {
+        ++calls;
+    }
+
+    function fund(string calldata) external {}
+
+    function fundDue(string calldata) external view returns (bool) {
+        return calls == 0;
     }
 }
 
@@ -103,6 +140,31 @@ contract ProbeTest is Test, Declares {
         unit.setSends(true);
         assertEq(g.plan(net, "toy.transfer"), _command(net, "transfer"));
         assertEq(unit.runs(), 0, "the probe's state remained");
+    }
+
+    /// @dev The plan's own sender stands for a step with no `.by`, as `$DEPLOYER` does in its command.
+    function test_plan_probesAsTheStepsSender() public {
+        string memory net = _network("probe-sender");
+        BuilderGraph g = _graph(_one("toy.claim"));
+        unit.setOwner(address(this));
+        assertEq(g.plan(net, "toy.claim"), "# done toy.claim\n");
+        unit.setOwner(address(1));
+        assertEq(g.plan(net, "toy.claim"), _command(net, "claim"));
+    }
+
+    function test_plan_countsABuildRecordAsWork_andWritesNoMetadata() public {
+        string memory net = _network("probe-build");
+        assertEq(_graph(_one("toy.build")).plan(net, "toy.build"), _command(net, "build"));
+        assertFalse(vm.exists(string.concat(DIR, net, "/ToyPayload.metadata.json")), "the probe wrote metadata");
+    }
+
+    function test_add_asksAUnitWhetherItProbesWithoutRunningIt() public {
+        FallbackUnit legacy = new FallbackUnit();
+        Step[] memory s = new Step[](1);
+        s[0] = _step("legacy.fund", FallbackUnit.fund.selector).due(FallbackUnit.fundDue.selector);
+        BuilderGraph g = new BuilderGraph(Registration(address(legacy), SCRIPT), s);
+        assertFalse(g.node(0).probed);
+        assertEq(legacy.calls(), 0, "asking ran the unit's fallback");
     }
 
     function test_plan_waitsOnTheStepsOwnRefusal() public {

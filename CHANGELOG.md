@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-`plan` judges a step that has no `Due` view by running it in a probe and reverting everything: the step
+`plan` judges a step that has no `Due` view by running it as its sender in a probe that reverts its EVM
+state: the step
 is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with its reason
 if it reverts. `Due` views stay as the explicit form. Breaking: in a unit that answers the probe, a
 `check` certifies only itself and the steps marked `.doneByCheck()`; other steps it follows are now
