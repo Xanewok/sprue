@@ -23,8 +23,11 @@ contract DeployToken is Unit {
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         address token = _requireRecordedCode(journal, "token");
-        _authenticate(token, abi.encode(SUPPLY));
         _recordReceipt(journal, "token", token);
+        require(
+            keccak256(_creationInput(_journal(), "token")) == keccak256(_initcode("Token", abi.encode(SUPPLY))),
+            "the token was not created from this build with the supply"
+        );
         return _certifyRole(_beginChecked("token", token), "token", token);
     }
 

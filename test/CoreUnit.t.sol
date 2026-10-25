@@ -374,6 +374,33 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
+    function test_creationInput_isWhatTheJournaledTransactionSent_ifTheChainShowsItCreatedTheRole() public {
+        _network("creation", FREE, "");
+        unit.deploy(network);
+        vm.expectRevert(bytes("toy.json records no toyTx: run where forge's broadcast records of its deployment are"));
+        unit.creationInput(network);
+
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
+        unit.confirm(hash);
+        unit.deploy(network);
+        unit.send(_initcode(1));
+        assertEq(unit.creationInput(network), _initcode(1));
+
+        unit.confirm(keccak256("another transaction"));
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    vm.toString(hash),
+                    ", the journal's toyTx, did not create ",
+                    vm.toString(_journalOf("toy", ".toy")),
+                    " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
+                )
+            )
+        );
+        unit.creationInput(network);
+    }
+
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
     /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
     ///      clean send over the dirty mark that intent left clears it.

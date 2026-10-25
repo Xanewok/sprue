@@ -207,7 +207,103 @@ abstract contract ForgeBroadcasts is Journal {
                 }
             } catch {}
         }
-        console.log("no local receipt under broadcast/ creates the journal", role);
+        // No record holds the receipt, as after a killed forge: the chain still has the transaction.
+        string memory key = string.concat(".", role);
+        if (!create2 && _has(journal, string.concat(key, "Deployer"))) {
+            bytes32 hash =
+                _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
+            uint256 landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
+            if (landed != 0) {
+                _put(string.concat(key, "Tx"), vm.toString(hash));
+                _put(string.concat(key, "Block"), vm.toString(landed));
+                return;
+            }
+        }
+        console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
+    }
+
+    /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
+    ///      nonce is unused. It searches back from the head, doubling the step, then halves the
+    ///      interval, so that a recent transaction needs only the recent state a full node keeps. Zero
+    ///      too if the RPC cannot answer for a block, as a full node for old state. Virtual only so a
+    ///      test with no RPC can answer.
+    function _sentAt(address deployer, uint256 nonce) internal virtual returns (bytes32) {
+        if (vm.getNonce(deployer) <= nonce) return 0;
+        // `block.number` can be a rollup's parent chain's number.
+        uint256 hi = _quantity(vm.rpc("eth_blockNumber", "[]"));
+        // The nonce is used, so the head is past genesis.
+        uint256 lo = hi - 1;
+        // Each round keeps `deployer`'s nonce at `hi` past `nonce`.
+        for (uint256 step = 2; lo != 0; step *= 2) {
+            (bool ok, uint256 used) = _nonceAt(deployer, lo);
+            if (!ok) return 0;
+            if (used <= nonce) break;
+            hi = lo;
+            lo = lo > step ? lo - step : 0;
+        }
+        while (hi - lo > 1) {
+            uint256 mid = (lo + hi) / 2;
+            (bool ok, uint256 used) = _nonceAt(deployer, mid);
+            if (!ok) return 0;
+            if (used > nonce) hi = mid;
+            else lo = mid;
+        }
+        string memory blockJson =
+            VmRpcJson(address(vm)).rpcJson("eth_getBlockByNumber", string.concat('["', _hex(hi), '", true]'));
+        for (uint256 i; _has(blockJson, string.concat(".transactions[", vm.toString(i), "]")); ++i) {
+            string memory t = string.concat(".transactions[", vm.toString(i), "]");
+            if (
+                _addr(blockJson, string.concat(t, ".from")) == deployer
+                    && _uint(blockJson, string.concat(t, ".nonce")) == nonce
+            ) {
+                return vm.parseJsonBytes32(blockJson, string.concat(t, ".hash"));
+            }
+        }
+        return 0;
+    }
+
+    function _nonceAt(address account, uint256 blockNumber) private returns (bool, uint256) {
+        try vm.rpc(
+            "eth_getTransactionCount", string.concat('["', vm.toString(account), '", "', _hex(blockNumber), '"]')
+        ) returns (
+            bytes memory count
+        ) {
+            return (true, _quantity(count));
+        } catch {
+            return (false, 0);
+        }
+    }
+
+    function _quantity(bytes memory word) private pure returns (uint256) {
+        return uint256(bytes32(word)) >> (8 * (32 - word.length));
+    }
+
+    /// @dev A JSON-RPC quantity: hex without leading zeros.
+    function _hex(uint256 x) private pure returns (string memory) {
+        bytes memory digits = bytes(vm.toString(bytes32(x)));
+        uint256 start = 2;
+        while (start < 65 && digits[start] == "0") ++start;
+        bytes memory out = new bytes(digits.length - start);
+        for (uint256 i; i < out.length; ++i) {
+            out[i] = digits[start + i];
+        }
+        return string.concat("0x", string(out));
+    }
+
+    /// @dev The input of the chain's transaction `hash`, whose receipt the chain showed. Virtual only
+    ///      so a test with no RPC can supply it.
+    function _sentInput(bytes32 hash) internal virtual returns (bytes memory) {
+        string memory sent =
+            VmRpcJson(address(vm)).rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
+        require(
+            _has(sent, ".input"),
+            string.concat(
+                "the RPC shows the receipt of ",
+                vm.toString(hash),
+                " but not the transaction: if it lags behind the chain, run again once it shows it"
+            )
+        );
+        return vm.parseJsonBytes(sent, ".input");
     }
 
     function _settleCommit(string memory journal, string memory role, string memory record) private {

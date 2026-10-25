@@ -74,6 +74,7 @@ contract ToyUnit is ToyJournal {
     uint256 public hooks;
     bool public journaledAtHook;
     bytes32 public confirmed;
+    bytes internal sentInput;
 
     function setTag(uint256 tag_) external {
         tag = tag_;
@@ -81,6 +82,15 @@ contract ToyUnit is ToyJournal {
 
     function confirm(bytes32 hash) external {
         confirmed = hash;
+    }
+
+    /// @dev What the chain shows the confirmed transaction sent.
+    function send(bytes calldata input) external {
+        sentInput = input;
+    }
+
+    function creationInput(string calldata network) external returns (bytes memory) {
+        return _creationInput(_use(network), "toy");
     }
 
     function deploy(string calldata network) external returns (string memory) {
@@ -169,8 +179,16 @@ contract ToyUnit is ToyJournal {
         return _done(false);
     }
 
-    function _createdIn(bytes32 hash, address, bool) internal view override returns (uint256) {
-        return hash == confirmed ? 5 : 0;
+    function _createdIn(bytes32 hash, address, bool create2) internal view virtual override returns (uint256) {
+        return hash == confirmed && !create2 ? 5 : 0;
+    }
+
+    function _sentAt(address, uint256) internal pure override returns (bytes32) {
+        return 0;
+    }
+
+    function _sentInput(bytes32) internal view override returns (bytes memory) {
+        return sentInput;
     }
 
     function _onDeployment(string memory journal, string memory role, bytes memory args) internal override {

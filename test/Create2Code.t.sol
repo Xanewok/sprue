@@ -21,6 +21,11 @@ contract Create2Unit is ToyUnit {
     function recordReceipt(string calldata network, address deployed) external {
         _recordCreate2Receipt(_use(network), "toy", deployed);
     }
+
+    /// @dev Only a factory call creates here.
+    function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
+        return hash == confirmed && create2 ? 5 : 0;
+    }
 }
 
 /// @notice `requireCode` and the CREATE2 helpers, which `_deployRole` does not reach.
@@ -107,5 +112,10 @@ contract Create2CodeTest is Test {
         string memory journal = vm.readFile(string.concat(dir, "/toy.json"));
         assertEq(vm.parseJsonBytes32(journal, ".toyTx"), toFactory);
         assertEq(vm.parseJsonUint(journal, ".toyBlock"), 5);
+
+        vm.writeJson(vm.toString(deployed), string.concat(dir, "/toy.json"), ".toy");
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(3)));
+        unit.send(bytes.concat(bytes32(uint256(1)), initcode));
+        assertEq(unit.creationInput(net), initcode, "the creation input keeps the salt");
     }
 }

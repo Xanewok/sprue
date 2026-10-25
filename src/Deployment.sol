@@ -6,7 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
-import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
+import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
 import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
@@ -102,6 +102,45 @@ abstract contract Deployment is ForgeBroadcasts {
             addr.codehash == vm.parseJsonBytes32(journal, hashKey),
             string.concat(role, "'s code differs from ", _unit(), ".json")
         );
+    }
+
+    /// @dev The initcode that created `role`, as the chain shows it: the input of the journal's
+    ///      `<role>Tx`, after the salt for a CREATE2 through the factory. Reverts unless the chain shows
+    ///      that this transaction created the recorded address. Only the hash comes from the journal,
+    ///      so comparing the result whole with the initcode a unit expects proves the constructor's
+    ///      arguments. `_recordReceipt` journals `<role>Tx`: call this after it.
+    function _creationInput(string memory journal, string memory role) internal returns (bytes memory input) {
+        string memory key = string.concat(".", role);
+        require(
+            _has(journal, string.concat(key, "Tx")),
+            string.concat(
+                _unit(), ".json records no ", role, "Tx: run where forge's broadcast records of its deployment are"
+            )
+        );
+        bytes32 hash = vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
+        address addr = _addr(journal, key);
+        bool create2 = _createdIn(hash, addr, false) == 0;
+        require(
+            !create2 || _createdIn(hash, addr, true) != 0,
+            string.concat(
+                vm.toString(hash),
+                ", the journal's ",
+                role,
+                "Tx, did not create ",
+                vm.toString(addr),
+                " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
+            )
+        );
+        input = _sentInput(hash);
+        if (create2) {
+            require(input.length >= 32, "a CREATE2 factory call's input is shorter than its salt");
+            // SAFETY: the length is at least 32, checked above. The new head overwrites the salt.
+            assembly ("memory-safe") {
+                let length := sub(mload(input), 0x20)
+                input := add(input, 0x20)
+                mstore(input, length)
+            }
+        }
     }
 
     /// @dev Returns zero when this run must send the role: the journal lacks it, an intent in it has
@@ -583,9 +622,7 @@ abstract contract Deployment is ForgeBroadcasts {
         for (uint256 j; _hasTransaction(c, j); ++j) {
             (bool ok, bytes32 hash) = _candidateHash(c, j);
             if (!ok || _createdIn(hash, c.addr, false) == 0) continue;
-            string memory sent = VmRpcJson(address(vm))
-                .rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
-            if (keccak256(vm.parseJsonBytes(sent, ".input")) == keccak256(input)) return true;
+            if (keccak256(_sentInput(hash)) == keccak256(input)) return true;
         }
         return false;
     }
