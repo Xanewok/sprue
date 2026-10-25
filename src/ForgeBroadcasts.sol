@@ -215,7 +215,10 @@ abstract contract ForgeBroadcasts is Journal {
             } catch {}
         }
         string memory key = string.concat(".", role);
-        if (create2 || !_has(journal, string.concat(key, "Deployer"))) return (0, 0, "");
+        // An adopted role, which this project did not create, has no nonce.
+        if (create2 || !_has(journal, string.concat(key, "Deployer")) || !_has(journal, string.concat(key, "Nonce"))) {
+            return (0, 0, "");
+        }
         hash = _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
         landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
         record = "";
