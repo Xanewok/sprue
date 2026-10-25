@@ -52,9 +52,10 @@ end-to-end scenario for each invariant.
   the same transaction.
 - `_requireCreatedFrom` finds a CREATE2 role's transaction only in its broadcast records or the
   journal's `<role>Tx`, and a CREATE's on the chain only through an RPC that serves the deployer's
-  nonce at past blocks. Where it finds none, it refuses, except under forge's test commands. A role
-  that this run's `_deployRole` created passes by the run's own record of its initcode, since a
-  simulation's deployment has no transaction.
+  nonce at past blocks. Where it finds none, it refuses, except under forge's test commands. A
+  contract that the same unit's `_deployRole` created in this run passes by that unit's record of
+  the chain, address and initcode, since a simulation's deployment has no transaction; another unit
+  proving it is refused.
 - Chains in `chains.local` and `chains.test` have no nonce fence. Losing a journal and its broadcast
   records there can deploy a role twice.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that

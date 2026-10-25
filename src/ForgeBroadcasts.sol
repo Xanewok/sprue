@@ -225,9 +225,7 @@ abstract contract ForgeBroadcasts is Journal {
     }
 
     /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
-    ///      nonce is unused. It searches back from the head, doubling the step, then halves the
-    ///      interval, so that a recent transaction needs only the recent state a full node keeps. Zero
-    ///      too with no RPC, or for a transaction older than the state the RPC keeps.
+    ///      nonce is unused. Zero too with no RPC, or for a transaction older than the state the RPC keeps.
     function _sentAt(address deployer, uint256 nonce) private returns (bytes32) {
         // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
         // `block.number` can be a rollup's parent chain's number.
@@ -240,16 +238,9 @@ abstract contract ForgeBroadcasts is Journal {
         }
         (bool landed, uint256 sent) = _nonceAt(deployer, hi);
         if (!landed || sent <= nonce) return 0;
-        // The nonce is used, so the head is past genesis.
-        uint256 lo = hi - 1;
-        // Each round keeps `deployer`'s nonce at `hi` past `nonce`. A block whose state the RPC no
-        // longer keeps bounds the search as one before the transaction does: the scan below checks.
-        for (uint256 step = 2; lo != 0; step *= 2) {
-            (bool ok, uint256 used) = _nonceAt(deployer, lo);
-            if (!ok || used <= nonce) break;
-            hi = lo;
-            lo = lo > step ? lo - step : 0;
-        }
+        // Invariant: `deployer`'s nonce at `hi` is past `nonce`, and at `lo` is not or is not served. A
+        // block whose state the RPC no longer keeps counts as before the transaction: the scan below checks.
+        uint256 lo;
         while (hi - lo > 1) {
             uint256 mid = (lo + hi) / 2;
             (bool ok, uint256 used) = _nonceAt(deployer, mid);

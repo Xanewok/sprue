@@ -34,9 +34,10 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
-    /// @dev The initcode hash of each role this run's `_deployRole` created. A role that a simulation
-    ///      created has no transaction for `_requireCreatedFrom` to read.
-    mapping(string role => bytes32) private _createdThisRun;
+    /// @dev The initcode hash of each contract this unit's `_deployRole` created in this run, by chain
+    ///      and address. A role that a simulation created has no transaction for `_requireCreatedFrom`
+    ///      to read.
+    mapping(bytes32 deployment => bytes32) private _createdThisRun;
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
@@ -116,15 +117,15 @@ abstract contract Deployment is ForgeBroadcasts {
         return _inputOf(journal, role, _creationTx(journal, role));
     }
 
-    /// @dev `role` was created from this build's `artifact` with `args`: by this run's `_deployRole`,
-    ///      or by the transaction `_findCreationInput` reads. A role with no known transaction passes
+    /// @dev `role` was created from this build's `artifact` with `args`: by this unit's `_deployRole`
+    ///      in this run, or by the transaction `_findCreationInput` reads. A role with no known transaction passes
     ///      under forge's test commands, which keep no transaction history. For a role created
     ///      otherwise, compare `_findCreationInput` with what it was created from.
     function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
         bytes32 expected = _initcodeHash(artifact, args);
-        if (_createdThisRun[role] == expected) return;
+        if (_createdThisRun[_deployment(_addr(journal, string.concat(".", role)))] == expected) return;
         bytes32 hash = _creationTx(journal, role);
         if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
         require(
@@ -784,7 +785,9 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev A unit's deploy step for one role. It reuses the journaled deployment, resends its
     ///      pending intent as the same transaction, or sends a new one. `create` must contain the
-    ///      typed `new` expression, which is how forge names the broadcast's contract.
+    ///      typed `new` expression, which is how forge names the broadcast's contract, and pass it
+    ///      `args`: the journaled intent, and `_requireCreatedFrom` within this run, take them as the
+    ///      constructor's.
     ///      `authenticate` runs on a reused address before anything is journaled. `journal` is the
     ///      journal that `_use` returned. `sent` is whether this run creates a transaction, which a
     ///      simulation counts.
@@ -813,6 +816,10 @@ abstract contract Deployment is ForgeBroadcasts {
 
     function _noState(address, bytes memory) private view {}
 
+    function _deployment(address addr) private view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, addr));
+    }
+
     function _deployRole(
         string memory journal,
         string memory role,
@@ -830,7 +837,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireDeployable();
             addr = create(args);
             _requireBuild(addr, artifact);
-            _createdThisRun[role] = _initcodeHash(artifact, args);
+            _createdThisRun[_deployment(addr)] = _initcodeHash(artifact, args);
         } else {
             addr = recorded;
             if (byCreation) _requireCreatedFrom(journal, role, artifact, args);

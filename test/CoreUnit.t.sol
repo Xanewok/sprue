@@ -462,6 +462,17 @@ contract CoreUnitTest is Test {
         unit.setTag(2);
         vm.expectRevert(bytes(refusal));
         unit.requireCreatedFrom(network);
+
+        // This run's record is of the address it created, not of the role's name.
+        unit.setTag(1);
+        address elsewhere = makeAddr("another payload");
+        bytes32 other = keccak256("another payload's creation");
+        vm.writeJson(vm.toString(elsewhere), path, ".toy");
+        _writeReceipts("run-other.json", '"abc1234"', elsewhere, other, other);
+        unit.confirm(other);
+        unit.send(_initcode(2));
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedFrom(network);
     }
 
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
