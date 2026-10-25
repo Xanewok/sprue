@@ -942,6 +942,7 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      `pending` until `_recordReceipt` reads the commit forge sent from. The metadata is copied
     ///      beside the journal because `out/` is usually git-ignored.
     function _recordBuild(string memory role, address deployed, string memory name) internal {
+        if (_inProbe()) revert StepDue();
         string memory metadataPath = string.concat(_dir(), "/", name, ".metadata.json");
         vm.writeFile(
             metadataPath,

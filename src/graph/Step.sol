@@ -18,9 +18,13 @@ interface IProbe {
     /// @dev `probe`'s only outcome: whether the step returned, and its return or revert data.
     error Probed(bool returned, bytes result);
 
-    /// @dev Runs `step`, a call of one of the unit's steps, as a plan judges it, and reverts with
-    ///      `Probed`, so that nothing the step did remains.
-    function probe(bytes calldata step) external;
+    /// @dev Runs `step`, a call of one of the unit's steps, as `sender` would send it, and reverts with
+    ///      `Probed`, so that no EVM state the step changed remains. Cheatcode state, such as the clock,
+    ///      the selected fork or a file written directly, does remain.
+    function probe(bytes calldata step, address sender) external;
+
+    /// @dev `IProbe.probe.selector`: read with a static call, so that asking runs nothing.
+    function probes() external pure returns (bytes4);
 }
 
 enum StepKind {
