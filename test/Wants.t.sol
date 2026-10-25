@@ -44,6 +44,18 @@ contract WantUnit is ToyUnit {
         return _done();
     }
 
+    function pay(string calldata network, address to, uint256 value) external returns (string memory) {
+        _use(network);
+        _want(to.balance >= value, to, value, "");
+        return _done();
+    }
+
+    function payAnyway(string calldata network, address to, uint256 value) external returns (string memory) {
+        _use(network);
+        _want(false, to, value, "");
+        return _done();
+    }
+
     function wantAt(string calldata network, address target) external returns (string memory) {
         _use(network);
         _want(false, target, abi.encodeCall(Settings.setA, (1)));
@@ -127,6 +139,17 @@ contract WantsTest is Test, Declares {
         unit.wantB(0);
         vm.expectRevert(bytes("b is never zero"));
         unit.configure(net);
+    }
+
+    function test_want_paysAnAccountWithoutCode_onlyWhereItsBalanceIsShort() public {
+        string memory net = _network("wants-pay");
+        address payee = makeAddr("payee");
+        unit.pay(net, payee, 1 ether);
+        assertEq(payee.balance, 1 ether);
+        unit.pay(net, payee, 1 ether);
+        assertEq(payee.balance, 1 ether, "a met want paid again");
+        vm.expectRevert(bytes(string.concat(vm.toString(payee), " has no code")));
+        unit.payAnyway(net, payee, 0);
     }
 
     function test_want_refusesATargetWithoutCode() public {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_want(holds, target, value, call)` sends `value` wei with `call`; with an empty `call`, a plain
+transfer, which may go to an address without code.
+
 `_deployRole(journal, role, artifact, args, proof)` creates `artifact` from its initcode with `args`, so
 a unit needs no `create` callback, and proves a reuse by `proof`.
 

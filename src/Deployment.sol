@@ -102,11 +102,20 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      later one sees the earlier ones' effects. Only a revert fails it: a contract that reports
     ///      failure by its return value needs the step's own check.
     function _want(bool holds, address target, bytes memory call) internal {
+        _want(holds, target, 0, call);
+    }
+
+    /// @dev `_want` that sends `value` wei with `call`; with an empty `call`, a plain transfer.
+    function _want(bool holds, address target, uint256 value, bytes memory call) internal {
         if (holds) return;
-        // As a typed call would: a call to an address without code succeeds and does nothing.
-        require(target.code.length != 0, string.concat(vm.toString(target), " has no code"));
+        // As a typed call would: a call to an address without code succeeds and does nothing. Only a
+        // plain transfer of value means something there.
+        require(
+            target.code.length != 0 || (call.length == 0 && value != 0),
+            string.concat(vm.toString(target), " has no code")
+        );
         _startBroadcast();
-        (bool ok, bytes memory ret) = target.call(call);
+        (bool ok, bytes memory ret) = target.call{value: value}(call);
         if (!ok) {
             assembly ("memory-safe") {
                 revert(add(ret, 0x20), mload(ret))
