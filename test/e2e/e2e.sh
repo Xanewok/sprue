@@ -359,6 +359,14 @@ scenario_kill() {
   G run kill token.check >/dev/null 2>>log
   [ "$(jq -r .token $d/token.json)" != "$intent" ] || die "kill: kept a spent-nonce intent"
   [ "$(cast code "$(jq -r .token $d/token.json)" --rpc-url "$RPC")" != 0x ] || die "kill: the replacement has no code"
+  # With no broadcast record, the chain shows the creation by the journal's deployer and nonce: here
+  # nonce 1, a block after the transaction that spent nonce 0.
+  mkdir -p broadcast/DeployToken.s.sol && mv broadcast/DeployToken.s.sol "$W/records.kill"
+  jq 'del(.tokenTx, .tokenBlock, .checked)' $d/token.json >"$W/j" && mv "$W/j" $d/token.json
+  G run kill token.check >/dev/null 2>>log || die "kill: check without a record failed: $(tail -n 3 log)"
+  rm -rf broadcast/DeployToken.s.sol && mv "$W/records.kill" broadcast/DeployToken.s.sol
+  [ "$(cast receipt "$(jq -r .tokenTx $d/token.json)" contractAddress --rpc-url "$RPC" 2>/dev/null | tr A-F a-f)" \
+    = "$(jq -r .token $d/token.json | tr A-F a-f)" ] || die "kill: the chain did not show the creation without a record"
   echo "ok  kill a pending CREATE is refused, resumed once landed, and replaced once its nonce is spent"
 }
 

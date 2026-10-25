@@ -17,8 +17,7 @@ contract DeployVault is Unit {
 
     function deploy(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
-        (, bool sent) =
-            _deployRole(journal, "vault", "Vault", abi.encode(_checked("token", "token")), _create, _authenticate);
+        (, bool sent) = _deployRole(journal, "vault", "Vault", abi.encode(_checked("token", "token")), _create);
         return _done(sent);
     }
 
@@ -26,13 +25,14 @@ contract DeployVault is Unit {
         string memory journal = _use(network);
         bytes memory args = abi.encode(_checked("token", "token"));
         address recorded = _reuseForDue(journal, "vault", "Vault", args);
-        if (recorded != address(0)) _authenticate(recorded, args);
+        if (recorded != address(0)) _requireCreatedFrom(journal, "vault", "Vault", args);
         return recorded == address(0);
     }
 
     function fund(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
+        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         if (short) {
             _startBroadcast();
             require(Token(token).transfer(vault, 1), "the transfer failed");
@@ -43,8 +43,9 @@ contract DeployVault is Unit {
 
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
-        (, address vault, bool short) = _funding(journal);
+        (address token, address vault, bool short) = _funding(journal);
         require(!short, "the vault is not funded");
+        _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
         _recordReceipt(journal, "vault", vault);
         return _certifyRole(_beginChecked("vault", vault), "vault", vault);
     }
@@ -57,16 +58,11 @@ contract DeployVault is Unit {
     function _funding(string memory journal) private view returns (address token, address vault, bool short) {
         token = _checked("token", "token");
         vault = _requireRecordedCode(journal, "vault");
-        _authenticate(vault, abi.encode(token));
         short = Token(token).balanceOf(vault) == 0;
     }
 
     function _create(bytes memory args) private returns (address) {
         return address(new Vault(abi.decode(args, (address))));
-    }
-
-    function _authenticate(address vault, bytes memory args) private view {
-        require(Vault(vault).TOKEN() == abi.decode(args, (address)), "the vault's token is not token.json's");
     }
 
     function _unit() internal pure override returns (string memory) {

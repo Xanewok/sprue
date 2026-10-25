@@ -16,14 +16,14 @@ contract DeployToken is Unit {
 
     function deploy(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
-        (, bool sent) = _deployRole(journal, "token", "Token", abi.encode(SUPPLY), _create, _authenticate);
+        (, bool sent) = _deployRole(journal, "token", "Token", abi.encode(SUPPLY), _create);
         return _done(sent);
     }
 
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         address token = _requireRecordedCode(journal, "token");
-        _authenticate(token, abi.encode(SUPPLY));
+        _requireCreatedFrom(journal, "token", "Token", abi.encode(SUPPLY));
         _recordReceipt(journal, "token", token);
         return _certifyRole(_beginChecked("token", token), "token", token);
     }
@@ -37,10 +37,6 @@ contract DeployToken is Unit {
 
     function _create(bytes memory args) private returns (address) {
         return address(new Token(abi.decode(args, (uint256))));
-    }
-
-    function _authenticate(address token, bytes memory args) private view {
-        require(Token(token).SUPPLY() == abi.decode(args, (uint256)), "the token's supply differs");
     }
 
     function _unit() internal pure override returns (string memory) {

@@ -41,7 +41,8 @@ What sprue relies on and cannot check.
   CREATE addresses of the sender, the pin and every journal's deployers, up to 256 nonces each; it does not
   see a CREATE2 deployment, a CREATE of any other key, or a transaction another key still has pending.
 - The unit author keeps steps idempotent, makes `_authenticate` check the state and arguments of a reused
-  contract (the library checks only code), and makes `Due` views report real remaining work (SECURITY.md).
+  contract (the library checks only code, and with `_requireCreatedFrom` the creation's arguments), and
+  makes `Due` views report real remaining work (SECURITY.md).
 - The terminal check guards against an accident, not an agent: a keystore password file decrypts without a
   person. No agent or CI should hold a key for a public chain.
 - `sprue.json` and `network.json` are the project's to get right; sprue validates their shape, not their meaning.
@@ -87,7 +88,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    compiled from the unit's script has `recover(string)`. A stray CREATE2 landing is refused, not adopted.
 4. **Journals are per unit and committed.** Addresses, intent, the code each contract must have, and the
    build metadata. Git is the history. Stamped with the chain id the step last selected.
-5. **A deploy step converges.** `_deployRole` authenticates what it reuses and sends only a missing role;
+5. **A deploy step converges.** `_deployRole` authenticates what it reuses, by the unit's `authenticate` or
+   by its creation (`_requireCreatedFrom`), and sends only a missing role;
    `_done` ends a step by printing what it sent, the files to commit and the next `plan` command.
 6. **Done has three forms, and a step needs one.** A `<fn>Due` view (true while work remains), the
    certificate of a same-unit `check` that reaches it through `needs`, or, for a node with no step, a
@@ -102,8 +104,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    decides due or done; making the contract enforce the condition when the step runs is the unit author's
    job. A script reads during simulation and sends later, so its read is never a lock.
 9. **No step needs historical state.** The library reads the current state of the fork it creates at the
-   head, a transaction by hash, and its receipt. Rejected: an archive RPC; recovery from the chain alone
-   is ROADMAP.
+   head, a transaction by hash, and its receipt. One fallback reads the past: with no broadcast record,
+   a CREATE's transaction is found through the deployer's nonce at earlier blocks, which a full node
+   keeps only for recent ones; past that, it finds none. Rejected: an archive RPC; recovery from the
+   chain alone is ROADMAP.
 10. **The graph's order derives from units.** Kahn's algorithm: of the ready nodes, the first-registered
     unit, then the first declared. A unit orders only its own nodes. A cycle, a duplicate id, an unresolved
     need, an unlisted unit and a selector that does not match the function name are refused at

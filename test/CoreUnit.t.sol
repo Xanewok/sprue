@@ -374,6 +374,112 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
+    /// @dev With no record, only the chain can show a creation, and only of a role the project
+    ///      created: one with a nonce. `forge test` has no RPC.
+    function test_recordReceipt_withNoRecord_findsNothingWithoutAnRpcOrTheRolesNonce() public {
+        _network("no-record", FREE, "");
+        unit.deploy(network);
+        string memory path = string.concat(dir, "/toy.json");
+
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"));
+
+        vm.writeFile(path, vm.replace(vm.readFile(path), '"toyNonce"', '"toyNonceX"'));
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"));
+    }
+
+    function test_findCreationInput_isWhatTheJournaledTransactionSent_ifTheChainShowsItCreatedTheRole() public {
+        _network("creation", FREE, "");
+        unit.deploy(network);
+        vm.expectRevert(
+            bytes(
+                "neither toy.json, a broadcast record nor the chain shows the transaction that created toy: journal it as toyTx"
+            )
+        );
+        unit.findCreationInput(network);
+
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
+        unit.confirm(hash);
+        unit.deploy(network);
+        unit.send(_initcode(1));
+        assertEq(unit.findCreationInput(network), _initcode(1));
+
+        bytes32 other = keccak256("a transaction the chain does not confirm");
+        vm.writeJson(vm.toString(other), string.concat(dir, "/toy.json"), ".toyTx");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    vm.toString(other),
+                    ", the transaction of toy, did not create ",
+                    vm.toString(_journalOf("toy", ".toy")),
+                    " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
+                )
+            )
+        );
+        unit.findCreationInput(network);
+    }
+
+    /// @dev Only a unit that asks for the proof gets it: the `_deployRole` without `authenticate`, or a
+    ///      call. This run's record of a role it created decides, even in a test; a test's role with no
+    ///      record and no known transaction passes, as forge's test commands keep no transaction history.
+    ///      A refusal comes before any journal write.
+    function test_requireCreatedFrom_refusesAnotherCreationInput_onlyWhereAUnitAsks() public {
+        _network("created-from", FREE, "");
+        unit.deployByCreation(network);
+        unit.send(_initcode(2));
+        unit.requireCreatedFrom(network);
+        string memory refusal =
+            "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from";
+        unit.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedFrom(network);
+        unit.setTag(1);
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        later.requireCreatedFrom(network);
+
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
+        later.confirm(hash);
+        later.send(_initcode(2));
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        vm.expectRevert(bytes(refusal));
+        later.deployByCreation(network);
+        vm.stopBroadcast();
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedFrom(network);
+        later.deploy(network);
+        later.recordedRole(network);
+
+        later.send("");
+        later.deployByCreation(network);
+        later.requireCreatedFrom(network);
+        later.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedFrom(network);
+
+        unit.confirm(hash);
+        unit.send("");
+        unit.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedFrom(network);
+
+        // This run's record is of the address it created, not of the role's name.
+        unit.setTag(1);
+        address elsewhere = makeAddr("another payload");
+        bytes32 other = keccak256("another payload's creation");
+        vm.writeJson(vm.toString(elsewhere), path, ".toy");
+        _writeReceipts("run-other.json", '"abc1234"', elsewhere, other, other);
+        unit.confirm(other);
+        unit.send(_initcode(2));
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedFrom(network);
+    }
+
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
     /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
     ///      clean send over the dirty mark that intent left clears it.

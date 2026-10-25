@@ -6,7 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
-import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
+import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
 import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
@@ -34,6 +34,10 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
+    /// @dev The initcode hash of each contract this unit's `_deployRole` created in this run, by chain
+    ///      and address. A role that a simulation created has no transaction for `_requireCreatedFrom`
+    ///      to read.
+    mapping(bytes32 deployment => bytes32) private _createdThisRun;
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
@@ -102,6 +106,87 @@ abstract contract Deployment is ForgeBroadcasts {
             addr.codehash == vm.parseJsonBytes32(journal, hashKey),
             string.concat(role, "'s code differs from ", _unit(), ".json")
         );
+    }
+
+    /// @dev The initcode that created `role`, as the chain shows it: the input of the transaction that
+    ///      created the recorded address, after the salt for a CREATE2 through the factory. The hash
+    ///      is the journal's `<role>Tx`, else a broadcast record's, else the chain's (`_findReceipt`),
+    ///      and the chain must show that it created the address; else this reverts. Comparing the
+    ///      result whole with the initcode a unit expects proves the constructor's arguments.
+    function _findCreationInput(string memory journal, string memory role) internal returns (bytes memory) {
+        return _inputOf(journal, role, _creationTx(journal, role));
+    }
+
+    /// @dev `role` was created from this build's `artifact` with `args`: by this unit's `_deployRole`
+    ///      in this run, whose record decides, or by the transaction `_findCreationInput` reads. A role
+    ///      with neither passes under forge's test commands, which keep no transaction history. For a
+    ///      role created otherwise, compare `_findCreationInput` with what it was created from.
+    function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
+        internal
+    {
+        bytes32 expected = _initcodeHash(artifact, args);
+        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))];
+        if (created == 0) {
+            bytes32 hash = _creationTx(journal, role);
+            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            created = keccak256(_inputOf(journal, role, hash));
+        }
+        require(
+            created == expected,
+            string.concat(
+                role,
+                " was not created from this build's ",
+                artifact,
+                " with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
+            )
+        );
+    }
+
+    function _creationTx(string memory journal, string memory role) private returns (bytes32 hash) {
+        string memory key = string.concat(".", role);
+        if (_has(journal, string.concat(key, "Tx"))) return vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
+        address addr = _addr(journal, key);
+        (hash,,) = _findReceipt(journal, role, addr, false);
+        if (hash == 0) (hash,,) = _findReceipt(journal, role, addr, true);
+    }
+
+    function _inputOf(string memory journal, string memory role, bytes32 hash) private returns (bytes memory input) {
+        string memory key = string.concat(".", role);
+        require(
+            hash != 0,
+            string.concat(
+                "neither ",
+                _unit(),
+                ".json, a broadcast record nor the chain shows the transaction that created ",
+                role,
+                ": journal it as ",
+                role,
+                "Tx"
+            )
+        );
+        address addr = _addr(journal, key);
+        bool create2 = _createdIn(hash, addr, false) == 0;
+        require(
+            !create2 || _createdIn(hash, addr, true) != 0,
+            string.concat(
+                vm.toString(hash),
+                ", the transaction of ",
+                role,
+                ", did not create ",
+                vm.toString(addr),
+                " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
+            )
+        );
+        input = _sentInput(hash);
+        if (create2) {
+            require(input.length >= 32, "a CREATE2 factory call's input is shorter than its salt");
+            // SAFETY: the length is at least 32, checked above. The new head overwrites the salt.
+            assembly ("memory-safe") {
+                let length := sub(mload(input), 0x20)
+                input := add(input, 0x20)
+                mstore(input, length)
+            }
+        }
     }
 
     /// @dev Returns zero when this run must send the role: the journal lacks it, an intent in it has
@@ -583,9 +668,7 @@ abstract contract Deployment is ForgeBroadcasts {
         for (uint256 j; _hasTransaction(c, j); ++j) {
             (bool ok, bytes32 hash) = _candidateHash(c, j);
             if (!ok || _createdIn(hash, c.addr, false) == 0) continue;
-            string memory sent = VmRpcJson(address(vm))
-                .rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
-            if (keccak256(vm.parseJsonBytes(sent, ".input")) == keccak256(input)) return true;
+            if (keccak256(_sentInput(hash)) == keccak256(input)) return true;
         }
         return false;
     }
@@ -705,7 +788,9 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev A unit's deploy step for one role. It reuses the journaled deployment, resends its
     ///      pending intent as the same transaction, or sends a new one. `create` must contain the
-    ///      typed `new` expression, which is how forge names the broadcast's contract.
+    ///      typed `new` expression, which is how forge names the broadcast's contract, and pass it
+    ///      `args`: the journaled intent, and `_requireCreatedFrom` within this run, take them as the
+    ///      constructor's.
     ///      `authenticate` runs on a reused address before anything is journaled. `journal` is the
     ///      journal that `_use` returned. `sent` is whether this run creates a transaction, which a
     ///      simulation counts.
@@ -717,6 +802,36 @@ abstract contract Deployment is ForgeBroadcasts {
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate
     ) internal returns (address addr, bool sent) {
+        return _deployRole(journal, role, artifact, args, create, authenticate, false);
+    }
+
+    /// @dev `_deployRole` for a role whose creation proves what a reuse needs, as when its state is the
+    ///      constructor's or `check` proves the rest: a reused role must pass `_requireCreatedFrom`.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(bytes memory) internal returns (address) create
+    ) internal returns (address addr, bool sent) {
+        return _deployRole(journal, role, artifact, args, create, _noState, true);
+    }
+
+    function _noState(address, bytes memory) private view {}
+
+    function _deployment(address addr) private view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, addr));
+    }
+
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(bytes memory) internal returns (address) create,
+        function(address, bytes memory) internal view authenticate,
+        bool byCreation
+    ) private returns (address addr, bool sent) {
         _startBroadcast();
         (address deployer, uint256 nonce) = _broadcaster();
         address recorded = _reuseForSend(journal, role, artifact, args, deployer, nonce);
@@ -725,9 +840,11 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireDeployable();
             addr = create(args);
             _requireBuild(addr, artifact);
+            _createdThisRun[_deployment(addr)] = _initcodeHash(artifact, args);
         } else {
             addr = recorded;
-            authenticate(addr, args);
+            if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
+            else authenticate(addr, args);
         }
         vm.stopBroadcast();
 

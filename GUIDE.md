@@ -7,7 +7,8 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 ## Concepts
 
 - **Unit**: a Forge script `Deploy<Name>.s.sol` that inherits `Unit` and holds the steps for a few
-  related contracts. The contracts it deploys are its **roles**, named by strings such as `"token"`.
+  related contracts. Each contract it deploys is a **role**: one deployment, named by a string such
+  as `"token"`, whose facts the journal keeps under `<role>*` keys (`token`, `tokenNonce`, `tokenTx`).
 - **Journal**: `deployments/<network>/<unit>.json`, committed: each role's address, deployer, nonce
   and code hash, and the path of its build metadata file beside it.
 - **Step**: an external function of a unit that takes the network name (and an index, for a step per

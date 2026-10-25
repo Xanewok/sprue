@@ -17,7 +17,8 @@ prototype exists) or **researched** (the problem is understood, the design is no
   import of an existing address, with a committed code hash and an authentication predicate.
   CREATE2 is a separate opt-in path today, and a contract deployed outside the graph cannot be
   adopted. A CREATE2 intent (factory, salt, initcode hash) would be journaled before its first
-  send, as a CREATE intent is.
+  send, as a CREATE intent is, with the sender's nonce, so that `_requireCreatedFrom` finds its
+  transaction on the chain without a broadcast record.
 - **The nonce fence from a start nonce** (planned), per chain and deploy key. Its refusal would
   name each unrecorded address and the unit build it matches. Today a chain whose earlier deploys
   no journal records is exempt as a whole (`chains.unrecordedDeploys`); a start nonce keeps the

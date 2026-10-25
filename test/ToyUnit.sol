@@ -73,14 +73,33 @@ contract ToyUnit is ToyJournal {
     uint256 public tag = 1;
     uint256 public hooks;
     bool public journaledAtHook;
-    bytes32 public confirmed;
+    mapping(bytes32 => bool) public confirmed;
+    bytes internal sentInput;
 
     function setTag(uint256 tag_) external {
         tag = tag_;
     }
 
     function confirm(bytes32 hash) external {
-        confirmed = hash;
+        confirmed[hash] = true;
+    }
+
+    /// @dev What the chain shows the confirmed transaction sent.
+    function send(bytes calldata input) external {
+        sentInput = input;
+    }
+
+    function findCreationInput(string calldata network) external returns (bytes memory) {
+        return _findCreationInput(_use(network), "toy");
+    }
+
+    function requireCreatedFrom(string calldata network) external {
+        _requireCreatedFrom(_use(network), "toy", "ToyPayload", abi.encode(tag));
+    }
+
+    function deployByCreation(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create);
+        return _done(sent);
     }
 
     function deploy(string calldata network) external returns (string memory) {
@@ -169,8 +188,14 @@ contract ToyUnit is ToyJournal {
         return _done(false);
     }
 
-    function _createdIn(bytes32 hash, address, bool) internal view override returns (uint256) {
-        return hash == confirmed ? 5 : 0;
+    function _createdIn(bytes32 hash, address, bool create2) internal view virtual override returns (uint256) {
+        return confirmed[hash] && !create2 ? 5 : 0;
+    }
+
+    /// @dev Unless a test chose an input, the journal's intent was sent.
+    function _sentInput(bytes32) internal view virtual override returns (bytes memory) {
+        if (sentInput.length != 0) return sentInput;
+        return bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), vm.parseJsonBytes(_journal(), ".toyArgs"));
     }
 
     function _onDeployment(string memory journal, string memory role, bytes memory args) internal override {
