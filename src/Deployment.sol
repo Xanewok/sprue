@@ -918,7 +918,16 @@ abstract contract Deployment is ForgeBroadcasts {
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, authenticate, false);
+        return _deployRole(journal, role, artifact, args, create, authenticate, Proof.Authenticate);
+    }
+
+    /// @dev How `_deployRole` proves a reused role, before anything is journaled: by the unit's
+    ///      `authenticate`, by `_requireCreatedFrom` (this build's code), or by `_requireCreatedWith` (the
+    ///      code the journal records, so a later source edit does not orphan the role).
+    enum Proof {
+        Authenticate,
+        FromBuild,
+        WithArgs
     }
 
     /// @dev `_deployRole` for a role whose creation proves what a reuse needs, as when its state is the
@@ -930,7 +939,20 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, _noState, true);
+        return _deployRole(journal, role, artifact, args, create, _noState, Proof.FromBuild);
+    }
+
+    /// @dev `_deployRole` with the creation proof named: `Proof.FromBuild` or `Proof.WithArgs`.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(bytes memory) internal returns (address) create,
+        Proof proof
+    ) internal returns (address addr, bool sent) {
+        require(proof != Proof.Authenticate, "pass the authenticate function instead");
+        return _deployRole(journal, role, artifact, args, create, _noState, proof);
     }
 
     function _noState(address, bytes memory) private view {}
@@ -946,10 +968,10 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate,
-        bool byCreation
+        Proof proof
     ) private returns (address addr, bool sent) {
         if (_inProbe()) {
-            return (_reuseInProbe(journal, role, artifact, args, authenticate, byCreation), false);
+            return (_reuseInProbe(journal, role, artifact, args, authenticate, proof), false);
         }
         _startBroadcast();
         (address deployer, uint256 nonce) = _broadcaster();
@@ -962,8 +984,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _createdThisRun[_deployment(addr)] = Created(_initcodeHash(artifact, args), keccak256(args));
         } else {
             addr = recorded;
-            if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
-            else authenticate(addr, args);
+            _proveReuse(journal, role, artifact, args, addr, authenticate, proof);
         }
         vm.stopBroadcast();
 
@@ -985,11 +1006,24 @@ abstract contract Deployment is ForgeBroadcasts {
         string memory artifact,
         bytes memory args,
         function(address, bytes memory) internal view authenticate,
-        bool byCreation
+        Proof proof
     ) private returns (address addr) {
         addr = _reuseForDue(journal, role, artifact, args);
         if (addr == address(0)) revert StepDue();
-        if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
+        _proveReuse(journal, role, artifact, args, addr, authenticate, proof);
+    }
+
+    function _proveReuse(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        address addr,
+        function(address, bytes memory) internal view authenticate,
+        Proof proof
+    ) private {
+        if (proof == Proof.FromBuild) _requireCreatedFrom(journal, role, artifact, args);
+        else if (proof == Proof.WithArgs) _requireCreatedWith(journal, role, args);
         else authenticate(addr, args);
     }
 

@@ -1028,6 +1028,20 @@ contract CoreUnitTest is Test {
         assertTrue(present, "the certificate kept toyAbsent");
     }
 
+    /// @dev The proof runs before anything is journaled.
+    function test_deployRole_withArgs_provesAReuseByItsArguments() public {
+        _network("deploy-with-args", FREE, "");
+        unit.deployWithArgs(network);
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        unit.deployWithArgs(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        unit.deployWithArgs(network);
+        vm.stopBroadcast();
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+    }
+
     function test_reuse_returnsTheRoleOnlyWithTheJournalsCodeAndTheStepsArguments() public {
         _network("reuse", FREE, "");
         unit.deploy(network);
