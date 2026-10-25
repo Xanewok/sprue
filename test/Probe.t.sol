@@ -4,6 +4,7 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 
 import {Declares, Registration, Step} from "../src/graph/Step.sol";
+import {Probes} from "../src/Probes.sol";
 import {BuilderGraph} from "./StepBuilders.t.sol";
 import {ToyUnit} from "./ToyUnit.sol";
 
@@ -165,6 +166,23 @@ contract ProbeTest is Test, Declares {
         BuilderGraph g = new BuilderGraph(Registration(address(legacy), SCRIPT), s);
         assertFalse(g.node(0).probed);
         assertEq(legacy.calls(), 0, "asking ran the unit's fallback");
+    }
+
+    /// @dev What the plan prints, for a test: due, done, or the step's own refusal.
+    function test_probesDue_judgesAsThePlan_andRevertsWithTheStepsRefusal() public {
+        string memory net = _network("probe-library");
+        bytes memory transfer = abi.encodeCall(ProbeUnit.transfer, (net));
+        assertFalse(Probes.due(address(unit), transfer, address(this)));
+        unit.setSends(true);
+        assertTrue(Probes.due(address(unit), transfer, address(this)));
+        assertEq(unit.runs(), 0, "the probe's state remained");
+
+        unit.setOwner(address(this));
+        assertFalse(Probes.due(address(unit), abi.encodeCall(ProbeUnit.claim, (net)), address(this)));
+        assertTrue(Probes.due(address(unit), abi.encodeCall(ProbeUnit.claim, (net)), address(1)));
+
+        vm.expectRevert(bytes("not yet"));
+        Probes.due(address(unit), abi.encodeCall(ProbeUnit.refuse, (net)), address(this));
     }
 
     function test_plan_waitsOnTheStepsOwnRefusal() public {

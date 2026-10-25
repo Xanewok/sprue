@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+For tests, `Probes.due(unit, step, sender)` judges a step as the plan does: true while due, false once
+done, and the step's own revert otherwise.
+
 `_reuse(journal, role, args)` returns a role's recorded address for a step after its deploy step, once
 its code is the journal's and its creation took `args` (`_requireCreatedWith`).
 
