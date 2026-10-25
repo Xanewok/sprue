@@ -82,5 +82,18 @@ Order: E, then B with C, then D. Each is independent of A's internals and can be
   from a certificate key to a dependent's input, checked at graph build, changes how dependents read
   addresses; leave it as research until A to C are measured.
 - **F. Typed inputs** (the adopter's, no sprue change). `vm.parseJsonType` or `abi.decode(vm.parseJson(...))`.
+- **J. `_reuse(journal, role, args)`** (take; built). A later step's role, with the journal's code and
+  the step's arguments proven.
+- **G. A `.forTests()` step that refuses a live chain by itself** (reject). A unit would have to read its
+  own `steps()`, and forge refuses `address(this)` in the top-level script contract, which a unit is when
+  a person runs its step. The plan already refuses a test-only node off a test chain; a test step keeps
+  its one `_requireTestChain()` line.
+- **H. `_deployRole` from `type(C).creationCode`** (reject). forge names a CREATE in its records only
+  through a typed `new`, and the stray guard and `recover` find a role's records by that name, so a lost
+  record could be deployed twice. `_requireBuild` needs the artifact too: `runtimeCode` is unavailable
+  for a contract with immutables.
+- **I. One generic `recover` from a role table** (reject). A one-role unit's `recover` is already a call
+  of `_recover`. A unit whose later role takes an earlier role's recovered address needs callbacks a
+  table cannot hold, for a cut of a few lines on a path that guards against a second deployment.
 - **Steps chained in declaration order by default** (reject). An implicit `needs` hides edges, and moving a
   line would reorder CREATEs and change fresh-chain addresses.
