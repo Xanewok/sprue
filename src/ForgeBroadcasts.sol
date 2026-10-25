@@ -155,81 +155,79 @@ abstract contract ForgeBroadcasts is Journal {
 
     /// @dev The deploy run cannot see its own receipt, because forge writes it under `broadcast/`
     ///      after the run returns. So a later run of the step, or `check`, with `deployed`'s chain
-    ///      selected, records the receipt that this chain confirms created `deployed` (`_findReceipt`).
+    ///      selected, records the receipt there that this chain confirms created `deployed`. Only
+    ///      `receipts[]` names the right hash: older forge versions wrote a batch's hashes into
+    ///      `transactions[]` in the order the sends returned.
     ///
     ///      A `pending` commit, the label a unit records, becomes the commit forge sent from.
     function _recordReceipt(string memory journal, string memory role, address deployed) internal {
-        _recordReceipt(journal, role, deployed, false);
+        string memory created = string.concat(
+            "$..receipts[?(@.contractAddress == '", vm.toLowercase(vm.toString(deployed)), "')].transactionHash"
+        );
+        _recordReceipt(journal, role, created, deployed, false);
     }
 
     /// @dev A CREATE2 receipt names no created address: the factory call whose salt and initcode
     ///      fix `deployed` succeeded at most once, since the factory reverts on an occupied address.
     function _recordCreate2Receipt(string memory journal, string memory role, address deployed) internal {
-        _recordReceipt(journal, role, deployed, true);
+        string memory sent = string.concat(
+            "$..receipts[?(@.to == '", vm.toLowercase(vm.toString(CREATE2_FACTORY)), "')].transactionHash"
+        );
+        _recordReceipt(journal, role, sent, deployed, true);
     }
 
-    function _recordReceipt(string memory journal, string memory role, address deployed, bool create2) private {
+    function _recordReceipt(
+        string memory journal,
+        string memory role,
+        string memory candidates,
+        address deployed,
+        bool create2
+    ) private {
         // A recorded receipt is final. A rerun must not replace the transaction or block the journal
         // names.
         if (_has(journal, string.concat(".", role, "Tx")) && _has(journal, string.concat(".", role, "Block"))) {
             return;
         }
-        (bytes32 hash, uint256 landed, string memory record) = _findReceipt(journal, role, deployed, create2);
-        if (landed == 0) {
-            console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
-            return;
-        }
-        _put(string.concat(".", role, "Tx"), vm.toString(hash));
-        _put(string.concat(".", role, "Block"), vm.toString(landed));
-        if (bytes(record).length != 0) _settleCommit(journal, role, record);
-    }
 
-    /// @dev The transaction that created `deployed`, the block it landed in (zero if none is found) and
-    ///      the broadcast record that holds it (empty if only the chain does). Only `receipts[]` names
-    ///      the right hash: older forge versions wrote a batch's hashes into `transactions[]` in the
-    ///      order the sends returned. With no record, as after a killed forge, a CREATE is searched for
-    ///      on the chain by the journal's deployer and nonce.
-    function _findReceipt(string memory journal, string memory role, address deployed, bool create2)
-        internal
-        returns (bytes32 hash, uint256 landed, string memory record)
-    {
-        string memory candidates = create2
-            ? string.concat(
-                "$..receipts[?(@.to == '", vm.toLowercase(vm.toString(CREATE2_FACTORY)), "')].transactionHash"
-            )
-            : string.concat(
-                "$..receipts[?(@.contractAddress == '", vm.toLowercase(vm.toString(deployed)), "')].transactionHash"
-            );
         if (vm.exists(_records())) {
             try vm.readDir(_records(), 3) returns (VmSafe.DirEntry[] memory files) {
                 for (uint256 i; i < files.length; ++i) {
                     if (files[i].isDir || !_endsWith(files[i].path, ".json")) continue;
-                    record = vm.readFile(files[i].path);
+                    string memory record = vm.readFile(files[i].path);
                     // A multi-chain run can create the same address on two chains.
                     bytes32[] memory sent = _matches(record, candidates);
                     for (uint256 j; j < sent.length; ++j) {
-                        landed = _createdIn(sent[j], deployed, create2);
-                        if (landed != 0) return (sent[j], landed, record);
+                        uint256 landed = _createdIn(sent[j], deployed, create2);
+                        if (landed == 0) continue;
+                        _put(string.concat(".", role, "Tx"), vm.toString(sent[j]));
+                        _put(string.concat(".", role, "Block"), vm.toString(landed));
+                        _settleCommit(journal, role, record);
+                        return;
                     }
                 }
             } catch {}
         }
+        // No record holds the receipt, as after a killed forge: the chain still has the transaction.
         string memory key = string.concat(".", role);
         // An adopted role, which this project did not create, has no nonce.
-        if (create2 || !_has(journal, string.concat(key, "Deployer")) || !_has(journal, string.concat(key, "Nonce"))) {
-            return (0, 0, "");
+        if (!create2 && _has(journal, string.concat(key, "Deployer")) && _has(journal, string.concat(key, "Nonce"))) {
+            bytes32 hash =
+                _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
+            uint256 landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
+            if (landed != 0) {
+                _put(string.concat(key, "Tx"), vm.toString(hash));
+                _put(string.concat(key, "Block"), vm.toString(landed));
+                return;
+            }
         }
-        hash = _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
-        landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
-        record = "";
+        console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
     }
 
     /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
     ///      nonce is unused. It searches back from the head, doubling the step, then halves the
     ///      interval, so that a recent transaction needs only the recent state a full node keeps. Zero
     ///      too with no RPC, or if the RPC cannot answer for a block, as a full node for old state.
-    ///      Virtual only so a test can answer.
-    function _sentAt(address deployer, uint256 nonce) internal virtual returns (bytes32) {
+    function _sentAt(address deployer, uint256 nonce) private returns (bytes32) {
         // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
         // `block.number` can be a rollup's parent chain's number.
         uint256 hi;

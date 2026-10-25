@@ -73,7 +73,7 @@ contract ToyUnit is ToyJournal {
     uint256 public tag = 1;
     uint256 public hooks;
     bool public journaledAtHook;
-    mapping(bytes32 => bool) public confirmed;
+    bytes32 public confirmed;
     bytes internal sentInput;
 
     function setTag(uint256 tag_) external {
@@ -81,7 +81,7 @@ contract ToyUnit is ToyJournal {
     }
 
     function confirm(bytes32 hash) external {
-        confirmed[hash] = true;
+        confirmed = hash;
     }
 
     /// @dev What the chain shows the confirmed transaction sent.
@@ -180,17 +180,11 @@ contract ToyUnit is ToyJournal {
     }
 
     function _createdIn(bytes32 hash, address, bool create2) internal view virtual override returns (uint256) {
-        return confirmed[hash] && !create2 ? 5 : 0;
+        return hash == confirmed && !create2 ? 5 : 0;
     }
 
-    function _sentAt(address, uint256) internal pure override returns (bytes32) {
-        return 0;
-    }
-
-    /// @dev Unless a test chose an input, the journal's intent was sent.
-    function _sentInput(bytes32) internal view virtual override returns (bytes memory) {
-        if (sentInput.length != 0) return sentInput;
-        return bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), vm.parseJsonBytes(_journal(), ".toyArgs"));
+    function _sentInput(bytes32) internal view override returns (bytes memory) {
+        return sentInput;
     }
 
     function _onDeployment(string memory journal, string memory role, bytes memory args) internal override {
@@ -209,18 +203,6 @@ contract ToyUnit is ToyJournal {
 
     function _unit() internal pure override returns (string memory) {
         return "toy";
-    }
-}
-
-/// @dev Trusts the journal's record of the send in place of this build with the step's arguments.
-contract JournalCreationToyUnit is ToyUnit {
-    function _creationInitcodeHash(string memory role, string memory, bytes memory)
-        internal
-        view
-        override
-        returns (bytes32)
-    {
-        return vm.parseJsonBytes32(_journal(), string.concat(".", role, "InitcodeHash"));
     }
 }
 

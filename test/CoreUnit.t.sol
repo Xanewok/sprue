@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {Unit} from "../src/Unit.sol";
 import {ToyPayload} from "./ToyPayload.sol";
-import {DirtyToyUnit, JournalCreationToyUnit, ToyUnit} from "./ToyUnit.sol";
+import {DirtyToyUnit, ToyUnit} from "./ToyUnit.sol";
 
 /// @dev `Unit` over this repository's `sprue.json`.
 contract UnitHarness is Unit {
@@ -374,14 +374,25 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
+    /// @dev With no record, only the chain can show a creation, and only of a role the project
+    ///      created: one with a nonce. `forge test` has no RPC.
+    function test_recordReceipt_withNoRecord_findsNothingWithoutAnRpcOrTheRolesNonce() public {
+        _network("no-record", FREE, "");
+        unit.deploy(network);
+        string memory path = string.concat(dir, "/toy.json");
+
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"));
+
+        vm.writeFile(path, vm.replace(vm.readFile(path), '"toyNonce"', '"toyNonceX"'));
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"));
+    }
+
     function test_creationInput_isWhatTheJournaledTransactionSent_ifTheChainShowsItCreatedTheRole() public {
         _network("creation", FREE, "");
         unit.deploy(network);
-        vm.expectRevert(
-            bytes(
-                "neither toy.json, a broadcast record nor the chain shows the transaction that created toy: journal it as toyTx"
-            )
-        );
+        vm.expectRevert(bytes("toy.json records no toyTx: run where forge's broadcast records of its deployment are"));
         unit.creationInput(network);
 
         bytes32 hash = keccak256("the payload's creation");
@@ -391,48 +402,18 @@ contract CoreUnitTest is Test {
         unit.send(_initcode(1));
         assertEq(unit.creationInput(network), _initcode(1));
 
-        bytes32 other = keccak256("a transaction the chain does not confirm");
-        vm.writeJson(vm.toString(other), string.concat(dir, "/toy.json"), ".toyTx");
+        unit.confirm(keccak256("another transaction"));
         vm.expectRevert(
             bytes(
                 string.concat(
-                    vm.toString(other),
-                    ", the transaction of toy, did not create ",
+                    vm.toString(hash),
+                    ", the journal's toyTx, did not create ",
                     vm.toString(_journalOf("toy", ".toy")),
                     " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
                 )
             )
         );
         unit.creationInput(network);
-    }
-
-    /// @dev A reused role whose creation input is not the step's initcode refuses, unless the unit's
-    ///      hook names the initcode it was created from.
-    function test_reuse_provesTheCreation_andTheHookNamesAnotherInitcode() public {
-        _network("default-proof", FREE, "");
-        unit.deploy(network);
-        bytes32 hash = keccak256("the payload's creation");
-        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
-        unit.confirm(hash);
-        unit.deploy(network);
-        string memory refusal =
-            "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, override _creationInitcodeHash";
-
-        unit.send(_initcode(2));
-        vm.expectRevert(bytes(refusal));
-        unit.recordedRole(network);
-        vm.expectRevert(bytes(refusal));
-        unit.deploy(network);
-
-        unit.send("");
-        unit.setTag(2);
-        vm.expectRevert(bytes(refusal));
-        unit.recordedRole(network);
-
-        JournalCreationToyUnit trusting = new JournalCreationToyUnit();
-        trusting.confirm(hash);
-        trusting.setTag(2);
-        assertEq(trusting.recordedRole(network), _journalOf("toy", ".toy"));
     }
 
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.

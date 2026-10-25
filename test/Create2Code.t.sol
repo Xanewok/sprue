@@ -24,7 +24,7 @@ contract Create2Unit is ToyUnit {
 
     /// @dev Only a factory call creates here.
     function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
-        return confirmed[hash] && create2 ? 5 : 0;
+        return hash == confirmed && create2 ? 5 : 0;
     }
 }
 
