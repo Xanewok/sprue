@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {defaultChainIn} from "../src/Chains.sol";
 import {Deployment} from "../src/Deployment.sol";
+import {Certificate} from "../src/Journal.sol";
 import {Declares} from "../src/graph/Step.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 
@@ -122,6 +123,16 @@ contract ToyUnit is ToyJournal {
         _authenticate(addr, abi.encode(tag));
         _recordReceipt(m, "toy", addr);
         return _certifyRole(_beginChecked("toy", addr), "toy", addr);
+    }
+
+    /// @dev `check` through the builder, with a second role's address and code.
+    function checkBuilt(string calldata network, address spare) external returns (string memory) {
+        string memory m = _use(network);
+        address addr = _requireRecordedCode(m, "toy");
+        _authenticate(addr, abi.encode(tag));
+        Certificate memory c = _certificate(m, "toy", addr);
+        if (spare != address(0)) c = c.withCode("spare", spare).withUint("tag", tag);
+        return _certify(c);
     }
 
     /// @dev `_recover` with the test sender, which `_recovering` cannot take: it asks forge for

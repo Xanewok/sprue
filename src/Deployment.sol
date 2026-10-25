@@ -7,7 +7,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
-import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
+import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
 ///      from deploying it twice.
@@ -983,6 +983,23 @@ abstract contract Deployment is ForgeBroadcasts {
         if (addr == address(0)) revert StepDue();
         if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
         else authenticate(addr, args);
+    }
+
+    /// @dev Starts the certificate of `role` at `addr`, after it journals the role's receipt.
+    function _certificate(string memory journal, string memory role, address addr)
+        internal
+        returns (Certificate memory)
+    {
+        _recordReceipt(journal, role, addr);
+        return Certificate(_beginChecked(role, addr), role, addr);
+    }
+
+    /// @dev Writes `c` on its role's code hash, prints it, and ends the step.
+    function _certify(Certificate memory c) internal returns (string memory) {
+        string memory checked = vm.serializeBytes32(c.obj, string.concat(c.role, "CodeHash"), c.addr.codehash);
+        console.log(string.concat("checked ", checked));
+        _certify(checked);
+        return _done(false);
     }
 
     /// @dev The new contract's code must be the artifact's, with immutables read back from it. Override

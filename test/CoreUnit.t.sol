@@ -1028,6 +1028,23 @@ contract CoreUnitTest is Test {
         assertTrue(present, "the certificate kept toyAbsent");
     }
 
+    /// @dev An equal identity leaves the journal byte for byte, so the builder writes what
+    ///      `_certifyRole` wrote; its keys are the ones `_checked` reads.
+    function test_certificate_certifiesAsCertifyRole_andAddsKeysThatCheckedReads() public {
+        _deployChecked("certificate");
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        unit.checkBuilt(network, address(0));
+        assertEq(vm.readFile(path), journal);
+
+        address spare = address(new ToyPayload(7));
+        unit.checkBuilt(network, spare);
+        (bool present, address addr) = unit.checkedOptional(network, "spare");
+        assertTrue(present);
+        assertEq(addr, spare);
+        assertEq(vm.parseJsonUint(vm.readFile(path), ".checked.tag"), 1);
+    }
+
     function test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity() public {
         _deployChecked("check-rerun");
         string memory path = string.concat(dir, "/toy.json");

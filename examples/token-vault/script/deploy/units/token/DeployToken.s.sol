@@ -24,8 +24,7 @@ contract DeployToken is Unit {
         string memory journal = _use(network);
         address token = _requireRecordedCode(journal, "token");
         _requireCreatedFrom(journal, "token", "Token", abi.encode(SUPPLY));
-        _recordReceipt(journal, "token", token);
-        return _certifyRole(_beginChecked("token", token), "token", token);
+        return _certify(_certificate(journal, "token", token));
     }
 
     /// @dev Rebuilds a lost journal from forge's broadcast records.

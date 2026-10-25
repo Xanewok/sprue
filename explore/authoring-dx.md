@@ -77,7 +77,7 @@ Order: E, then B with C, then D. Each is independent of A's internals and can be
   is false, with `abi.encodeCall` keeping the typed selector. Under A it needs no `Due` logic: the first
   unmet want reaches `_startBroadcast` and the probe reads the step as due. Wants run in order, and a step
   whose later condition depends on an earlier send keeps imperative code.
-- **D. Certificates declared once** (take the builder, defer the edges). A certificate builder that records
+- **D. Certificates declared once** (take the builder, defer the edges; the builder is built). A certificate builder that records
   the receipt and prints the certificate deletes the hand-written logs and serialize calls. A typed edge
   from a certificate key to a dependent's input, checked at graph build, changes how dependents read
   addresses; leave it as research until A to C are measured.

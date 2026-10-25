@@ -34,8 +34,7 @@ contract DeployVault is Unit {
         (address token, address vault, bool short) = _funding(journal);
         require(!short, "the vault is not funded");
         _requireCreatedFrom(journal, "vault", "Vault", abi.encode(token));
-        _recordReceipt(journal, "vault", vault);
-        return _certifyRole(_beginChecked("vault", vault), "vault", vault);
+        return _certify(_certificate(journal, "vault", vault));
     }
 
     function _funding(string memory journal) private view returns (address token, address vault, bool short) {

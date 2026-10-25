@@ -58,6 +58,43 @@ function stageInputs(string memory from, string memory to) {
     }
 }
 
+/// @dev A certificate a `check` step builds: `Deployment._certificate` starts it for its role, each
+///      `with...` adds a key, and `Deployment._certify` writes it.
+struct Certificate {
+    string obj;
+    string role;
+    address addr;
+}
+
+using {withAddress, withCode, withUint, withBytes32, withString} for Certificate global;
+
+function withAddress(Certificate memory c, string memory key, address value) returns (Certificate memory) {
+    cheats.serializeAddress(c.obj, key, value);
+    return c;
+}
+
+/// @dev `key` and `<key>CodeHash`, which `Journal._checked` compares for the address it returns.
+function withCode(Certificate memory c, string memory key, address value) returns (Certificate memory) {
+    cheats.serializeAddress(c.obj, key, value);
+    cheats.serializeBytes32(c.obj, string.concat(key, "CodeHash"), value.codehash);
+    return c;
+}
+
+function withUint(Certificate memory c, string memory key, uint256 value) returns (Certificate memory) {
+    cheats.serializeUint(c.obj, key, value);
+    return c;
+}
+
+function withBytes32(Certificate memory c, string memory key, bytes32 value) returns (Certificate memory) {
+    cheats.serializeBytes32(c.obj, key, value);
+    return c;
+}
+
+function withString(Certificate memory c, string memory key, string memory value) returns (Certificate memory) {
+    cheats.serializeString(c.obj, key, value);
+    return c;
+}
+
 /// @dev A unit's journal `<unit>.json` records what the unit deployed and certified. The unit's
 ///      inputs, `<unit>.input.json`, and the network's `network.json` sit beside it.
 abstract contract Journal is Script, IProbe {

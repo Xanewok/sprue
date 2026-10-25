@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+A `check` step builds its certificate with `_certify(_certificate(journal, role, addr).withCode("vault",
+vault).withUint(...))`: `_certificate` journals the role's receipt and starts the certificate, each
+`with...` adds a key, and `_certify` writes it on the role's code hash, prints it once and ends the step.
+
 `_requireCreatedWith(journal, role, args)` proves a role's constructor arguments without this build's
 code: the creation input must be code that hashes to the journal's new `<role>CreationCodeHash`,
 followed by `args`. A role whose source changed after its deployment passes. A journal written before

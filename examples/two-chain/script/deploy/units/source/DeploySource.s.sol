@@ -21,8 +21,7 @@ contract DeploySource is Unit {
     function check(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         address source = _requireRecordedCode(journal, "source");
-        _recordReceipt(journal, "source", source);
-        return _certifyRole(_beginChecked("source", source), "source", source);
+        return _certify(_certificate(journal, "source", source));
     }
 
     function _create(bytes memory) private returns (address) {
