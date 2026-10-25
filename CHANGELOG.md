@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_inputFile(unit)` reads another unit's input file as an `Input`, and `_decided`, `_inputUint` and
+`_requiredAddress` take one, so that a refusal names the file read.
+
 `_requireJournaledCreate(journal, role, args)` holds a role's record to the step's arguments, the pinned
 deployer and the CREATE address of its recorded nonce. It reads the journal only.
 

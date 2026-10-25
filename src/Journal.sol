@@ -58,6 +58,12 @@ function stageInputs(string memory from, string memory to) {
     }
 }
 
+/// @dev An input file's JSON and the unit it belongs to, which a refusal names.
+struct Input {
+    string json;
+    string unit;
+}
+
 /// @dev A certificate a `check` step builds: `Deployment._certificate` starts it for its role, each
 ///      `with...` adds a key, and `Deployment._certify` writes it.
 struct Certificate {
@@ -274,31 +280,52 @@ abstract contract Journal is Script, IProbe {
         return vm.readFile(inputPath(_deployments(), _networkName(), _unit()));
     }
 
+    /// @dev `unit`'s input file on this network, for the readers below, whose refusals then name it.
+    function _inputFile(string memory unit) internal view returns (Input memory) {
+        return Input(vm.readFile(inputPath(_deployments(), _networkName(), unit)), unit);
+    }
+
     /// @dev Reads a string field of `json`. Reverts if it is empty or a placeholder, a value that
     ///      starts with `<` in an input file waiting to be filled in.
-    function _decided(string memory json, string memory key) internal pure returns (string memory v) {
-        v = vm.parseJsonString(json, string.concat(".", key));
+    function _decided(string memory json, string memory key) internal pure returns (string memory) {
+        return _decided(Input(json, _unit()), key);
+    }
+
+    function _decided(Input memory input, string memory key) internal pure returns (string memory v) {
+        v = vm.parseJsonString(input.json, string.concat(".", key));
         require(
             bytes(v).length != 0 && bytes(v)[0] != "<",
-            string.concat(_unit(), ".input.json's ", key, " is a placeholder: fill it in and commit it")
+            string.concat(input.unit, ".input.json's ", key, " is a placeholder: fill it in and commit it")
         );
     }
 
     function _inputUint(string memory json, string memory key, uint256 min, uint256 max)
         internal
         pure
+        returns (uint256)
+    {
+        return _inputUint(Input(json, _unit()), key, min, max);
+    }
+
+    function _inputUint(Input memory input, string memory key, uint256 min, uint256 max)
+        internal
+        pure
         returns (uint256 v)
     {
-        v = vm.parseUint(_decided(json, key));
-        require(v >= min && v <= max, string.concat(_unit(), ".input.json's ", key, " is out of range"));
+        v = vm.parseUint(_decided(input, key));
+        require(v >= min && v <= max, string.concat(input.unit, ".input.json's ", key, " is out of range"));
     }
 
     /// @dev `key` may be a path such as `creators[0]`. The zero address is never a valid input.
-    function _requiredAddress(string memory json, string memory key) internal pure returns (address a) {
-        a = vm.parseAddress(_decided(json, key));
+    function _requiredAddress(string memory json, string memory key) internal pure returns (address) {
+        return _requiredAddress(Input(json, _unit()), key);
+    }
+
+    function _requiredAddress(Input memory input, string memory key) internal pure returns (address a) {
+        a = vm.parseAddress(_decided(input, key));
         require(
             a != address(0),
-            string.concat(_unit(), ".input.json's ", key, " is the zero placeholder: supply the required address")
+            string.concat(input.unit, ".input.json's ", key, " is the zero placeholder: supply the required address")
         );
     }
 

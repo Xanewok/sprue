@@ -114,6 +114,14 @@ contract ToyUnit is ToyJournal {
         _requireJournaledCreate(_use(network), "toy", abi.encode(tag));
     }
 
+    function otherInputUint(string calldata network, string calldata unit, string calldata key)
+        external
+        returns (uint256)
+    {
+        _use(network);
+        return _inputUint(_inputFile(unit), key, 1, 10);
+    }
+
     function reuse(string calldata network) external returns (address) {
         return _reuse(_use(network), "toy", abi.encode(tag));
     }

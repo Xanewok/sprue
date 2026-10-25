@@ -1088,6 +1088,16 @@ contract CoreUnitTest is Test {
         unit.requireJournaledCreate(network);
     }
 
+    function test_inputFile_namesTheUnitWhoseInputIsRead() public {
+        _network("input-file", FREE, "");
+        vm.writeFile(string.concat(dir, "/other.input.json"), '{"n":"3","big":"11","later":"<fill>"}');
+        assertEq(unit.otherInputUint(network, "other", "n"), 3);
+        vm.expectRevert(bytes("other.input.json's big is out of range"));
+        unit.otherInputUint(network, "other", "big");
+        vm.expectRevert(bytes("other.input.json's later is a placeholder: fill it in and commit it"));
+        unit.otherInputUint(network, "other", "later");
+    }
+
     function test_recorded_readsAnotherUnitsRoleOnlyWithItsChainAndCode() public {
         _network("recorded", FREE, "");
         unit.deploy(network);
