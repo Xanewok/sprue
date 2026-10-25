@@ -229,7 +229,7 @@ abstract contract ForgeBroadcasts is Journal {
     function _sentAt(address deployer, uint256 nonce) internal virtual returns (bytes32) {
         // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
         // `block.number` can be a rollup's parent chain's number.
-        uint256 hi = _quantity(vm.rpc("eth_blockNumber", "[]"));
+        uint256 hi = _rpcUint(vm.rpc("eth_blockNumber", "[]"));
         (bool landed, uint256 sent) = _nonceAt(deployer, hi);
         if (!landed || sent <= nonce) return 0;
         // The nonce is used, so the head is past genesis.
@@ -269,13 +269,13 @@ abstract contract ForgeBroadcasts is Journal {
         ) returns (
             bytes memory count
         ) {
-            return (true, _quantity(count));
+            return (true, _rpcUint(count));
         } catch {
             return (false, 0);
         }
     }
 
-    function _quantity(bytes memory word) private pure returns (uint256) {
+    function _rpcUint(bytes memory word) private pure returns (uint256) {
         return uint256(bytes32(word)) >> (8 * (32 - word.length));
     }
 

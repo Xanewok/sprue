@@ -29,7 +29,7 @@ contract DeployVault is Unit {
     function fund(string calldata network) external returns (string memory) {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
-        _requireCreation(journal, "vault", "Vault", abi.encode(token));
+        _proveCreation(journal, "vault", "Vault", abi.encode(token));
         if (short) {
             _startBroadcast();
             require(Token(token).transfer(vault, 1), "the transfer failed");
@@ -42,7 +42,7 @@ contract DeployVault is Unit {
         string memory journal = _use(network);
         (address token, address vault, bool short) = _funding(journal);
         require(!short, "the vault is not funded");
-        _requireCreation(journal, "vault", "Vault", abi.encode(token));
+        _proveCreation(journal, "vault", "Vault", abi.encode(token));
         _recordReceipt(journal, "vault", vault);
         return _certifyRole(_beginChecked("vault", vault), "vault", vault);
     }

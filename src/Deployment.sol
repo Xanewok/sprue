@@ -116,7 +116,7 @@ abstract contract Deployment is ForgeBroadcasts {
     /// @dev Every reused role is proven by its creation: `_reuseForSend` and `_reuseForDue` call this.
     ///      A role with no known transaction passes while it has no code on the chain, only in this
     ///      run's simulation, and under `forge test`, which keeps no transaction history.
-    function _requireCreation(string memory journal, string memory role, string memory artifact, bytes memory args)
+    function _proveCreation(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
         bytes32 expected = _creationInitcodeHash(role, artifact, args);
@@ -227,7 +227,7 @@ abstract contract Deployment is ForgeBroadcasts {
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) {
             _requireRecordedCode(journal, role);
-            _requireCreation(journal, role, artifact, args);
+            _proveCreation(journal, role, artifact, args);
         }
     }
 
@@ -252,7 +252,7 @@ abstract contract Deployment is ForgeBroadcasts {
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) {
             _requireRecordedCode(journal, role);
-            _requireCreation(journal, role, artifact, args);
+            _proveCreation(journal, role, artifact, args);
         }
     }
 
