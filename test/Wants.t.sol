@@ -50,6 +50,14 @@ contract WantUnit is ToyUnit {
         return _done();
     }
 
+    /// @dev Mixes a direct broadcast with the step's own.
+    function rawThenWant(string calldata network) external returns (string memory) {
+        _use(network);
+        vm.startBroadcast(address(0xB0B));
+        _want(false, address(settings), abi.encodeCall(Settings.setA, (3)));
+        return _done();
+    }
+
     /// @dev As `_deployRole` does for a reused role.
     function openOnly(string calldata network) external returns (string memory) {
         _use(network);
@@ -125,6 +133,13 @@ contract WantsTest is Test, Declares {
         string memory net = _network("wants-nocode");
         vm.expectRevert(bytes("0x000000000000000000000000000000000000dEaD has no code"));
         unit.wantAt(net, address(0xdead));
+    }
+
+    /// @dev Reusing it would send the want outside any broadcast, or as another account.
+    function test_startBroadcast_refusesABroadcastTheStepDidNotOpen() public {
+        string memory net = _network("wants-raw");
+        vm.expectRevert(bytes("vm.startBroadcast: a broadcast is active already"));
+        unit.rawThenWant(net);
     }
 
     function test_startBroadcast_opensOnce_andDoneCountsEverySend() public {

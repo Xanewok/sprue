@@ -49,11 +49,12 @@ abstract contract Deployment is ForgeBroadcasts {
         _testSender = sender;
     }
 
-    /// @dev Opens the step's broadcast unless forge has one open. `_done()` closes it.
+    /// @dev Opens the step's broadcast unless it is open. `_done()` closes it. A broadcast the step did not
+    ///      open here, its caller's or a direct `vm.startBroadcast`, is not reused: forge refuses to open
+    ///      a second one.
     function _startBroadcast() internal {
         if (_inProbe()) revert StepDue();
-        (VmSafe.CallerMode mode,,) = vm.readCallers();
-        if (mode == VmSafe.CallerMode.RecurrentBroadcast) return;
+        if (_ownBroadcastOpen()) return;
         if (_testSender == address(0)) vm.startBroadcast();
         else vm.startBroadcast(_testSender);
         if (_stepSender != address(0)) return;
@@ -63,13 +64,18 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev `_done(_sentThisStep())`, after it closes the step's broadcast.
     function _done() internal returns (string memory) {
-        (VmSafe.CallerMode mode,,) = vm.readCallers();
-        if (mode == VmSafe.CallerMode.RecurrentBroadcast) vm.stopBroadcast();
+        if (_ownBroadcastOpen()) vm.stopBroadcast();
         return _done(_sentThisStep());
     }
 
+    function _ownBroadcastOpen() private returns (bool) {
+        (VmSafe.CallerMode mode,,) = vm.readCallers();
+        return _stepSender != address(0) && mode == VmSafe.CallerMode.RecurrentBroadcast;
+    }
+
     /// @dev Whether this step created a transaction: forge counts each one, simulated or sent, in the
-    ///      broadcaster's nonce.
+    ///      broadcaster's nonce. Only on the chain where the step first opened its broadcast, which is
+    ///      enough for `_done`'s log.
     function _sentThisStep() internal view returns (bool) {
         return _stepSender != address(0) && vm.getNonce(_stepSender) != _stepNonce;
     }

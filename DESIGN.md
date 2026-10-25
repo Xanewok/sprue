@@ -92,7 +92,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 5. **A deploy step converges.** `_deployRole` authenticates what it reuses, by the unit's `authenticate` or
    by its creation (`_requireCreatedFrom`), and sends only a missing role;
    `_done` ends a step by printing what it sent, the files to commit and the next `plan` command;
-   `_done()` reads what it sent from the broadcaster's nonce, so a step cannot report it wrongly.
+   `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
+   broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.
 6. **Done has four forms, and a step needs one.** A probe: the step itself, run and reverted, is due at
    its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). The
    certificate of a same-unit `check`, for the `check` and the steps marked `.doneByCheck()` that it
