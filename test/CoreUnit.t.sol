@@ -1062,6 +1062,24 @@ contract CoreUnitTest is Test {
         assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
     }
 
+    function test_recorded_readsAnotherUnitsRoleOnlyWithItsChainAndCode() public {
+        _network("recorded", FREE, "");
+        unit.deploy(network);
+        ToyUnit reader = new ToyUnit();
+        assertEq(reader.recordedOf(network, "toy", "toy"), _journalOf("toy", ".toy"));
+        vm.expectRevert(bytes("toy.json records no spare"));
+        reader.recordedOf(network, "toy", "spare");
+        string memory path = string.concat(dir, "/toy.json");
+        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        reader.recordedOf(network, "toy", "toy");
+        string memory other = string.concat(dir, "/other.json");
+        vm.writeFile(other, vm.readFile(path));
+        vm.writeJson("5", other, ".mainChainId");
+        vm.expectRevert(bytes("other.json is not this chain's"));
+        reader.recordedOf(network, "other", "toy");
+    }
+
     function test_reuse_returnsTheRoleOnlyWithTheJournalsCodeAndTheStepsArguments() public {
         _network("reuse", FREE, "");
         unit.deploy(network);

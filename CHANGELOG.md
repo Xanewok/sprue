@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`_recorded(unit, role)` reads another unit's role before its `check`: the journal must record it on this
+chain, and its code must have the recorded hash.
+
 `_want(holds, target, value, call)` sends `value` wei with `call`; with an empty `call`, a plain
 transfer, which may go to an address without code.
 

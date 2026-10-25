@@ -102,6 +102,14 @@ contract ToyUnit is ToyJournal {
         _requireCreatedWith(_use(network), "toy", abi.encode(tag));
     }
 
+    function recordedOf(string calldata network, string calldata unit, string calldata role)
+        external
+        returns (address)
+    {
+        _use(network);
+        return _recorded(unit, role);
+    }
+
     function reuse(string calldata network) external returns (address) {
         return _reuse(_use(network), "toy", abi.encode(tag));
     }
