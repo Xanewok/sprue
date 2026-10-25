@@ -21,6 +21,16 @@ contract Create2Unit is ToyUnit {
     function recordReceipt(string calldata network, address deployed) external {
         _recordCreate2Receipt(_use(network), "toy", deployed);
     }
+
+    function recordIntent(string calldata network, bytes calldata args) external {
+        _use(network);
+        _recordIntent("toy", "ToyPayload", args);
+    }
+
+    /// @dev The factory's input: the salt, then the journal's intent.
+    function _sentInput(bytes32 hash) internal view override returns (bytes memory) {
+        return bytes.concat(hash, super._sentInput(hash));
+    }
 }
 
 /// @notice `requireCode` and the CREATE2 helpers, which `_deployRole` does not reach.
@@ -74,7 +84,7 @@ contract Create2CodeTest is Test {
         unit.requireAddress(salt, abi.encode(uint256(4)), expected);
     }
 
-    function test_recordCreate2Receipt_takesOnlyAReceiptOfACallToTheFactory() public {
+    function test_recordCreate2Receipt_takesOnlyAFactoryCallThatSentTheJournaledIntent() public {
         Create2Unit unit = new Create2Unit();
         string memory net = "create2-receipt";
         string memory dir = string.concat(DIR, net);
@@ -103,6 +113,23 @@ contract Create2CodeTest is Test {
         assertFalse(vm.exists(string.concat(dir, "/toy.json")), "a receipt of another call was taken");
 
         unit.confirm(toFactory);
+        vm.expectRevert(
+            bytes("toy.json records toy without its intent, which its receipt must prove: a person must resolve it")
+        );
+        unit.recordReceipt(net, deployed);
+
+        unit.recordIntent(net, abi.encode(uint256(3)));
+        unit.send(bytes.concat(hex"00", vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(3))));
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    vm.toString(toFactory), " created toy from other than toy.json records: a person must resolve it"
+                )
+            )
+        );
+        unit.recordReceipt(net, deployed);
+
+        unit.send("");
         unit.recordReceipt(net, deployed);
         string memory journal = vm.readFile(string.concat(dir, "/toy.json"));
         assertEq(vm.parseJsonBytes32(journal, ".toyTx"), toFactory);

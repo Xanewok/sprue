@@ -33,13 +33,17 @@ end-to-end scenario for each invariant.
   no journal records. An address in the journal's `retired` list passes both checks.
 - A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
   `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
+- A role's `<role>Tx` is journaled only if the chain shows that this transaction created the role's
+  address from the journal's `<role>InitcodeHash` and `<role>Args`, and a CREATE from `<role>Deployer`
+  at `<role>Nonce`.
 
 ## What stays with the unit author
 
 - Steps must be idempotent: a rerun sends nothing that the chain already has. The library cannot tell
   a step that repeats a send from one that does not.
 - `_authenticate` must check the constructor arguments and state of a contract the journal reuses. The
-  library checks its code, not its state.
+  library checks its code, not its state. Once the journal records `<role>Tx`, comparing `<role>Args`
+  with the inputs checks the constructor arguments; before, `<role>Args` is only what the send recorded.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 

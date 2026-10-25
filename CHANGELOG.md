@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+A role's creation receipt (`<role>Tx`, `<role>Block`) is journaled only when the chain shows that its
+transaction sent the journal's initcode (`<role>InitcodeHash`), ending in `<role>Args`, and that a CREATE's
+address is `<role>Deployer`'s at `<role>Nonce`. A unit may then compare `<role>Args` with its inputs in
+place of reading the contract's immutables. A transaction that sent anything else is refused with "<hash>
+created <role> from other than <unit>.json records: a person must resolve it". A receipt journaled
+before is not checked again. A role whose journal has no intent cannot have its receipt journaled; sprue
+has written the intent since 0.1.0, so only a journal written by hand lacks it.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM

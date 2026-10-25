@@ -6,7 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
-import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
+import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
 import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
@@ -583,9 +583,7 @@ abstract contract Deployment is ForgeBroadcasts {
         for (uint256 j; _hasTransaction(c, j); ++j) {
             (bool ok, bytes32 hash) = _candidateHash(c, j);
             if (!ok || _createdIn(hash, c.addr, false) == 0) continue;
-            string memory sent = VmRpcJson(address(vm))
-                .rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
-            if (keccak256(vm.parseJsonBytes(sent, ".input")) == keccak256(input)) return true;
+            if (keccak256(_sentInput(hash)) == keccak256(input)) return true;
         }
         return false;
     }

@@ -199,6 +199,7 @@ abstract contract ForgeBroadcasts is Journal {
                     for (uint256 j; j < sent.length; ++j) {
                         uint256 landed = _createdIn(sent[j], deployed, create2);
                         if (landed == 0) continue;
+                        _requireJournaledCreation(journal, role, sent[j], deployed, create2);
                         _put(string.concat(".", role, "Tx"), vm.toString(sent[j]));
                         _put(string.concat(".", role, "Block"), vm.toString(landed));
                         _settleCommit(journal, role, record);
@@ -208,6 +209,72 @@ abstract contract ForgeBroadcasts is Journal {
             } catch {}
         }
         console.log("no local receipt under broadcast/ creates the journal", role);
+    }
+
+    /// @dev Before the receipt of `hash`, which created `deployed`, is journaled, the chain must show
+    ///      that it sent the initcode and arguments the journal records, and that a CREATE's address is
+    ///      the journaled deployer's at the journaled nonce. So a journaled `<role>Tx` proves
+    ///      `<role>Args`, and a CREATE's `<role>Deployer`, and a unit may compare them with its inputs
+    ///      in place of the contract's immutables. A contract that a constructor creates has no transaction of its
+    ///      own: its creator's initcode fixes its code.
+    function _requireJournaledCreation(
+        string memory journal,
+        string memory role,
+        bytes32 hash,
+        address deployed,
+        bool create2
+    ) private {
+        string memory key = string.concat(".", role);
+        require(
+            _has(journal, string.concat(key, "InitcodeHash")) && _has(journal, string.concat(key, "Args"))
+                && (create2 || _has(journal, string.concat(key, "Deployer"))),
+            string.concat(
+                _unit(),
+                ".json records ",
+                role,
+                " without its intent, which its receipt must prove: a person must resolve it"
+            )
+        );
+        bytes memory input = _sentInput(hash);
+        bytes32 initcodeHash = keccak256(input);
+        if (create2 && input.length >= 32) {
+            // The factory's input is the salt, then the initcode.
+            assembly ("memory-safe") {
+                initcodeHash := keccak256(add(input, 0x40), sub(mload(input), 0x20))
+            }
+        }
+        require(
+            initcodeHash == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))
+                && _endsWith(string(input), string(vm.parseJsonBytes(journal, string.concat(key, "Args"))))
+                && (create2
+                    || vm.computeCreateAddress(
+                        _addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce"))
+                    ) == deployed),
+            string.concat(
+                vm.toString(hash),
+                " created ",
+                role,
+                " from other than ",
+                _unit(),
+                ".json records: a person must resolve it"
+            )
+        );
+    }
+
+    /// @dev The input of the chain's transaction `hash`, whose receipt the chain showed. Virtual only
+    ///      so a test with no RPC can supply it.
+    function _sentInput(bytes32 hash) internal virtual returns (bytes memory) {
+        string memory sent =
+            VmRpcJson(address(vm)).rpcJson("eth_getTransactionByHash", string.concat('["', vm.toString(hash), '"]'));
+        require(
+            _has(sent, ".input"),
+            string.concat(
+                "the RPC shows the receipt of ",
+                vm.toString(hash),
+                " but not the transaction: if it lags behind the chain, run again once it shows it"
+            )
+        );
+        return vm.parseJsonBytes(sent, ".input");
     }
 
     function _settleCommit(string memory journal, string memory role, string memory record) private {

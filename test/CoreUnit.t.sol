@@ -374,6 +374,46 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
+    /// @dev Each field the chain must confirm, changed alone, keeps the receipt out of the journal.
+    function test_deployRole_recordsOnlyAReceiptWhoseTransactionSentTheJournaledCreation() public {
+        _network("creation", FREE, "");
+        unit.deploy(network);
+        address addr = _journalOf("toy", ".toy");
+        string memory path = string.concat(dir, "/toy.json");
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', addr, hash, hash);
+        unit.confirm(hash);
+        bytes memory sent = _initcode(1);
+        string memory refusal =
+            string.concat(vm.toString(hash), " created toy from other than toy.json records: a person must resolve it");
+
+        unit.send(bytes.concat(hex"00", sent));
+        _refusesTheReceipt(refusal, path);
+
+        unit.send(sent);
+        string memory m = vm.readFile(path);
+        vm.writeJson(vm.toString(abi.encode(uint256(2))), path, ".toyArgs");
+        _refusesTheReceipt(refusal, path);
+        vm.writeJson(vm.toString(vm.parseJsonBytes(m, ".toyArgs")), path, ".toyArgs");
+
+        vm.writeJson(vm.toString(makeAddr("another deployer")), path, ".toyDeployer");
+        _refusesTheReceipt(refusal, path);
+        vm.writeJson(vm.toString(vm.parseJsonAddress(m, ".toyDeployer")), path, ".toyDeployer");
+
+        vm.writeJson(vm.toString(vm.parseJsonUint(m, ".toyNonce") + 1), path, ".toyNonce");
+        _refusesTheReceipt(refusal, path);
+        vm.writeJson(vm.toString(vm.parseJsonUint(m, ".toyNonce")), path, ".toyNonce");
+
+        unit.deploy(network);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash);
+    }
+
+    function _refusesTheReceipt(string memory refusal, string memory path) private {
+        vm.expectRevert(bytes(refusal));
+        unit.deploy(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"), "a receipt was recorded");
+    }
+
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
     /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
     ///      clean send over the dirty mark that intent left clears it.
