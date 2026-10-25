@@ -104,29 +104,86 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
-    /// @dev The initcode that created `role`, as the chain shows it: the input of the journal's
-    ///      `<role>Tx`, after the salt for a CREATE2 through the factory. Reverts unless the chain shows
-    ///      that this transaction created the recorded address. Only the hash comes from the journal,
-    ///      so comparing the result whole with the initcode a unit expects proves the constructor's
-    ///      arguments. `_recordReceipt` journals `<role>Tx`: call this after it.
-    function _creationInput(string memory journal, string memory role) internal returns (bytes memory input) {
-        string memory key = string.concat(".", role);
+    /// @dev The initcode that created `role`, as the chain shows it: the input of the transaction that
+    ///      created the recorded address, after the salt for a CREATE2 through the factory. The hash
+    ///      is the journal's `<role>Tx`, else a broadcast record's, else the chain's (`_findReceipt`),
+    ///      and the chain must show that it created the address. Comparing the result whole with the
+    ///      initcode a unit expects proves the constructor's arguments.
+    function _creationInput(string memory journal, string memory role) internal returns (bytes memory) {
+        return _inputOf(journal, role, _creationTx(journal, role));
+    }
+
+    /// @dev Every reused role is proven by its creation: `_reuseForSend` and `_reuseForDue` call this.
+    ///      A role with no known transaction passes while it has no code on the chain, only in this
+    ///      run's simulation, and under `forge test`, which keeps no transaction history.
+    function _requireCreation(string memory journal, string memory role, string memory artifact, bytes memory args)
+        internal
+    {
+        bytes32 expected = _creationInitcodeHash(role, artifact, args);
+        if (expected == 0) return;
+        bytes32 hash = _creationTx(journal, role);
+        if (hash == 0 && (vm.isContext(VmSafe.ForgeContext.Test) || !_hasCodeOnChain(journal, role))) return;
         require(
-            _has(journal, string.concat(key, "Tx")),
+            keccak256(_inputOf(journal, role, hash)) == expected,
             string.concat(
-                _unit(), ".json records no ", role, "Tx: run where forge's broadcast records of its deployment are"
+                role,
+                " was not created from this build's ",
+                artifact,
+                " with the step's arguments: if they changed after its creation, or its source after its deployment, override _creationInitcodeHash"
             )
         );
-        bytes32 hash = vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
+    }
+
+    /// @dev The hash of the initcode a reused `role` must have been created from: this build's
+    ///      `artifact` with the step's `args`. Override it for a role whose arguments or source changed
+    ///      since: return the hash of what it was created from, or `<role>InitcodeHash` to trust the
+    ///      journal's record of the send. Zero skips the proof, which leaves the role's constructor
+    ///      arguments unchecked.
+    function _creationInitcodeHash(string memory, string memory artifact, bytes memory args)
+        internal
+        view
+        virtual
+        returns (bytes32)
+    {
+        return _initcodeHash(artifact, args);
+    }
+
+    function _hasCodeOnChain(string memory journal, string memory role) private returns (bool) {
+        string memory at = vm.toString(_addr(journal, string.concat(".", role)));
+        return vm.rpc("eth_getCode", string.concat('["', at, '", "latest"]')).length != 0;
+    }
+
+    function _creationTx(string memory journal, string memory role) private returns (bytes32 hash) {
+        string memory key = string.concat(".", role);
+        if (_has(journal, string.concat(key, "Tx"))) return vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
+        address addr = _addr(journal, key);
+        (hash,,) = _findReceipt(journal, role, addr, false);
+        if (hash == 0) (hash,,) = _findReceipt(journal, role, addr, true);
+    }
+
+    function _inputOf(string memory journal, string memory role, bytes32 hash) private returns (bytes memory input) {
+        string memory key = string.concat(".", role);
+        require(
+            hash != 0,
+            string.concat(
+                "neither ",
+                _unit(),
+                ".json, a broadcast record nor the chain shows the transaction that created ",
+                role,
+                ": journal it as ",
+                role,
+                "Tx"
+            )
+        );
         address addr = _addr(journal, key);
         bool create2 = _createdIn(hash, addr, false) == 0;
         require(
             !create2 || _createdIn(hash, addr, true) != 0,
             string.concat(
                 vm.toString(hash),
-                ", the journal's ",
+                ", the transaction of ",
                 role,
-                "Tx, did not create ",
+                ", did not create ",
                 vm.toString(addr),
                 " as this RPC shows the chain: if it lags behind the chain or no longer serves old transactions, use one that does"
             )
@@ -168,14 +225,17 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoUnjournaled(journal, role, sender);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) {
+            _requireRecordedCode(journal, role);
+            _requireCreation(journal, role, artifact, args);
+        }
     }
 
     /// @dev `_reuseForSend` for a `Due` view. A view shares the step's decision but knows neither the
     ///      sender nor the nonce. So any pending intent with the same hash yields zero here, and the
     ///      fence lacks the current sender (the pin or a deployer in a journal may still cover it).
     ///      A zero from this function therefore does not authorize a resend: only the step decides
-    ///      that. A unit authenticates a nonzero result.
+    ///      that. A nonzero result is proven by its creation; a unit authenticates its state.
     function _reuseForDue(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
         returns (address addr)
@@ -190,7 +250,10 @@ abstract contract Deployment is ForgeBroadcasts {
             return address(0);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) {
+            _requireRecordedCode(journal, role);
+            _requireCreation(journal, role, artifact, args);
+        }
     }
 
     /// @dev Whether the journal records `role` at an address with no code, and its recorded
@@ -739,6 +802,20 @@ abstract contract Deployment is ForgeBroadcasts {
     function _dirtyVariable() internal pure virtual returns (string memory) {
         return "DEPLOY_TREE_DIRTY";
     }
+
+    /// @dev `_deployRole` for a role whose creation proves all a reuse needs: its state is the
+    ///      constructor's, or `check` proves it.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(bytes memory) internal returns (address) create
+    ) internal returns (address addr, bool sent) {
+        return _deployRole(journal, role, artifact, args, create, _noState);
+    }
+
+    function _noState(address, bytes memory) private view {}
 
     /// @dev A unit's deploy step for one role. It reuses the journaled deployment, resends its
     ///      pending intent as the same transaction, or sends a new one. `create` must contain the
