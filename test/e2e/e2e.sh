@@ -280,17 +280,21 @@ scenario_rerun() {
   sed -i.bak 's/^    constructor(address token) {/    function unused() external pure {}\n\n    constructor(address token) {/' "$vault" && rm -f "$vault.bak"
   grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
   out=$(G plan rerun vault.check 2>&1) || true
-  local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
   local all; all=$(G plan --verbose rerun vault.check 2>&1) || true
-  mv "$W.vault-src" "$vault"
-  grep -q "^# warning vault.json's vault " <<<"$all" || die "rerun: plan --verbose did not warn: $all"
-  grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$out" \
-    || die "rerun: the plan did not warn of older code: $out"
-  [ "$rc" != 2 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
-    || die "rerun: run did not print the warning once and go on (exit $rc): $ran"
-  out=$(G plan rerun vault.check 2>>log)
+  # Another input makes vault.check due again, so the vault's unit has a node left.
+  local input=deployments/rerun/vault.input.json
+  cp "$input" "$W.vault-input"
+  jq -c '. + {"note":1}' "$W.vault-input" >"$input"
+  local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
+  mv "$W.vault-src" "$vault"; mv "$W.vault-input" "$input"
+  ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan of a finished target warned: $out"
+  grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$all" \
+    || die "rerun: plan --verbose did not warn of older code: $all"
+  [ "$rc" = 0 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
+    || die "rerun: run of a due check did not print the warning once and finish (exit $rc): $ran"
+  out=$(G plan --verbose rerun vault.check 2>>log) || true
   ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan warned of the code it builds: $out"
-  echo "ok  rerun a finished target changes no block, nonce or journal, and a source edit after it warns in the plan"
+  echo "ok  rerun a finished target changes no block, nonce or journal; a source edit after it warns while its unit has a node left, and with plan --verbose"
 }
 
 # The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
