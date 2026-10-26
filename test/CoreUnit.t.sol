@@ -1182,6 +1182,19 @@ contract CoreUnitTest is Test {
         unit.reuse(network);
     }
 
+    function test_reuseJournaled_returnsTheRoleOnlyWithTheJournalsCodeAndPinnedRecord() public {
+        _network("reuse-journaled", FREE, vm.toString(ops));
+        unit.deploy(network);
+        assertEq(unit.reuseJournaled(network), _journalOf("toy", ".toy"));
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from toy.json"));
+        unit.reuseJournaled(network);
+        unit.setTag(1);
+        vm.writeJson(vm.toString(bytes32(uint256(1))), string.concat(dir, "/toy.json"), ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.reuseJournaled(network);
+    }
+
     /// @dev An equal identity leaves the journal byte for byte, so the builder writes what
     ///      `_certifyRole` wrote; its keys are the ones `_checked` reads.
     function test_certificate_certifiesAsCertifyRole_andAddsKeysThatCheckedReads() public {

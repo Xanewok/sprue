@@ -302,6 +302,17 @@ abstract contract Deployment is ForgeBroadcasts {
         _requireCreatedWith(journal, role, args);
     }
 
+    /// @dev `_reuse` proven by the journal's own record (`_requireJournaledCreate`) instead of the
+    ///      chain's creation.
+    function _reuseJournaled(string memory journal, string memory role, bytes memory args)
+        internal
+        view
+        returns (address addr)
+    {
+        addr = _requireRecordedCode(journal, role);
+        _requireJournaledCreate(journal, role, args);
+    }
+
     /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
     function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
         // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
