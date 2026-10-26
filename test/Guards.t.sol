@@ -230,14 +230,21 @@ contract GuardsTest is Test, Declares {
         vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
         assertEq(
             g.plan(net, "fixture.check"),
-            "# chain l2 31337 local\n# warning fixture.json's token runs code that this build of ToyPayload no longer makes\n# done fixture.deploy\n# done fixture.check\n"
+            "# chain l2 31337 local\n# warning fixture.json's token runs code that this build of ToyPayload no longer makes; it stays deployed, and no step replaces it\n# done fixture.deploy\n# done fixture.check\n"
         );
+        vm.writeJson('"0x12"', journal, ".tokenCreationCodeHash");
+        assertEq(g.plan(net, "fixture.check"), done, "a malformed hash");
+        vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
+        vm.writeJson("[7]", journal, ".tokenMetadata");
+        assertEq(g.plan(net, "fixture.check"), done, "a metadata path that is not a string");
         vm.writeJson('"deployments/x/Gone.metadata.json"', journal, ".tokenMetadata");
         assertTrue(
             vm.contains(
                 g.plan(net, "fixture.check"), "# warning fixture.json's token runs code that this build of Gone"
             )
         );
+        vm.writeFile(journal, vm.replace(vm.readFile(journal), '"tokenCreationCodeHash"', '"tokenCreationCode"'));
+        assertEq(g.plan(net, "fixture.check"), done, "a role without a recorded creation code hash");
         vm.removeDir(string.concat("deployments/", net), true);
     }
 

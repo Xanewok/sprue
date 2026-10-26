@@ -109,8 +109,9 @@ abstract contract Graph is Script {
     ///         listed here:
     ///         - `# chain <chain> <chain id> <kind>`: a chain of `network.json`. These lines come
     ///           before everything else.
-    ///         - `# warning <text>`: for the person running the plan; it changes nothing. These lines
-    ///           follow the `# chain` lines.
+    ///         - `# warning <text>`: for the person running the plan; it changes nothing, and a reader of
+    ///           the plan ignores it. These lines follow the `# chain` lines, and repeat in every plan while
+    ///           what they report holds.
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
     ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
     ///           has not been reached on that chain (without `on`, the default chain). The command
