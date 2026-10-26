@@ -22,8 +22,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-start_anvil() { # start_anvil <port> <chain id>
-  anvil --port "$1" --chain-id "$2" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
+start_anvil() { # start_anvil <port> <chain id> [anvil flags]
+  anvil --port "$1" --chain-id "$2" "${@:3}" --silent >/dev/null 2>&1 & PIDS="$PIDS $!"
   for _ in $(seq 1 100); do cast chain-id --rpc-url "http://127.0.0.1:$1" >/dev/null 2>&1 && return; sleep 0.1; done
   die "no anvil at port $1"
 }
@@ -90,7 +90,8 @@ setup() {
   # The scenarios' stderr, which must not make an attended run's tree dirty whichever scenarios run.
   echo /log >>.gitignore
   git add -A; git commit -qm example
-  start_anvil "$PORT" 31337; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
+  # A block gas limit below one unit's creation: a plan must not be held to it.
+  start_anvil "$PORT" 31337 --gas-limit 20000000; start_anvil $((PORT + 1)) 1; start_anvil $((PORT + 2)) 412346
   SNAP=$(cast rpc evm_snapshot --rpc-url "$RPC" | tr -d '"')
   OPS=$(cast rpc eth_accounts --rpc-url "$RPC" | jq -r '.[0]')
   export DEPLOYER=$OPS
