@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {Test} from "forge-std/Test.sol";
-import {VmSafe} from "forge-std/Vm.sol";
-
 import {deploymentsDir, rehearsalPrefix} from "../src/Chains.sol";
 import {Deployment} from "../src/Deployment.sol";
 import {stageInputs} from "../src/Journal.sol";
 import {Graph, IFixtureHost} from "../src/graph/Graph.sol";
+import {ForgeTranscript} from "./ForgeTranscript.sol";
 
 /// @notice Runs a project's real graph in process, under `forge test`, as the graph's commands would
 ///         run it: each step is sent by its own account and every send is counted from the state diff.
@@ -17,21 +15,10 @@ import {Graph, IFixtureHost} from "../src/graph/Graph.sol";
 ///      broadcaster as the accessor of a send, and no contract at the broadcaster's address
 ///      (`test/FoundryFacts.t.sol`). A send from an account that no node names and that is not forge's
 ///      default sender is in the transcript but has no nonce check.
-abstract contract GraphTest is Test, IFixtureHost {
-    struct Sent {
-        uint256 chainId;
-        address from;
-        uint64 nonce;
-        bool create;
-        address to;
-        uint256 value;
-        bytes data;
-    }
-
+abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     Graph private _graph;
     string private _net;
     address[] private _units;
-    Sent[] private _sent;
 
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
@@ -100,61 +87,24 @@ abstract contract GraphTest is Test, IFixtureHost {
 
     function stepping(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
-        vm.startStateDiffRecording();
+        _recordStart();
     }
 
+    /// @dev Vouches for each CREATE to every unit, so that a unit reads a role another unit created.
     function stepped(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
-        _absorb();
-    }
-
-    function _run(string memory id, bool alone) private returns (Sent[] memory sent) {
-        address[] memory who = _senders();
-        uint256[] memory before = new uint256[](who.length);
-        for (uint256 i; i < who.length; ++i) {
-            before[i] = vm.getNonce(who[i]);
-        }
-        delete _sent;
-        bool reached = _graph.fixtureRun(_net, id, alone);
-        require(reached, string.concat("the fixture cannot reach ", id));
-        sent = _sent;
-        for (uint256 i; i < who.length; ++i) {
-            uint256 count;
-            for (uint256 j; j < sent.length; ++j) {
-                if (sent[j].from == who[i]) ++count;
-            }
-            require(
-                vm.getNonce(who[i]) == before[i] + count,
-                string.concat(vm.toString(who[i]), " sent a different number of transactions than the transcript holds")
-            );
-        }
-        for (uint256 i; i < sent.length; ++i) {
-            uint256 earlier;
-            uint256 total;
-            for (uint256 j; j < sent.length; ++j) {
-                if (sent[j].from != sent[i].from) continue;
-                if (j < i) ++earlier;
-                ++total;
-            }
-            sent[i].nonce = uint64(vm.getNonce(sent[i].from) - total + earlier);
-        }
-    }
-
-    /// @dev Appends the sends in the state diff recorded since `stepping` and vouches for each CREATE to
-    ///      every unit, so that a unit reads a role another unit created.
-    function _absorb() private {
-        VmSafe.AccountAccess[] memory log = vm.stopAndReturnStateDiff();
-        for (uint256 i; i < log.length; ++i) {
-            VmSafe.AccountAccess memory a = log[i];
-            bool call = a.kind == VmSafe.AccountAccessKind.Call;
-            if (!call && a.kind != VmSafe.AccountAccessKind.Create) continue;
-            if (a.accessor.code.length != 0) continue;
-            _sent.push(Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data));
-            if (call || a.reverted) continue;
+        Created[] memory created = _recordStop();
+        for (uint256 i; i < created.length; ++i) {
             for (uint256 u; u < _units.length; ++u) {
-                Deployment(_units[u]).trustTestCreationAt(a.account, a.data);
+                Deployment(_units[u]).trustTestCreationAt(created[i].at, created[i].initcode);
             }
         }
+    }
+
+    function _run(string memory id, bool alone) private returns (Sent[] memory) {
+        _transcriptBegin(_senders());
+        require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
+        return _transcriptEnd();
     }
 
     function _senders() private view returns (address[] memory who) {
