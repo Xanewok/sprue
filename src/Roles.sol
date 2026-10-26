@@ -15,7 +15,7 @@ enum Kind {
 ///      solc rejects a member named like a function attached to the struct.
 struct Role {
     /// @dev The unit whose journal records the role; empty for the unit that uses it.
-    string owner;
+    string declaredBy;
     string name;
     string artifact;
     Kind kind;
@@ -26,7 +26,7 @@ struct Role {
     bool computed;
     bytes fixedArgs;
     function() internal returns (bytes memory) argsFn;
-    function(address, bytes memory) internal auth;
+    function(address, bytes memory) internal ensureFn;
 }
 
 using RoleLib for Role global;
@@ -37,7 +37,7 @@ function create(string memory name, string memory artifact) pure returns (Role m
     r.name = name;
     r.artifact = artifact;
     r.argsFn = _noArgs;
-    r.auth = _noCheck;
+    r.ensureFn = _ensureNothing;
 }
 
 /// @dev A role the CREATE2 factory creates. The unit's input holds `<key>.salt` and `<key>.address`, so a
@@ -56,7 +56,7 @@ function extern(string memory name, string memory key, bytes32 codeHash) pure re
     r.key = key;
     r.codeHash = codeHash;
     r.argsFn = _noArgs;
-    r.auth = _noCheck;
+    r.ensureFn = _ensureNothing;
 }
 
 /// @dev Each builder edits the memory struct it is given and returns that same struct.
@@ -75,32 +75,29 @@ library RoleLib {
         return r;
     }
 
-    /// @dev Runs on the role each time it is proven, for state that later transactions change. It may read
-    ///      other roles with `_at`.
-    function check(Role memory r, function(address, bytes memory) internal fn) internal pure returns (Role memory) {
-        r.auth = fn;
+    /// @dev `fn(addr, args)` runs each time the role is proven, with its address and its constructor arguments
+    ///      (empty for an extern role), and reverts on state that later transactions changed. It may read other
+    ///      roles with `_at`, but not this one.
+    function ensure(Role memory r, function(address, bytes memory) internal fn) internal pure returns (Role memory) {
+        r.ensureFn = fn;
         return r;
     }
 
-    /// @dev The role as another unit reads it: `owner`'s journal records it.
-    function unit(Role memory r, string memory owner) internal pure returns (Role memory) {
-        r.owner = owner;
+    /// @dev The role as another unit reads it: `unitName`'s journal records it.
+    function unit(Role memory r, string memory unitName) internal pure returns (Role memory) {
+        r.declaredBy = unitName;
         return r;
     }
 }
 
 function _noArgs() pure returns (bytes memory) {}
 
-function _noCheck(address, bytes memory) pure {}
+function _ensureNothing(address, bytes memory) pure {}
 
-/// @dev The steps of a unit whose contracts are declared as roles.
-///
-///      Guarantees: `_deploy` and `_at` return a role only once its address follows from the identity its
-///      journal records, its code hash is the recorded one, and, for the unit's own role, its recorded
-///      constructor arguments are the declared ones and its `.check` passes.
-///
-///      Relies on: the journal's recorded arguments, which a hash ties to the chain but no step re-reads from
-///      the creation transaction.
+/// @dev Guarantees: `_deploy` and `_at` return a role only once its journaled identity gives its address, its
+///      code hash is the journaled one, and, for the unit's own role, its journaled arguments are the declared
+///      ones and its `.ensure` passes. Relies on: the journaled arguments, which no step re-reads from the
+///      creation transaction.
 abstract contract Roles is Deployment {
     struct Proved {
         string name;
@@ -108,15 +105,12 @@ abstract contract Roles is Deployment {
         Kind kind;
     }
 
-    /// @dev This unit's roles that the step proved, for `_certificate()`. Cleared when the step ends.
     Proved[] private _proved;
-    /// @dev Counts ended steps, so that `_thisRun` holds one step's addresses only.
     uint256 private _stepCount;
     /// @dev The address of each of this unit's roles that `_deploy` or `_at` proved in this open step, or that
     ///      `recover` found. A dry run journals nothing, so a later role's `.args` read an earlier role of the
     ///      same step from here.
     mapping(bytes32 => address) private _thisRun;
-    /// @dev Set while a role's `.check` runs, so that a `.check` that reads its own role refuses by name.
     mapping(bytes32 => bool) private _checking;
 
     /// @dev The unit's roles, in the order its certificate lists them and its `recover` journals them.
@@ -160,8 +154,8 @@ abstract contract Roles is Deployment {
         (r[0], r[1], r[2], r[3], r[4], r[5]) = (a, b, c, d, e, f);
     }
 
-    /// @dev `_use(network)` before the step's body, and `_done()` after it unless the body ended the step
-    ///      itself (`_certify(c)` does). An early `return` still reaches the tail.
+    /// @dev Ends the step with `_done()` unless the body did, as `_certify` does. An early `return` still
+    ///      reaches it.
     modifier step(string calldata network) {
         _use(network);
         _;
@@ -177,25 +171,25 @@ abstract contract Roles is Deployment {
     /// @dev Deploys `r`, or proves its reuse, and returns its address. A step that deploys several roles
     ///      calls it once for each, in order; in a probe the first role due ends the step.
     function _deploy(Role memory r) internal returns (address addr) {
-        require(_own(r), string.concat(r.name, " is ", r.owner, "'s role: read it with _at"));
+        require(_own(r), string.concat(r.name, " is ", r.declaredBy, "'s role: read it with _at"));
         require(r.kind != Kind.Extern, string.concat(r.name, " is extern: read it with _at"));
         _requireDeclared(r);
         string memory journal = _journal();
         bytes memory a = _argsOf(r);
         _enterCheck(r);
         if (r.kind == Kind.Create) {
-            (addr,) = _deployIdentified(journal, r.name, r.artifact, a, r.auth);
+            (addr,) = _deployIdentified(journal, r.name, r.artifact, a, r.ensureFn);
         } else {
             (bytes32 salt, address at) = _create2Input(r);
-            _deployRoleCreate2(journal, r.name, r.artifact, a, salt, at, r.auth);
+            _deployRoleCreate2(journal, r.name, r.artifact, a, salt, at, r.ensureFn);
             addr = at;
         }
         _checking[_runKey(r.name)] = false;
         _proven(r, addr);
     }
 
-    /// @dev `r`'s address, proven, without a send. For another unit's role (`.unit(owner)`), its arguments
-    ///      and `.check` are its owner's to prove, so only its identity and code are.
+    /// @dev `r`'s address, proven, without a send. For another unit's role (`.unit(unitName)`), its arguments
+    ///      and `.ensure` are its unit's to prove, so only its identity and code are.
     function _at(Role memory r) internal returns (address addr) {
         bool own = _own(r);
         if (own) {
@@ -204,12 +198,12 @@ abstract contract Roles is Deployment {
         }
         if (own) _requireDeclared(r);
         if (r.kind == Kind.Extern) {
-            addr = _requiredAddress(_inputFile(own ? _unit() : r.owner), r.key);
+            addr = _requiredAddress(_inputFile(own ? _unit() : r.declaredBy), r.key);
             _requireCode(addr, r.name);
             require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
             if (!own) return addr;
             _enterCheck(r);
-            r.auth(addr, "");
+            r.ensureFn(addr, "");
         } else if (!own) {
             return _atOther(r);
         } else {
@@ -219,7 +213,7 @@ abstract contract Roles is Deployment {
             if (r.kind == Kind.Create) _requireCreateIdentity(journal, r.name, a);
             else _requireCreate2Record(journal, r.name, a, true);
             _enterCheck(r);
-            r.auth(addr, a);
+            r.ensureFn(addr, a);
         }
         _checking[_runKey(r.name)] = false;
         _proven(r, addr);
@@ -227,36 +221,37 @@ abstract contract Roles is Deployment {
 
     /// @dev Another unit's role as that unit's `check` certified it, for a role whose configuration after its
     ///      deploy matters: its certified address must be the one its journal's identity proves. The step
-    ///      needs `.needs("<owner>.check")`. `_at` is the default, for what the role's code fixes.
+    ///      needs `.needs("<unit>.check")`. `_at` is the default, for what the role's code fixes.
     function _checked(Role memory r) internal view returns (address addr) {
         require(!_own(r), string.concat(r.name, " is this unit's role: prove it with _at"));
-        addr = _checked(r.owner, r.name);
+        addr = _checked(r.declaredBy, r.name);
         if (r.kind == Kind.Extern) return addr;
         require(
-            _atOther(r) == addr, string.concat(r.owner, ".json's check certified another ", r.name, " than it records")
+            _atOther(r) == addr,
+            string.concat(r.declaredBy, ".json's check certified another ", r.name, " than it records")
         );
     }
 
     function _atOther(Role memory r) private view returns (address addr) {
-        string memory record = _journalOf(r.owner);
+        string memory journal = _journalOf(r.declaredBy);
         string memory key = string.concat(".", r.name);
-        require(_has(record, key), string.concat(r.owner, ".json records no ", r.name));
-        addr = _addr(record, key);
+        require(_has(journal, key), string.concat(r.declaredBy, ".json records no ", r.name));
+        addr = _addr(journal, key);
         _requireCode(addr, r.name);
         require(
-            _has(record, string.concat(key, "CodeHash"))
-                && addr.codehash == vm.parseJsonBytes32(record, string.concat(key, "CodeHash")),
-            string.concat(r.name, "'s code differs from ", r.owner, ".json")
+            _has(journal, string.concat(key, "CodeHash"))
+                && addr.codehash == vm.parseJsonBytes32(journal, string.concat(key, "CodeHash")),
+            string.concat(r.name, "'s code differs from ", r.declaredBy, ".json")
         );
-        if (r.kind == Kind.Create) _requireCreateRecord(r.owner, record, r.name, addr);
-        else _requireCreate2Record(record, r.name, "", false);
+        if (r.kind == Kind.Create) _requireCreateRecord(r.declaredBy, journal, r.name, addr);
+        else _requireCreate2Record(journal, r.name, "", false);
     }
 
     function _enterCheck(Role memory r) private {
         bytes32 key = _runKey(r.name);
         require(
             !_checking[key],
-            string.concat(r.name, "'s .check reads ", r.name, " itself: use the address and arguments it is given")
+            string.concat(r.name, "'s .ensure reads ", r.name, " itself: use the address and arguments it is given")
         );
         _checking[key] = true;
     }
@@ -271,7 +266,7 @@ abstract contract Roles is Deployment {
     }
 
     function _own(Role memory r) private pure returns (bool) {
-        return bytes(r.owner).length == 0 || keccak256(bytes(r.owner)) == keccak256(bytes(_unit()));
+        return bytes(r.declaredBy).length == 0 || keccak256(bytes(r.declaredBy)) == keccak256(bytes(_unit()));
     }
 
     function _argsOf(Role memory r) private returns (bytes memory) {

@@ -1320,16 +1320,16 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
-    /// @dev `unit`'s journal `record` puts `role` at `addr` by a CREATE of its recorded deployer at its
+    /// @dev `unit`'s `journal` puts `role` at `addr` by a CREATE of its recorded deployer at its
     ///      recorded nonce, and that deployer is the pin or a former one, if `network.json` has a pin.
-    function _requireCreateRecord(string memory unit, string memory record, string memory role, address addr)
+    function _requireCreateRecord(string memory unit, string memory journal, string memory role, address addr)
         internal
         view
     {
         string memory key = string.concat(".", role);
-        _requireKey(unit, record, role, "Deployer");
-        _requireKey(unit, record, role, "Nonce");
-        address deployer = _addr(record, string.concat(key, "Deployer"));
+        _requireKey(unit, journal, role, "Deployer");
+        _requireKey(unit, journal, role, "Nonce");
+        address deployer = _addr(journal, string.concat(key, "Deployer"));
         address pinned = _pinnedDeployer();
         if (pinned == address(0)) {
             console.log(
@@ -1346,7 +1346,7 @@ abstract contract Deployment is ForgeBroadcasts {
             );
         }
         require(
-            vm.computeCreateAddress(deployer, _uint(record, string.concat(key, "Nonce"))) == addr,
+            vm.computeCreateAddress(deployer, _uint(journal, string.concat(key, "Nonce"))) == addr,
             string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
         );
     }
@@ -1363,49 +1363,49 @@ abstract contract Deployment is ForgeBroadcasts {
         return false;
     }
 
-    function _requireKey(string memory unit, string memory record, string memory role, string memory suffix)
+    function _requireKey(string memory unit, string memory journal, string memory role, string memory suffix)
         internal
         view
     {
-        require(_has(record, string.concat(".", role, suffix)), string.concat(unit, ".json records no ", role, suffix));
+        require(_has(journal, string.concat(".", role, suffix)), string.concat(unit, ".json records no ", role, suffix));
     }
 
-    /// @dev The factory puts `role`, under the salt and initcode hash `record` records, at the address it
+    /// @dev The factory puts `role`, under the salt and initcode hash `journal` records, at the address it
     ///      records, and, with `withArgs`, the recorded arguments are `args`. Against the recorded initcode
     ///      hash, not this build's, so that a later source edit does not orphan the role.
-    function _requireCreate2Record(string memory record, string memory role, bytes memory args, bool withArgs)
+    function _requireCreate2Record(string memory journal, string memory role, bytes memory args, bool withArgs)
         internal
         view
     {
         string memory key = string.concat(".", role);
         require(
-            _has(record, string.concat(key, "Salt")) && _has(record, string.concat(key, "InitcodeHash"))
+            _has(journal, string.concat(key, "Salt")) && _has(journal, string.concat(key, "InitcodeHash"))
                 && vm.computeCreate2Address(
-                    vm.parseJsonBytes32(record, string.concat(key, "Salt")),
-                    vm.parseJsonBytes32(record, string.concat(key, "InitcodeHash")),
+                    vm.parseJsonBytes32(journal, string.concat(key, "Salt")),
+                    vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash")),
                     CREATE2_FACTORY
-                ) == _addr(record, key),
+                ) == _addr(journal, key),
             string.concat(role, "'s address is not the CREATE2 factory's for its recorded salt and initcode")
         );
         if (!withArgs) return;
-        _requireKey(_unit(), record, role, "Args");
+        _requireKey(_unit(), journal, role, "Args");
         require(
-            keccak256(vm.parseJsonBytes(record, string.concat(key, "Args"))) == keccak256(args),
+            keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
         );
     }
 
     /// @dev `_deployRole` for a role that `Roles` declares: from the initcode, proven on a reuse by
-    ///      `Proof.Identity` then `check`. On a network that pins a deployer, only the pin sends it, whatever
+    ///      `Proof.Identity` then `ensure`. On a network that pins a deployer, only the pin sends it, whatever
     ///      the opt-in to another key: another key's CREATE could never pass `Proof.Identity`.
     function _deployIdentified(
         string memory journal,
         string memory role,
         string memory artifact,
         bytes memory args,
-        function(address, bytes memory) internal check
+        function(address, bytes memory) internal ensure
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, _noCreate, check, Proof.Identity, true);
+        return _deployRole(journal, role, artifact, args, _noCreate, ensure, Proof.Identity, true);
     }
 
     /// @dev Starts the certificate of `role` at `addr`, after it journals the role's receipt.

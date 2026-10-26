@@ -44,7 +44,7 @@ contract RolesToy is ToyJournal {
     }
 
     function toy() internal pure returns (Role memory) {
-        return TOY().args(_toyArgs).check(_toyCheck);
+        return TOY().args(_toyArgs).ensure(_toyCheck);
     }
 
     function second() internal pure returns (Role memory) {
@@ -56,7 +56,7 @@ contract RolesToy is ToyJournal {
     }
 
     function selfReading() internal pure returns (Role memory) {
-        return TOY().args(_toyArgs).check(_readsItself);
+        return TOY().args(_toyArgs).ensure(_readsItself);
     }
 
     function deploy(string calldata network) external step(network) {
@@ -556,7 +556,7 @@ contract RolesTest is Test {
     function test_check_thatReadsItsOwnRole_refusesByName() public {
         _network("self", vm.toString(ops));
         unit.deploy(network);
-        vm.expectRevert(bytes("toy's .check reads toy itself: use the address and arguments it is given"));
+        vm.expectRevert(bytes("toy's .ensure reads toy itself: use the address and arguments it is given"));
         unit.atSelfReading(network);
     }
 

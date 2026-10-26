@@ -9,23 +9,25 @@ repeats in every plan while the role runs older code: a tool that reads plan lin
 
 Roles: a unit declares each contract once, by how its address is made, in an `internal pure` function:
 `create(name, artifact)`, `create2(name, artifact, key)` (the input's `<key>.salt` and `<key>.address`) or
-`extern(name, key, codeHash)`, with `.args(bytes)` or `.args(fn)`, `.check(fn)` and `.unit(owner)`. A step
+`extern(name, key, codeHash)`, with `.args(bytes)` or `.args(fn)`, `.ensure(fn)` and `.unit(unitName)`. A step
 written `external step(network)` calls `_deploy(role)`, which sends the role or proves its reuse, `_at(role)`,
 which proves it without a send, and `_certify()`, which certifies every role of `_roles()`, in its order, once
 the step proved them (`_certify(_certificate().with...(...))` adds facts); a role outside `_roles()` is
-refused. A role is proven by the identity its journal records: a CREATE by its recorded deployer at its
-recorded nonce, which is the pin, or a key of `network.json`'s new `formerDeployers`, where `network.json`
-pins one, with a creation transaction known; a CREATE2 by the factory under its recorded salt and initcode
-hash, not this build's; an extern by its pinned code hash. Its recorded arguments must be the declared ones
-and its `.check` must pass; another unit's role is proven by its identity and code, and `_checked(role)` also
-requires that unit's certificate of it. A source edit after a deployment orphans nothing, and `plan` warns of
-it. Where `network.json` pins a deployer, only the pin sends a declared CREATE role, whatever
-`--unsafe-unexpected-deployer` says: a CREATE address follows from its sender. A CREATE2 role is proven
-whoever sent it. `Unit` derives `recover(string)` from `_roles()`, telling roles of one artifact apart by
-their arguments, and `_onRecover` adds a unit's own keys. `_send(target, call)` sends a call the step decided
-on itself.
+refused. A role is proven by the identity its journal records: a CREATE by its recorded deployer and nonce
+(the pin or a key of `network.json`'s new `formerDeployers`, with a known creation transaction); a CREATE2 by
+the factory under its recorded salt and initcode hash, not this build's; an extern by its pinned code hash.
+Its recorded arguments must be the declared ones and its `.ensure` must pass; another unit's role is proven by
+its identity and code, and `_checked(role)` also requires that unit's certificate of it. A source edit after a
+deployment orphans nothing, and `plan` warns of it. Where `network.json` pins a deployer, only the pin sends a
+declared CREATE role, whatever `--unsafe-unexpected-deployer` says: a CREATE address follows from its sender.
+A CREATE2 role is proven whoever sent it. `Unit` derives `recover(string)` from `_roles()`, telling roles of
+one artifact apart by their arguments, and `_onRecover` adds a unit's own keys. `_send(target, call)` sends a
+call the step decided on itself.
 
-Breaking: `Unit` now declares `recover(string)`, so a unit's own `recover` needs `override`. A reused
+Breaking: `Unit` now declares `recover(string)`, so a unit's own `recover` needs `override`. `Roles` adds
+`_deploy(Role)`, `_at(Role)`, `_certify()` and the non-virtual `_send(address,bytes)` and
+`_send(address,uint256,bytes)`: a unit's own function of one of these names with the same parameters no longer
+compiles, and a unit's own `_deploy` or `_at` passed as a function pointer is now ambiguous. A reused
 `_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
 recorded arguments be the step's.
 

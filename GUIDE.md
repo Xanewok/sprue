@@ -43,25 +43,56 @@ then differ from the commit, the build is not the commit's, and an attended `run
    Declare each role once, in an `internal pure` function: `create(name, artifact)` for a CREATE by the
    deployer, `create2(name, artifact, key)` for a CREATE2 at the address that `<unit>.input.json` gives
    under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
-   not deploy, at the input's `<key>`. `.args(...)` gives the constructor arguments, as bytes or as a
-   function that builds them from the inputs and other roles; `.check(fn)` checks what later transactions
-   can change, such as an owner or a proxy's implementation; `.unit(owner)` lets other units read the
-   role with `_at`. A role kept in a state variable puts the code its functions reach into the unit's
-   creation code too, which can make the graph too large for forge to deploy against a node. List the unit's roles in `_roles()`, in
-   the order its certificate and its derived `recover` take them.
+   not deploy, at the input's `<key>`. `artifact` is a contract's name, in a source file of the same name.
+   `.args(...)` gives the constructor arguments, as bytes or as a function that builds them from the
+   inputs and other roles. `.ensure(fn)` runs `fn(address, args)` on every proof, and reverts on what later
+   transactions can change, such as an admin or a proxy's implementation. `.unit("<unit>")` is the role as
+   other units read it with `_at`. A role kept in a state variable puts the code its functions reach into
+   the unit's creation code too, which can make the graph too large for forge to deploy against a node.
+   List the unit's roles in `_roles()`, in the order its certificate and its derived `recover` take them.
    Write each step as `function deploy(string calldata network) external step(network) { ... }`.
-   `_deploy(role)` sends a role or proves its reuse, `_at(role)` proves it without a send, and `_certify()`
-   certifies every role of `_roles()`, which the step must prove first, with
-   `_certify(_certificate().with...(...))` for more facts. A role the unit uses must be in `_roles()`. A
-   role is proven when its address follows from the deployer and nonce, or the salt and initcode hash, that
-   its journal records, its code is the recorded code, its recorded arguments are the declared ones and its
-   `.check` passes. A CREATE address follows from its sender, so where `network.json` pins a `deployer`, a
-   CREATE role must have been created by the pin or by a key its `formerDeployers` lists, and only the pin
-   sends one; to change keys, pin the new one and list the old one there. A CREATE2 address does not follow
-   from its sender, so a CREATE2 role is proven whoever sent it, and its `.check` covers what the sender
-   decides, such as an owner set from `tx.origin`. Another unit's role comes from `_at(OTHER())`, after
-   `.needs("<unit>.deploy")`, when its code fixes what the step reads; from `_checked(OTHER())`, after
-   `.needs("<unit>.check")`, when what that unit configured after the deploy matters too.
+   `_deploy(role)` sends a role or proves its reuse, and `_at(role)` proves it without a send:
+
+   ```solidity
+   function deploy(string calldata network) external step(network) {
+       _deploy(pool());
+       _deploy(router()); // router's .args read _at(pool())
+   }
+
+   function check(string calldata network) external step(network) {
+       _at(pool());
+       require(Router(_at(router())).pool() == _at(pool()), "router reads another pool");
+       _certify();
+   }
+
+   function pool() internal pure returns (Role memory) {
+       return create("pool", "Pool").args(abi.encode(uint256(30)));
+   }
+
+   function router() internal pure returns (Role memory) {
+       return create("router", "Router").args(_routerArgs).ensure(_routerOwned);
+   }
+
+   function _routerArgs() internal returns (bytes memory) {
+       return abi.encode(_at(pool()));
+   }
+
+   function _routerOwned(address router_, bytes memory) internal view {
+       require(Router(router_).owner() == _requiredAddress(_unitInput(), "owner"), "router's owner changed");
+   }
+   ```
+
+   Each `_deploy` journals as it sends, so a refusal at a later role leaves the earlier ones sent: read
+   every input a later role needs before the first `_deploy`.
+   `_certify()` certifies every role of `_roles()`, and refuses unless the step proved each one, so a
+   `check` step calls `_at` for every role, even one it asserts nothing about.
+   `_certify(_certificate().with...(...))` adds facts. A role the unit uses must be in `_roles()`. Where
+   `network.json` pins a `deployer`, only the pin sends a CREATE role: to change keys, pin the new one and
+   list the old one in `formerDeployers`, whose roles stay proven. A CREATE2 role is proven whoever sent
+   it, so its `.ensure` checks what its sender decides, such as an owner set from `tx.origin`. Another
+   unit's role comes from `_at(OTHER())`, after `.needs("<unit>.deploy")`, when its code fixes what the
+   step reads; from `_checked(OTHER())`, after `.needs("<unit>.check")`, when what that unit configured
+   after the deploy matters too.
    `_send(target, call)` sends a call the step decided on itself; guard it with that decision, or the
    step is always due and every `run` sends it again. A step is judged by a probe once everything it needs
    is done, so it must decide its own work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
