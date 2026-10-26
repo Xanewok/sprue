@@ -997,10 +997,10 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `role`'s address is the CREATE of its recorded deployer at its recorded nonce, that deployer is
-    ///      the one `network.json` pins or one of its `formerDeployers`, its recorded arguments are `args`, and some transaction is known to
-    ///      have created it: the journal's `<role>Tx`, a broadcast record's, the chain's at the recorded
-    ///      nonce, or this run's. On a network that pins no deployer, the recorded deployer stands, with a
-    ///      warning: nothing then says whose CREATE the role must be.
+    ///      the one `network.json` pins or one of its `formerDeployers`, its recorded arguments are `args`, and
+    ///      the transaction that created it sent `args`: the journal's `<role>Tx`, a broadcast record's, the
+    ///      chain's at the recorded nonce, or this run's. On a network that pins no deployer, the recorded
+    ///      deployer stands, with a warning: nothing then says whose CREATE the role must be.
     function _requireCreateIdentity(string memory journal, string memory role, bytes memory args) internal {
         string memory key = string.concat(".", role);
         address addr = _addr(journal, key);
@@ -1011,18 +1011,37 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
         );
         if (_createdThisRun[_deployment(addr)]) return;
+        bytes32 hash = _createTx(journal, role);
+        if (hash == 0) {
+            require(
+                _testCreationsTrusted,
+                string.concat(
+                    "neither ",
+                    _unit(),
+                    ".json, a broadcast record nor the chain shows the transaction that created ",
+                    role,
+                    ": journal it as ",
+                    role,
+                    "Tx"
+                )
+            );
+            return;
+        }
+        // The journal's arguments vouch for nothing: an edit can match them to the input while the contract
+        // holds what its creation sent.
         require(
-            _createTx(journal, role) != 0 || _testCreationsTrusted,
-            string.concat(
-                "neither ",
-                _unit(),
-                ".json, a broadcast record nor the chain shows the transaction that created ",
-                role,
-                ": journal it as ",
-                role,
-                "Tx"
-            )
+            _createdIn(hash, addr, false) != 0,
+            string.concat(role, "Tx in ", _unit(), ".json did not create ", role, ": a person must resolve it")
         );
+        bytes memory input = _sentInput(hash);
+        require(
+            input.length >= args.length && _sentArgs(input, args.length) == keccak256(args),
+            string.concat(role, "'s creation sent other constructor arguments than its input: a person must resolve it")
+        );
+    }
+
+    function _sentArgs(bytes memory input, uint256 length) private pure returns (bytes32 rest) {
+        (, rest) = _hashSplit(input, length);
     }
 
     /// @dev `unit`'s `journal` puts `role` at `addr` by a CREATE of its recorded deployer at its

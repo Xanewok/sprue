@@ -56,6 +56,13 @@ now takes the landed code when exactly the journaled initcode made it: a CREATE2
 that initcode, and a CREATE role's creation transaction must have sent it. Its next step run or `check`
 journals that code's hash; until then, another unit's `_at` of the role still refuses.
 
+Fixed: a CREATE role's constructor arguments were proven against its journal's `<role>Args` only, so an
+edit that matched them to a changed input passed while the contract held what its creation sent. The
+unit's own proof of the role now requires that its creation transaction created it and sent its declared
+arguments, and refuses otherwise ("<role>'s creation sent other constructor arguments than its input",
+"<role>Tx in <unit>.json did not create <role>"). It costs two RPC reads per proof of a role with a known
+transaction.
+
 Fixed: `plan` no longer fails with `Failed to deploy script: execution reverted` on a node whose block gas
 limit is below what creating one unit costs (about 30M gas, mostly its code). Forge runs each unit creation
 and each probe of the graph as a transaction of its own, capped at that limit; the graph's commands now pass

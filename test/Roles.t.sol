@@ -514,6 +514,28 @@ contract RolesTest is Test {
         assertEq(fresh.atToy(network), vm.parseJsonAddress(_journal(), ".toy"));
     }
 
+    /// @dev The journal's arguments, edited to match a changed input, do not pass for the ones the creation sent.
+    function test_at_refusesArgumentsTheCreationDidNotSend_andATxThatCreatedNoToy() public {
+        _network("sent-args", vm.toString(ops));
+        unit.deploy(network);
+        LandedToy fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+
+        fresh.confirm(hash);
+        assertEq(fresh.atToy(network), vm.parseJsonAddress(_journal(), ".toy"));
+
+        fresh.setTag(2);
+        _set(".toyArgs", vm.toString(abi.encode(uint256(2))));
+        vm.expectRevert(
+            bytes("toy's creation sent other constructor arguments than its input: a person must resolve it")
+        );
+        fresh.atToy(network);
+    }
+
     function test_check_runsOnEveryReuse_andItsRefusalStopsTheStep() public {
         _network("check", vm.toString(ops));
         unit.deploy(network);
