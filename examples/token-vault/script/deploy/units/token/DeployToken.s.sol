@@ -1,41 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {Unit} from "sprue/Unit.sol";
+import {Role, create} from "sprue/Roles.sol";
+import {Recovers, Unit} from "sprue/Unit.sol";
 import {Step} from "sprue/graph/Step.sol";
-import {Token} from "./Token.sol";
 
-contract DeployToken is Unit {
-    uint256 internal constant SUPPLY = 1000;
+uint256 constant SUPPLY = 1000;
 
+/// @dev The token, as this unit and every other reads it.
+function TOKEN() pure returns (Role memory) {
+    return create("token", "Token").unit("token").args(abi.encode(SUPPLY));
+}
+
+contract DeployToken is Unit, Recovers {
     function steps() external view returns (Step[] memory s) {
         s = new Step[](2);
         s[0] = _step("token.deploy", this.deploy);
         s[1] = _step("token.check", this.check).needs("token.deploy");
     }
 
-    function deploy(string calldata network) external returns (string memory) {
-        string memory journal = _use(network);
-        (, bool sent) = _deployRole(journal, "token", "Token", abi.encode(SUPPLY), _create);
-        return _done(sent);
+    function deploy(string calldata network) external step(network) {
+        _deploy(TOKEN());
     }
 
-    function check(string calldata network) external returns (string memory) {
-        string memory journal = _use(network);
-        address token = _requireRecordedCode(journal, "token");
-        _requireCreatedFrom(journal, "token", "Token", abi.encode(SUPPLY));
-        return _certify(_certificate(journal, "token", token));
+    function check(string calldata network) external step(network) {
+        _at(TOKEN());
+        _certify();
     }
 
-    /// @dev Rebuilds a lost journal from forge's broadcast records.
-    function recover(string calldata network) external returns (string memory) {
-        _adopt(network);
-        _recover(network, "token", "Token", abi.encode(SUPPLY));
-        return _done(false);
-    }
-
-    function _create(bytes memory args) private returns (address) {
-        return address(new Token(abi.decode(args, (uint256))));
+    function _roles() internal pure override returns (Role[] memory) {
+        return _list(TOKEN());
     }
 
     function _unit() internal pure override returns (string memory) {

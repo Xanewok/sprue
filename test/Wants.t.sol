@@ -50,6 +50,19 @@ contract WantUnit is ToyUnit {
         return _done();
     }
 
+    function sendA(string calldata network, uint256 a) external returns (string memory) {
+        _use(network);
+        _send(address(settings), abi.encodeCall(Settings.setA, (a)));
+        sent = _sentThisStep();
+        return _done();
+    }
+
+    function sendValue(string calldata network, address to, uint256 value) external returns (string memory) {
+        _use(network);
+        _send(to, value, "");
+        return _done();
+    }
+
     function payAnyway(string calldata network, address to, uint256 value) external returns (string memory) {
         _use(network);
         _want(false, to, value, "");
@@ -150,6 +163,20 @@ contract WantsTest is Test, Declares {
         assertEq(payee.balance, 1 ether, "a met want paid again");
         vm.expectRevert(bytes(string.concat(vm.toString(payee), " has no code")));
         unit.payAnyway(net, payee, 0);
+    }
+
+    function test_send_sendsEachTime_whateverTheStateHolds() public {
+        string memory net = _network("wants-send");
+        unit.sendA(net, 1);
+        assertTrue(unit.sent());
+        unit.sendA(net, 1);
+        assertTrue(unit.sent(), "a send that the state already holds was skipped");
+        assertEq(unit.settings().a(), 1);
+
+        address payee = makeAddr("payee");
+        unit.sendValue(net, payee, 1 ether);
+        unit.sendValue(net, payee, 1 ether);
+        assertEq(payee.balance, 2 ether);
     }
 
     function test_want_refusesATargetWithoutCode() public {

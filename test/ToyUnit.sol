@@ -2,14 +2,14 @@
 pragma solidity ^0.8.27;
 
 import {defaultChainIn} from "../src/Chains.sol";
-import {Deployment} from "../src/Deployment.sol";
+import {Roles} from "../src/Roles.sol";
 import {Certificate} from "../src/Journal.sol";
 import {Declares} from "../src/graph/Step.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 
 /// @dev The deployment layers without `Unit`, with test-specific overrides of what `Unit` takes from
 ///      `sprue.json`: a journals directory of its own, its own fenced chain and rehearsal rule.
-abstract contract ToyJournal is Deployment, Declares {
+abstract contract ToyJournal is Roles, Declares {
     uint256 internal constant FENCED_CHAIN = 777;
 
     bool public simulating;

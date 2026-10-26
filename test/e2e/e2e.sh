@@ -236,11 +236,13 @@ scenario_failure() {
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
+  # A declared CREATE role is proven by the pin, so the opt-in to another key cannot send one.
   fresh "$RPC"; rm -f deployments/pinned/token.json
-  out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1) || die "failure: the unsafe run failed: ${out: -400}"
+  n0=$(nonce)
+  if out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1); then die "failure: the unsafe run sent a declared role as another key"; fi
   grep -qi "^deployer $OPS, from the signer (--unsafe-unexpected-deployer)$" <<<"$out" || die "failure: the unsafe run did not print its deployer: $(grep -v "^ " <<<"$out" | head -20)"
-  [ "$(jq -r .tokenDeployer deployments/pinned/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
-    || die "failure: --unsafe-unexpected-deployer did not send the pin's steps as the signer"
+  grep -q "only the pin sends a declared CREATE role" <<<"$out" || die "failure: the unsafe run failed for another reason: ${out: -400}"
+  [ "$(nonce)" = "$n0" ] || die "failure: a refused declared role sent"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml. From a fresh chain, where the plan's probe
   # of the step finds nothing else to refuse.
@@ -258,7 +260,7 @@ scenario_failure() {
   for o in ./out/ "$(pwd -P)/out" "$W.link/out"; do
     fresh "$RPC"; network "spelled$((i += 1))" 31337; exits 0 env FOUNDRY_OUT="$o" G run "spelled$i" token.check
   done
-  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
+  echo "ok  a deployer the run cannot sign as is refused, and the opt-in to another key sends no declared role; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -278,17 +280,21 @@ scenario_rerun() {
   sed -i.bak 's/^    constructor(address token) {/    function unused() external pure {}\n\n    constructor(address token) {/' "$vault" && rm -f "$vault.bak"
   grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
   out=$(G plan rerun vault.check 2>&1) || true
-  local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
   local all; all=$(G plan --verbose rerun vault.check 2>&1) || true
-  mv "$W.vault-src" "$vault"
-  grep -q "^# warning vault.json's vault " <<<"$all" || die "rerun: plan --verbose did not warn: $all"
-  grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$out" \
-    || die "rerun: the plan did not warn of older code: $out"
-  [ "$rc" != 2 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
-    || die "rerun: run did not print the warning once and go on (exit $rc): $ran"
-  out=$(G plan rerun vault.check 2>>log)
+  # Another input makes vault.check due again, so the vault's unit has a node left.
+  local input=deployments/rerun/vault.input.json
+  cp "$input" "$W.vault-input"
+  jq -c '. + {"note":1}' "$W.vault-input" >"$input"
+  local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
+  mv "$W.vault-src" "$vault"; mv "$W.vault-input" "$input"
+  ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan of a finished target warned: $out"
+  grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$all" \
+    || die "rerun: plan --verbose did not warn of older code: $all"
+  [ "$rc" = 0 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
+    || die "rerun: run of a due check did not print the warning once and finish (exit $rc): $ran"
+  out=$(G plan --verbose rerun vault.check 2>>log) || true
   ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan warned of the code it builds: $out"
-  echo "ok  rerun a finished target changes no block, nonce or journal, and a source edit after it warns in the plan"
+  echo "ok  rerun a finished target changes no block, nonce or journal; a source edit after it warns while its unit has a node left, and with plan --verbose"
 }
 
 # The example's own network, as its README runs it: a lost journal is refused with a `recover` command,
@@ -854,7 +860,7 @@ scenario_lag() {
     rc=0; out=$(env -u DEPLOYER G run lag vault.check 2>&1) || rc=$?
     [ "$rc" = 0 ] && break
     ! grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags" <<<"$out" || seen=yes
-    grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|the vault is not funded" <<<"$out" \
+    grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|a step is due again after sending it\|the vault is not funded" <<<"$out" \
       || die "lag: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
     cast rpc evm_mine --rpc-url "$up" >/dev/null
   done

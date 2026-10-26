@@ -188,6 +188,19 @@ abstract contract Declares {
         return _step(id, fn.selector);
     }
 
+    /// @dev A step written with `Roles`' `step(network)` modifier returns nothing.
+    function _step(string memory id, function(string memory) external fn) internal pure returns (Step memory) {
+        return _step(id, fn.selector);
+    }
+
+    function _step(string memory id, string memory name, function(string memory, uint8) external fn, uint8 arg)
+        internal
+        pure
+        returns (Step memory)
+    {
+        return _step(id, name, fn.selector).withArg(arg);
+    }
+
     function _step(
         string memory id,
         function(string memory) external returns (string memory) fn,

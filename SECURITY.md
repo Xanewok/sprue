@@ -44,6 +44,10 @@ end-to-end scenario for each invariant.
   `_requireCreatedWith` checks the arguments after the code the journal records, so its code's
   identity rests on the journal and the certified code hash. The state that later transactions change
   stays with the unit.
+- A declared role's `.ensure` must check the state that later transactions change. Its constructor
+  arguments are proven against the journal's record of them, which no step re-reads from the creation
+  transaction: a hand edit of `<role>Args` alone, with the same code, passes until something compares it
+  with the chain.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
