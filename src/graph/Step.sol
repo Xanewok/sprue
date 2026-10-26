@@ -33,9 +33,8 @@ enum StepKind {
     Until
 }
 
-/// @dev A step as a unit declares it. A step with `fn` `check` and no `.due` is the certifier (see
-///      `Graph._validateGraph`), so use that name for nothing else. A step with neither `.due` nor
-///      `.doneByCheck`, of a unit that answers `IProbe.probe`, is judged by a probe. `onChain`, `readChains`, `isSlow`
+/// @dev A step as a unit declares it. A step with no `.due` of a unit that answers `IProbe.probe` is judged by
+///      a probe; a step with neither is refused. `onChain`, `readChains`, `isSlow`
 ///      and `dueSelector` stand for `on`, `reads`, `slow` and `due`: solc rejects a member that shares
 ///      a name with a library function attached to the struct.
 struct Step {
@@ -55,7 +54,6 @@ struct Step {
     string onChain;
     string[] readChains;
     bool ownForks;
-    bool byCheck;
 }
 
 using StepLib for Step global;
@@ -144,14 +142,6 @@ library StepLib {
     /// @dev The step's script creates its own forks, so its command passes no `--rpc-url`.
     function ownsForks(Step memory s) internal pure returns (Step memory) {
         s.ownForks = true;
-        return s;
-    }
-
-    /// @dev The certificate of a later `check` of the step's unit marks it done, and no probe judges
-    ///      it: for a step that cannot tell its own work is done. The step must stay safe to run again:
-    ///      a change of the unit's input makes the certificate stale, and the step then runs again.
-    function doneByCheck(Step memory s) internal pure returns (Step memory) {
-        s.byCheck = true;
         return s;
     }
 }

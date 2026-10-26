@@ -87,6 +87,10 @@ contract Counting {
         ++checks;
     }
 
+    function checkDue(string calldata) external view returns (bool) {
+        return checks == 0;
+    }
+
     function deployDue(string calldata) external view returns (bool) {
         return deploys == 0;
     }
@@ -158,6 +162,10 @@ contract TwoClocks is Test {
 
     function check(string calldata) external {}
 
+    function checkDue(string calldata) external pure returns (bool) {
+        return true;
+    }
+
     function preDue(string calldata) external returns (bool) {
         _select(1);
         return !notified;
@@ -206,10 +214,6 @@ contract BuilderGraph is Graph {
         return "node";
     }
 
-    function _journalChecked(string memory, string memory) internal pure virtual override returns (bool) {
-        return false;
-    }
-
     function _input(string memory, string memory) internal pure override returns (string memory) {
         return "100";
     }
@@ -231,25 +235,12 @@ contract BuilderGraph is Graph {
     }
 }
 
-/// @dev Every certificate checked, and each chain its own RPC.
-contract CheckedGraph is BuilderGraph {
+/// @dev Each chain its own RPC.
+contract RpcGraph is BuilderGraph {
     constructor(Registration memory u, Step[] memory s) BuilderGraph(u, s) {}
 
     function _rpcFlag(string memory, string memory chain) internal pure override returns (string memory) {
         return chain;
-    }
-
-    function _journalChecked(string memory, string memory) internal pure override returns (bool) {
-        return true;
-    }
-}
-
-/// @dev Only `token.json` is checked.
-contract TokenCheckedGraph is BuilderGraph {
-    constructor(Registration memory u, Step[] memory s) BuilderGraph(u, s) {}
-
-    function _journalChecked(string memory, string memory unit) internal pure override returns (bool) {
-        return keccak256(bytes(unit)) == keccak256("token");
     }
 }
 
@@ -379,151 +370,12 @@ contract StepBuildersTest is Test, Declares {
         new BuilderGraph(unit, s);
     }
 
-    function test_checkCertifiesItselfAndItsTransitiveAncestorsOnly() public {
-        Step[] memory s = new Step[](4);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("fixture.configure", StepFunctions.configure.selector).needs("fixture.deploy");
-        s[2] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.configure");
-        s[3] = _step("fixture.fund", StepFunctions.fund.selector)
-            .needs("fixture.check")
-            .due(StepFunctions.fundDue.selector);
-        BuilderGraph g = new BuilderGraph(unit, s);
-        for (uint256 i; i < 3; ++i) {
-            assertTrue(g.node(i).certified);
-        }
-        assertFalse(g.node(3).certified);
-        assertTrue(g.node(3).due);
-    }
-
-    function test_unrelatedCheckDoesNotCertifyAStep() public {
+    function test_aStepWithoutADoneRuleIsRefused() public {
         Step[] memory s = new Step[](2);
         s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
         s[1] = _step("fixture.check", StepFunctions.check.selector);
         vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.deploy"));
         new BuilderGraph(unit, s);
-    }
-
-    function test_anotherUnitsCheckDoesNotCertifyAStep() public {
-        BuilderGraph g = new BuilderGraph(unit, new Step[](0));
-        Step[] memory s = new Step[](1);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        g.add(unit, s);
-        s[0] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.deploy");
-        Registration memory other = Registration(address(new StepFunctions()), unit.script);
-        g.listUnit(other.target);
-        g.add(other, s);
-        vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.deploy"));
-        g.validate();
-    }
-
-    function test_dueCheckCannotCertifyAncestors() public {
-        Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("fixture.check", StepFunctions.check.selector)
-            .needs("fixture.deploy")
-            .due(bytes4(keccak256("checkDue(string)")));
-        vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.deploy"));
-        new BuilderGraph(unit, s);
-    }
-
-    function test_aSecondCheckOfAJournalNeedsADueView() public {
-        Step[] memory s = new Step[](4);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.deploy");
-        s[2] = _step("fixture.configure", StepFunctions.configure.selector).needs("fixture.check");
-        s[3] = _step("fixture.recheck", "check", StepFunctions.check.selector).needs("fixture.configure");
-        vm.expectRevert(abi.encodeWithSelector(Graph.MissingDoneRule.selector, "fixture.recheck"));
-        new BuilderGraph(unit, s);
-    }
-
-    string private constant WAITS_FOR_DEPLOY = "vault.deploy, which only a check of its unit marks done, and none is "
-        "sent before it: give vault.deploy a Due view, or plan such a check first";
-
-    function _dueBehindCertificate(bool deployHasDue) private returns (BuilderGraph) {
-        Step[] memory s = new Step[](3);
-        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
-        if (deployHasDue) s[0] = s[0].due(StepFunctions.deployDue.selector);
-        s[1] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
-        s[1] = s[1].due(StepFunctions.fundDue.selector);
-        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.open");
-        return new BuilderGraph(unit, s);
-    }
-
-    /// @dev Sending `vault.deploy` would leave the plan unchanged: `vault.open` waits for the certificate,
-    ///      and the only `check` needs `vault.open`.
-    function test_plan_refusesADueStepBehindACertificateNoEarlierCheckWrites() public {
-        BuilderGraph g = _dueBehindCertificate(false);
-        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.open waits for ", WAITS_FOR_DEPLOY)));
-        g.plan("anvil", "vault.check");
-
-        assertTrue(
-            vm.contains(_dueBehindCertificate(true).plan("anvil", "vault.check"), "# then plan again vault.open")
-        );
-    }
-
-    function test_plan_refusesAPredicateBehindACertificateNoEarlierCheckWrites() public {
-        Step[] memory s = new Step[](3);
-        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
-        s[1] = _until("vault.observed", "observed", StepFunctions.observed.selector).needs("vault.deploy");
-        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.observed");
-        BuilderGraph g = new BuilderGraph(unit, s);
-        vm.expectRevert(bytes(string.concat("cannot reach vault.check: vault.observed waits for ", WAITS_FOR_DEPLOY)));
-        g.plan("anvil", "vault.check");
-    }
-
-    /// @dev The refusal follows the target: `vault.early` comes before `vault.open` and writes the certificate.
-    function test_plan_acceptsADueStepBehindACertificateAnEarlierCheckWrites() public {
-        Step[] memory s = new Step[](5);
-        s[0] = _step("vault.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("vault.early", "check", StepFunctions.check.selector).needs("vault.deploy");
-        s[2] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
-        s[2] = s[2].due(StepFunctions.fundDue.selector);
-        s[3] = _step("vault.late", "check", StepFunctions.check.selector).needs("vault.open");
-        s[4] = _node("vault.all").needs("vault.early").needs("vault.late");
-        BuilderGraph g = new BuilderGraph(unit, s);
-        assertTrue(vm.contains(g.plan("anvil", "vault.all"), "# then plan again vault.open"));
-
-        vm.expectRevert(bytes(string.concat("cannot reach vault.late: vault.open waits for ", WAITS_FOR_DEPLOY)));
-        g.plan("anvil", "vault.late");
-    }
-
-    /// @dev `vault.open` needs `vault.deploy`, which `vault.check` certifies first, and, with `transitive`,
-    ///      `token.deploy` through it.
-    function _certificateOfAnotherUnit(bool transitive) private view returns (Step[] memory s) {
-        s = new Step[](5);
-        s[0] = _step("token.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("vault.deploy", StepFunctions.deploy.selector);
-        if (transitive) s[1] = s[1].needs("token.deploy");
-        s[2] = _step("vault.check", StepFunctions.check.selector).needs("vault.deploy");
-        s[3] = _step("vault.open", "fund", StepFunctions.fund.selector).needs("vault.deploy");
-        s[3] = s[3].due(StepFunctions.fundDue.selector);
-        s[4] = _step("token.check", StepFunctions.check.selector).needs("vault.open").needs("vault.check");
-        s[4] = s[4].needs("token.deploy");
-    }
-
-    /// @dev The plan sends `vault.check` but no check of `token`.
-    function test_plan_refusesADueStepBehindACertificateOfAnotherUnitsNeed() public {
-        BuilderGraph g = new BuilderGraph(unit, _certificateOfAnotherUnit(true));
-        vm.expectRevert(
-            bytes(
-                "cannot reach token.check: vault.open waits for token.deploy, which only a check of its unit marks "
-                "done, and none is sent before it: give token.deploy a Due view, or plan such a check first"
-            )
-        );
-        g.plan("anvil", "token.check");
-    }
-
-    /// @dev Only the waiting step's undone needs count: `token.deploy` is done, or not a need of `vault.open`.
-    function test_plan_acceptsADueStepWhoseOtherCertifiedNeedsAreDoneOrNotItsNeeds() public {
-        string memory waits = "# then plan again vault.open";
-        assertTrue(
-            vm.contains(
-                new TokenCheckedGraph(unit, _certificateOfAnotherUnit(true)).plan("anvil", "token.check"), waits
-            )
-        );
-        assertTrue(
-            vm.contains(new BuilderGraph(unit, _certificateOfAnotherUnit(false)).plan("anvil", "token.check"), waits)
-        );
     }
 
     function test_predicateSelectorMatchesItsSignature() public {
@@ -610,8 +462,11 @@ contract StepBuildersTest is Test, Declares {
     function test_rehearse_sendsAStepOnceAcrossADateWarp() public {
         Counting counting = new Counting();
         Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", Counting.deploy.selector);
-        s[1] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy").notBefore("fixture.time");
+        s[0] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector);
+        s[1] = _step("fixture.check", Counting.check.selector)
+            .due(Counting.checkDue.selector)
+            .needs("fixture.deploy")
+            .notBefore("fixture.time");
         new BuilderGraph(Registration(address(counting), unit.script), s).rehearse("anvil", "fixture.check");
         assertEq(counting.deploys(), 1);
         assertEq(counting.checks(), 1);
@@ -621,8 +476,8 @@ contract StepBuildersTest is Test, Declares {
         Counting counting = new Counting();
         Step[] memory s = new Step[](3);
         s[0] = _until("fixture.open", "observed", Counting.observed.selector);
-        s[1] = _step("fixture.deploy", Counting.deploy.selector).needs("fixture.open");
-        s[2] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.open");
+        s[2] = _step("fixture.check", Counting.check.selector).due(Counting.checkDue.selector).needs("fixture.deploy");
         BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
 
         g.rehearse("anvil", "fixture.check");
@@ -637,8 +492,8 @@ contract StepBuildersTest is Test, Declares {
     function test_executeNode_sendsTheStepAloneEvenWhenDone() public {
         Counting counting = new Counting();
         Step[] memory s = new Step[](3);
-        s[0] = _step("fixture.deploy", Counting.deploy.selector);
-        s[1] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        s[0] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector);
+        s[1] = _step("fixture.check", Counting.check.selector).due(Counting.checkDue.selector).needs("fixture.deploy");
         s[2] = _step("other.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.check");
         BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
 
@@ -647,7 +502,6 @@ contract StepBuildersTest is Test, Declares {
         assertEq(counting.deploys(), 2);
         assertEq(counting.checks(), 0);
 
-        // Certified by a check that is neither done nor run.
         assertTrue(g.executeNode("anvil", "fixture.deploy"));
         assertEq(counting.deploys(), 3);
     }
@@ -668,9 +522,12 @@ contract StepBuildersTest is Test, Declares {
     function test_executeNode_judgesTheDateOfACertifiedStep() public {
         Counting counting = new Counting();
         Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", Counting.deploy.selector).on("other").notBefore("fixture.time");
-        s[1] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
-        CheckedGraph g = new CheckedGraph(Registration(address(counting), unit.script), s);
+        s[0] = _step("fixture.deploy", Counting.deploy.selector)
+            .due(Counting.deployDue.selector)
+            .on("other")
+            .notBefore("fixture.time");
+        s[1] = _step("fixture.check", Counting.check.selector).due(Counting.checkDue.selector).needs("fixture.deploy");
+        RpcGraph g = new RpcGraph(Registration(address(counting), unit.script), s);
 
         vm.expectRevert(
             bytes("fixture.deploy has an input date but sends on other: use a gate view, which selects that chain")
@@ -684,7 +541,9 @@ contract StepBuildersTest is Test, Declares {
         clocks.fork(1);
         vm.warp(50);
         Step[] memory s = new Step[](1);
-        s[0] = _step("fixture.check", TwoClocks.check.selector).notBefore("fixture.openAt");
+        s[0] = _step("fixture.check", TwoClocks.check.selector)
+            .due(TwoClocks.checkDue.selector)
+            .notBefore("fixture.openAt");
         new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s)
             .executeNode("anvil", "fixture.check");
         assertEq(clocks.fork(type(uint256).max), 1);
@@ -696,8 +555,11 @@ contract StepBuildersTest is Test, Declares {
         Counting counting = new Counting();
         Step[] memory s = new Step[](3);
         s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector);
-        s[1] = _step("fixture.deploy", Counting.deploy.selector).needs("fixture.fresh").notBefore("fixture.time");
-        s[2] = _step("fixture.check", Counting.check.selector).needs("fixture.deploy");
+        s[1] = _step("fixture.deploy", Counting.deploy.selector)
+            .due(Counting.deployDue.selector)
+            .needs("fixture.fresh")
+            .notBefore("fixture.time");
+        s[2] = _step("fixture.check", Counting.check.selector).due(Counting.checkDue.selector).needs("fixture.deploy");
         new DriverGraph(counting, Registration(address(counting), unit.script), s).rehearse("anvil", "fixture.check");
         assertEq(counting.checks(), 1);
     }
@@ -721,12 +583,17 @@ contract StepBuildersTest is Test, Declares {
         vm.warp(50);
         Step[] memory s = new Step[](2);
         s[0] = _step("other.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector);
-        s[1] = _step("fixture.check", TwoClocks.check.selector).needs("other.pre").notBefore("fixture.openAt");
+        s[1] = _step("fixture.check", TwoClocks.check.selector)
+            .due(TwoClocks.checkDue.selector)
+            .needs("other.pre")
+            .notBefore("fixture.openAt");
         return new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
     }
 
     function test_anInputDateIsReadOnTheStartingChain() public {
-        ClockGraph g = _datedAfterOtherChain(new TwoClocks());
+        TwoClocks clocks = new TwoClocks();
+        clocks.pre("");
+        ClockGraph g = _datedAfterOtherChain(clocks);
         assertTrue(vm.contains(g.plan("anvil", "fixture.check"), "# not before 100"));
     }
 
@@ -812,9 +679,14 @@ contract StepBuildersTest is Test, Declares {
         clocks.fork(0);
         vm.warp(150);
         Step[] memory s = new Step[](3);
-        s[0] = _step("fixture.check", TwoClocks.check.selector).notBefore("fixture.openAt");
+        s[0] = _step("fixture.check", TwoClocks.check.selector)
+            .due(TwoClocks.checkDue.selector)
+            .notBefore("fixture.openAt");
         s[1] = _step("other.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector);
-        s[2] = _step("other.check", TwoClocks.check.selector).needs("fixture.check").needs("other.pre");
+        s[2] = _step("other.check", TwoClocks.check.selector)
+            .due(TwoClocks.checkDue.selector)
+            .needs("fixture.check")
+            .needs("other.pre");
         new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s)
             .rehearse("anvil", "other.check");
         clocks.fork(1);

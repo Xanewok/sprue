@@ -231,40 +231,38 @@ contract ProbeTest is Test, Declares {
     }
 
     /// @dev Forge refuses its broadcast cheatcodes under the probe's prank, so the step queues nothing.
-    function test_plan_refusesToJudgeADirectBroadcast_unlessMarkedDoneByCheck() public {
+    function test_plan_refusesToJudgeADirectBroadcast() public {
         string memory net = _network("probe-raw");
         assertEq(
             _graph(_one("toy.raw")).plan(net, "toy.raw"),
             string.concat(
                 "# cannot reach toy.raw: it calls vm.startBroadcast or vm.broadcast, which a probe cannot judge: "
-                "call _startBroadcast(), give it a Due view, or mark it doneByCheck\n",
+                "call _startBroadcast() or give it a Due view\n",
                 _command(net, "raw")
             )
         );
-
-        Step[] memory s = new Step[](2);
-        s[0] = _bare("toy.raw").doneByCheck();
-        s[1] = _bare("toy.check").needs("toy.raw");
-        BuilderGraph g = _graph(s);
-        assertTrue(g.node(0).certified);
-        assertEq(g.plan(net, "toy.check"), string.concat(_command(net, "raw"), _command(net, "check")));
     }
 
-    /// @dev Unmarked, a step before its unit's `check` keeps its probe: the plan waits for its needs
-    ///      and judges it after the certificate too.
-    function test_check_certifiesOnlyTheStepsNoProbeJudges() public {
-        string memory net = _network("probe-certified");
-        Step[] memory s = new Step[](3);
+    /// @dev A `check` holds no record of having passed: what it asserts is read at each plan.
+    function test_plan_judgesACheckLive_andRefusesOnceWhatItAssertsChanged() public {
+        string memory net = _network("probe-live-check");
+        Step[] memory s = new Step[](2);
         s[0] = _bare("toy.deploy");
-        s[1] = _bare("toy.transfer").needs("toy.deploy");
-        s[2] = _bare("toy.check").needs("toy.transfer");
+        s[1] = _bare("toy.check").needs("toy.deploy");
         BuilderGraph g = _graph(s);
-        for (uint256 i; i < 2; ++i) {
-            assertTrue(g.node(i).probed);
-            assertFalse(g.node(i).certified);
-        }
-        assertTrue(g.node(2).certified);
-        assertFalse(g.node(2).probed);
-        assertEq(g.plan(net, "toy.check"), string.concat(_command(net, "deploy"), "# then plan again toy.transfer\n"));
+        unit.deploy(net);
+        unit.check(net);
+        assertEq(g.plan(net, "toy.check"), "# done toy.deploy\n# done toy.check\n");
+
+        unit.setCheckTag(2);
+        assertEq(
+            g.plan(net, "toy.check"),
+            string.concat(
+                "# done toy.deploy\n# cannot reach toy.check: ",
+                "the payload's tag differs from the input",
+                "\n",
+                _command(net, "check")
+            )
+        );
     }
 }

@@ -22,7 +22,7 @@ contract DeploySource is Unit {
 
     function check(string calldata network) external step(network) {
         _at(SOURCE());
-        _certify();
+        _endCheck();
     }
 
     function _roles() internal pure override returns (Role[] memory) {

@@ -82,24 +82,18 @@ contract RolesToy is ToyJournal {
     function check(string calldata network) external step(network) {
         _at(toy());
         _at(second());
-        _certify();
+        _endCheck();
     }
 
     function checkReversed(string calldata network) external step(network) {
         _at(second());
         _at(toy());
-        _certify();
+        _endCheck();
     }
 
     function checkToyOnly(string calldata network) external step(network) {
         _at(toy());
-        _certify();
-    }
-
-    function checkWithFact(string calldata network) external step(network) {
-        _at(toy());
-        _at(second());
-        _certify(_certificate().withUint("extra", 5));
+        _endCheck();
     }
 
     function bothArgs(bool bytesFirst) external pure {
@@ -245,9 +239,9 @@ contract ReaderToy is ToyJournal {
         _done(false);
     }
 
-    function readChecked(string calldata network) external returns (address a) {
+    function readExt(string calldata network, bytes32 pinned) external returns (address a) {
         _use(network);
-        a = _checked(TOY());
+        a = _at(extern("ext", "ext", pinned).unit("kinds"));
         _done(false);
     }
 
@@ -566,33 +560,52 @@ contract RolesTest is Test {
         assertEq(SecondPayload(vm.parseJsonAddress(_journal(), ".second")).tag(), uint256(uint160(unit.atToy(network))));
     }
 
-    // ==== Certificates ====
+    // ==== Ending a check ====
 
-    function test_certify_listsTheDeclaredRolesInOrder_whateverOrderTheStepProvedThem() public {
-        _network("certify", vm.toString(ops));
-        unit.deployBoth(network);
-        unit.check(network);
-        string memory first = _journal();
-        assertEq(vm.parseJsonAddress(first, ".checked.toy"), vm.parseJsonAddress(first, ".toy"));
-        assertEq(vm.parseJsonAddress(first, ".checked.second"), vm.parseJsonAddress(first, ".second"));
-        assertTrue(vm.keyExistsJson(first, ".checked.secondCodeHash"));
-
-        unit.checkReversed(network);
-        assertEq(_journal(), first, "the order of _at changed the certificate");
-    }
-
-    function test_certify_refusesADeclaredRoleTheStepDidNotProve() public {
+    function test_endCheck_refusesADeclaredRoleTheStepDidNotProve() public {
         _network("unproved", vm.toString(ops));
         unit.deployBoth(network);
         vm.expectRevert(bytes("the step did not prove second"));
         unit.checkToyOnly(network);
     }
 
-    function test_certificate_takesTheStepsOwnFacts() public {
-        _network("facts", vm.toString(ops));
+    /// @dev A receipt is findable for the role the step proved; the one it skipped is the refusal, not a due step.
+    function test_endCheck_judgesNoReceiptDueWhileADeclaredRoleIsUnproved() public {
+        _network("unproved-probe", vm.toString(ops));
+        LandedToy landed = new LandedToy();
+        landed.setTestSender(ops);
+        landed.deployBoth(network);
+        address toy = vm.parseJsonAddress(_journal(), ".toy");
+        landed.confirm(keccak256("the toy's creation"));
+        string memory chainDir = string.concat(dir, "/broadcast/ToyUnit.sol/", vm.toString(block.chainid));
+        vm.createDir(chainDir, true);
+        vm.writeFile(
+            string.concat(chainDir, "/deploy-latest.json"),
+            string.concat(
+                '{"chain": ',
+                vm.toString(block.chainid),
+                ', "transactions": [], "receipts": [{"contractAddress": "',
+                vm.toLowercase(vm.toString(toy)),
+                '", "transactionHash": "',
+                vm.toString(keccak256("the toy's creation")),
+                '", "blockNumber": "0x1"}]}'
+            )
+        );
+        vm.expectRevert(bytes("the step did not prove second"));
+        Probes.due(address(landed), abi.encodeCall(RolesToy.checkToyOnly, (network)), ops);
+    }
+
+    function test_endCheck_doesNotDependOnTheOrderTheStepProvedTheRoles() public {
+        _network("order", vm.toString(ops));
         unit.deployBoth(network);
-        unit.checkWithFact(network);
-        assertEq(vm.parseJsonUint(_journal(), ".checked.extra"), 5);
+        _set(".toyTx", '"0x01"');
+        _set(".toyBlock", "1");
+        _set(".secondTx", '"0x02"');
+        _set(".secondBlock", "1");
+        string memory journal = _journal();
+        unit.check(network);
+        unit.checkReversed(network);
+        assertEq(_journal(), journal);
     }
 
     // ==== Other kinds ====
@@ -646,6 +659,55 @@ contract RolesTest is Test {
         _set(".toyNonce", "3");
         vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
         reader.read(network);
+    }
+
+    function test_at_anotherUnitsRole_isRefusedWhenItsCodeIsNotTheJournaled() public {
+        _network("reader-code", vm.toString(ops));
+        unit.deploy(network);
+        ReaderToy reader = new ReaderToy();
+        address toy = vm.parseJsonAddress(_journal(), ".toy");
+
+        vm.etch(toy, bytes.concat(toy.code, hex"00"));
+        vm.expectRevert(bytes("toy's code differs from roles.json"));
+        reader.read(network);
+
+        vm.etch(toy, "");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "toy at ",
+                    vm.toString(toy),
+                    " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+                )
+            )
+        );
+        reader.read(network);
+    }
+
+    function test_at_anotherUnitsExternRole_isTheInputsAddressWithThePinnedCode() public {
+        _network("reader-extern", vm.toString(ops));
+        ReaderToy reader = new ReaderToy();
+        address ext = address(new ToyPayload(3));
+        vm.expectRevert();
+        reader.readExt(network, ext.codehash);
+
+        vm.writeFile(string.concat(dir, "/kinds.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}'));
+        assertEq(reader.readExt(network, ext.codehash), ext);
+
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        reader.readExt(network, bytes32(uint256(1)));
+
+        vm.etch(ext, "");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "ext at ",
+                    vm.toString(ext),
+                    " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+                )
+            )
+        );
+        reader.readExt(network, ext.codehash);
     }
 
     // ==== Recovery ====
@@ -775,19 +837,6 @@ contract RolesTest is Test {
         string memory got = vm.readFile(string.concat(dir, "/twin.json"));
         assertEq(vm.parseJsonAddress(got, ".left"), left);
         assertEq(vm.parseJsonAddress(got, ".right"), right);
-    }
-
-    function test_checked_readsAnotherUnitsCertifiedRole_matchingItsIdentity() public {
-        _network("checked", vm.toString(ops));
-        unit.deployBoth(network);
-        unit.check(network);
-        ReaderToy reader = new ReaderToy();
-        assertEq(reader.readChecked(network), vm.parseJsonAddress(_journal(), ".toy"));
-
-        _set(".checked.toy", string.concat('"', vm.toString(vm.parseJsonAddress(_journal(), ".second")), '"'));
-        _set(".checked.toyCodeHash", vm.toString(vm.parseJsonAddress(_journal(), ".second").codehash));
-        vm.expectRevert(bytes("roles.json's check certified another toy than it records"));
-        reader.readChecked(network);
     }
 
     function _create(string memory name, address addr, uint256 nonce, bytes memory args)

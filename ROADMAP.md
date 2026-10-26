@@ -10,16 +10,11 @@ prototype exists) or **researched** (the problem is understood, the design is no
   two-chain unit records `l1Block` and `l2Block` in it. A graph that deploys to several chains
   needs each chain's facts on their own, and every step would name its chain, so no default
   chain remains for a reader to resolve.
-- **Done checked against the chain** (planned): a certificate verified on each role's own chain at plan
-  time; it needs the per-chain journals above, because a two-chain unit certifies roles on chains the
-  plan's fork cannot read.
 - **The nonce fence from a start nonce** (planned), per chain and deploy key. Its refusal would
   name each unrecorded address and the unit build it matches. Today a chain whose earlier deploys
   no journal records is exempt as a whole (`chains.unrecordedDeploys`); a start nonce keeps the
   fence on for every deploy after it.
-- **Done without a certificate** (planned). A step without a `<fn>Due` function is done only once
-  its unit's `check` certified it, which ties the step to that one certificate.
-- **A versioned journal format** (planned). Journals and certificates carry a schema version, and the
+- **A versioned journal format** (planned). Journals carry a schema version, and the
   changelog says what each release does to committed journals. A team keeps its journals for
   years, so an upgrade must never orphan them silently.
 - **The plan as a structured file** (planned). The runner reads commands from forge's output lines today,

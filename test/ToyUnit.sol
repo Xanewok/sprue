@@ -3,7 +3,6 @@ pragma solidity ^0.8.27;
 
 import {defaultChainIn} from "../src/Chains.sol";
 import {Roles} from "../src/Roles.sol";
-import {Certificate} from "../src/Journal.sol";
 import {Declares} from "../src/graph/Step.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 
@@ -69,7 +68,7 @@ abstract contract ToyJournal is Roles, Declares {
     }
 }
 
-/// @dev One role, `toy`, deployed through `_deployIdentified` and certified by `check`.
+/// @dev One role, `toy`, deployed through `_deployIdentified` and checked by `check`.
 contract ToyUnit is ToyJournal {
     uint256 public tag = 1;
     uint256 public hooks;
@@ -79,6 +78,13 @@ contract ToyUnit is ToyJournal {
 
     function setTag(uint256 tag_) external {
         tag = tag_;
+    }
+
+    /// @dev What `check` asserts the toy was made with, when it is not the deploy's `tag`.
+    uint256 public checkTag;
+
+    function setCheckTag(uint256 tag_) external {
+        checkTag = tag_;
     }
 
     bool public refuseReuse;
@@ -125,20 +131,9 @@ contract ToyUnit is ToyJournal {
     function check(string calldata network) external returns (string memory) {
         string memory m = _use(network);
         address addr = _requireRecordedCode(m, "toy");
-        _authenticate(addr, abi.encode(tag));
-        _recordReceipt(m, "toy", addr);
-        return _certifyRole(_beginChecked("toy", addr), "toy", addr);
-    }
-
-    /// @dev `check` through the builder, with a second role's address and code.
-    function checkBuilt(string calldata network, address spare) external returns (string memory) {
-        string memory m = _use(network);
-        address addr = _requireRecordedCode(m, "toy");
-        _authenticate(addr, abi.encode(tag));
-        Certificate memory c = spare == address(1) ? _certificate("toy", addr) : _certificate(m, "toy", addr);
-        if (spare == address(1)) spare = address(0);
-        if (spare != address(0)) c = c.withCode("spare", spare).withUint("tag", tag);
-        return _certify(c);
+        _authenticate(addr, abi.encode(checkTag != 0 ? checkTag : tag));
+        _requireReceipt(m, "toy", addr, false);
+        return _done(false);
     }
 
     /// @dev A one-role `recover` with the test sender: forge has no other under `forge test`.
@@ -186,25 +181,6 @@ contract ToyUnit is ToyJournal {
 
     function requireNoStray(string calldata network, address adopted) external {
         _requireNoStray(_use(network), "toy", "ToyPayload", adopted);
-    }
-
-    function checkedToy(string calldata network) external returns (address) {
-        _use(network);
-        return _checked("toy", "toy");
-    }
-
-    function checkedOptional(string calldata network, string memory role) external returns (bool, address) {
-        _use(network);
-        return _checkedOptional("toy", role);
-    }
-
-    /// @dev A check that finds no toy at `at`, nor a `spare` at `spare`, and records both absent.
-    function checkAbsent(string calldata network, address at, address spare) external returns (string memory) {
-        _use(network);
-        string memory obj = _beginChecked("toy", at);
-        _recordAbsent(obj, "toy", at);
-        _certify(_recordAbsent(obj, "spare", spare));
-        return _done(false);
     }
 
     function _createdIn(bytes32 hash, address, bool create2) internal view virtual override returns (uint256) {

@@ -90,12 +90,9 @@ the check again.
 
 In "Build Systems à la Carte" (Mokhov, Mitchell, Peyton Jones, 2018) terms, a recorded "this was checked
 with these inputs" is a verifying trace. It is sound when it records and validates every dependency. A
-`check` reads the live chain, and its record holds the facts it certifies and the hash of its input file,
-not every chain read, so it cannot be validated cheaply. So the journal caches identity, which is stable
-once landed, and does not cache "done": done is the step's own check, read at the chain's head. Today's
-exception is the unit's certificate: it marks done a `check` step, the `.doneByCheck()` steps that the
-`check` reaches, and every step of a unit that cannot be probed, until the unit's input changes (DESIGN.md
-decision 6). The model's target drops it, or keeps a record only of stable checks.
+`check` reads the live chain, and a record of it would hold the facts it asserts, not every chain
+read, so it could not be validated cheaply. So the journal caches identity, which is stable
+once landed, and does not cache "done": done is the step's own check, read at the chain's head.
 
 The same paper separates applicative dependencies, known before anything runs, from monadic ones,
 discovered while running. A step's `needs` are applicative, so `plan` can print every node and its order
@@ -105,9 +102,8 @@ targets and data of a step's transactions can still depend on what it reads.
 The rule of the verifying trace also decides two runs at once. A read is validated only at the commit
 point, the inclusion of the transaction, and only code in the transaction can validate there: a contract's
 own guard, the sender's nonce or a Safe's nonce. forge simulates and sends at the sender's latest nonce, so
-when two runs with one key send a step of one transaction, only one of the two lands. A journal, a
-certificate and sprue's run lock validate nothing on chain: two runs with different keys can both send a
-top-up that each computed from a stale balance.
+when two runs with one key send a step of one transaction, only one of the two lands. A journal and sprue's run lock validate nothing on chain: two runs with different
+keys can both send a top-up that each computed from a stale balance.
 
 ## 3. Modes as handlers of one step
 

@@ -28,7 +28,7 @@ contract DeployVault is Unit, Recovers {
 
     function check(string calldata network) external step(network) {
         require(Token(_at(TOKEN())).balanceOf(_at(vault())) != 0, "the vault is not funded");
-        _certify();
+        _endCheck();
     }
 
     function vault() internal pure returns (Role memory) {

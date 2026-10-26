@@ -25,7 +25,7 @@ contract DeployToken is Unit, Recovers {
 
     function check(string calldata network) external step(network) {
         _at(TOKEN());
-        _certify();
+        _endCheck();
     }
 
     function _roles() internal pure override returns (Role[] memory) {

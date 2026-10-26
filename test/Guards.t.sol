@@ -7,7 +7,6 @@ import {FileGraph} from "../src/FileGraph.sol";
 import {Registration, Step, Declares} from "../src/graph/Step.sol";
 import {Graph} from "../src/graph/Graph.sol";
 import {BuilderGraph, StepFunctions} from "./StepBuilders.t.sol";
-import {CertifyUnit} from "./CertifyIdentity.t.sol";
 import {ToyJournal} from "./ToyUnit.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 
@@ -17,6 +16,15 @@ contract MovedToyUnit is ToyJournal {
         string memory m = _use(network);
         vm.chainId(chainId_);
         _deployIdentified(m, "toy", "ToyPayload", abi.encode(uint256(1)), _authenticate);
+    }
+
+    function recordedOn(string calldata network, uint256 chainId_, string calldata unit, string calldata role)
+        external
+        returns (address)
+    {
+        _use(network);
+        vm.chainId(chainId_);
+        return _recorded(unit, role);
     }
 
     function _create(bytes memory args) private returns (address) {
@@ -78,44 +86,55 @@ contract UnshownCodeToyUnit is ImpostorToyUnit {
     function _requireBuild(address, string memory) internal view override {}
 }
 
-contract CertGraph is FileGraph, Declares {
-    constructor() {
-        Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector);
-        s[1] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.deploy");
-        address unit = address(new StepFunctions());
-        _units.push(unit);
-        _add(Registration(unit, "toy.s.sol:Toy"), s);
-        _validateGraph();
-    }
-}
-
-/// @dev The same graph with an input date on the certified node.
-contract DatedCertGraph is FileGraph, Declares {
-    constructor() {
-        Step[] memory s = new Step[](2);
-        s[0] = _step("fixture.deploy", StepFunctions.deploy.selector).notBefore("fixture.openAt");
-        s[1] = _step("fixture.check", StepFunctions.check.selector).needs("fixture.deploy");
-        address unit = address(new StepFunctions());
-        _units.push(unit);
-        _add(Registration(unit, "toy.s.sol:Toy"), s);
-        _validateGraph();
-    }
-}
-
-contract ArgCheckFunctions {
+contract DoneFunctions {
     function deploy(string calldata) external {}
-    function check(string calldata, uint8) external {}
+    function check(string calldata) external {}
+
+    function deployDue(string calldata) external pure returns (bool) {
+        return false;
+    }
+
+    function checkDue(string calldata) external pure returns (bool) {
+        return false;
+    }
 }
 
-/// @dev Two sibling checks, each certifying `fixture.deploy`.
-contract SiblingGraph is FileGraph, Declares {
+/// @dev `deploy` and `check`, each done by its `Due` view.
+contract DoneGraph is FileGraph, Declares {
     constructor() {
-        Step[] memory s = new Step[](3);
-        s[0] = _step("fixture.deploy", ArgCheckFunctions.deploy.selector);
-        s[1] = _step("fixture.check.0", "check", ArgCheckFunctions.check.selector).withArg(0).needs("fixture.deploy");
-        s[2] = _step("fixture.check.1", "check", ArgCheckFunctions.check.selector).withArg(1).needs("fixture.deploy");
-        address unit = address(new ArgCheckFunctions());
+        Step[] memory s = new Step[](2);
+        s[0] = _step("fixture.deploy", DoneFunctions.deploy.selector).due(DoneFunctions.deployDue.selector);
+        s[1] = _step("fixture.check", DoneFunctions.check.selector)
+            .due(DoneFunctions.checkDue.selector)
+            .needs("fixture.deploy");
+        address unit = address(new DoneFunctions());
+        _units.push(unit);
+        _add(Registration(unit, "toy.s.sol:Toy"), s);
+        _validateGraph();
+    }
+}
+
+contract DueFunctions {
+    function deploy(string calldata) external {}
+    function check(string calldata) external {}
+
+    function deployDue(string calldata) external pure returns (bool) {
+        return true;
+    }
+
+    function checkDue(string calldata) external pure returns (bool) {
+        return true;
+    }
+}
+
+contract DueGraph is FileGraph, Declares {
+    constructor() {
+        Step[] memory s = new Step[](2);
+        s[0] = _step("fixture.deploy", DueFunctions.deploy.selector).due(DueFunctions.deployDue.selector);
+        s[1] = _step("fixture.check", DueFunctions.check.selector)
+            .due(DueFunctions.checkDue.selector)
+            .needs("fixture.deploy");
+        address unit = address(new DueFunctions());
         _units.push(unit);
         _add(Registration(unit, "toy.s.sol:Toy"), s);
         _validateGraph();
@@ -143,6 +162,19 @@ contract GuardsTest is Test, Declares {
         assertFalse(vm.keyExistsJson(journal, ".mainChainId"));
     }
 
+    function test_recorded_readsARoleOnTheChainTheStepSelected() public {
+        SelectedChainToyUnit unit = new SelectedChainToyUnit();
+        string memory net = _network("guards-selected-read");
+        unit.deployOn(net, 5);
+        address toy = vm.parseJsonAddress(vm.readFile(string.concat(DIR, net, "/toy.json")), ".toy");
+        vm.chainId(31337);
+        assertEq(unit.recordedOn(net, 5, "toy", "toy"), toy);
+
+        vm.chainId(31337);
+        vm.expectRevert(bytes("toy.json is not this chain's"));
+        unit.recordedOn(net, 6, "toy", "toy");
+    }
+
     function test_deploy_stampsTheDefaultChainByDefault() public {
         MovedToyUnit unit = new MovedToyUnit();
         string memory net = _network("guards-default-stamp");
@@ -150,68 +182,17 @@ contract GuardsTest is Test, Declares {
         assertEq(vm.parseJsonUint(vm.readFile(string.concat(DIR, net, "/toy.json")), ".mainChainId"), 5);
     }
 
-    function _certificate(string memory net, address addr, address journaled, bytes32 hash) private {
+    function _fixture(string memory net, address journaled) private {
         string memory dir = string.concat("deployments/", net);
         vm.createDir(dir, true);
         vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"l2":{"id":31337}}}');
-        vm.writeFile(
-            string.concat(dir, "/fixture.json"),
-            string.concat(
-                '{"token":"',
-                vm.toString(journaled),
-                '","checked":{"evmBlock":1,"l2ChainId":31337,"token":"',
-                vm.toString(addr),
-                '","tokenCodeHash":"',
-                vm.toString(hash),
-                '"}}'
-            )
-        );
-    }
-
-    function test_certificate_isDoneBeforeItsNodesDateIsJudged() public {
-        DatedCertGraph g = new DatedCertGraph();
-        string memory net = "rehearsal-guards-dated";
-        address token = address(new ToyPayload(1));
-        _certificate(net, token, token, token.codehash);
-        vm.writeFile(string.concat("deployments/", net, "/fixture.input.json"), '{"openAt":"4102444800"}');
-        assertEq(g.plan(net, "fixture.check"), "# chain l2 31337 local\n# done fixture.deploy\n# done fixture.check\n");
-        vm.removeDir(string.concat("deployments/", net), true);
-    }
-
-    function test_certificate_ofOtherInputsIsNotDone_andOneWithoutTheirHashIs() public {
-        CertGraph g = new CertGraph();
-        string memory net = "rehearsal-guards-inputs";
-        string memory input = string.concat("deployments/", net, "/fixture.input.json");
-        string memory journal = string.concat("deployments/", net, "/fixture.json");
-        address token = address(new ToyPayload(1));
-        _certificate(net, token, token, token.codehash);
-        vm.writeFile(
-            string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"probe"}}}'
-        );
-        string memory done = "# chain l2 31337 local\n# done fixture.deploy\n# done fixture.check\n";
-        vm.writeFile(input, '{"n":1}');
-        assertEq(g.plan(net, "fixture.check"), done, "a certificate without inputHash");
-
-        vm.writeJson(vm.toString(keccak256(vm.parseJson('{"n":1}'))), journal, ".checked.inputHash");
-        assertEq(g.plan(net, "fixture.check"), done, "the certified inputs");
-        vm.writeFile(input, '{ "n" : 1 }\n');
-        assertEq(g.plan(net, "fixture.check"), done, "the certified inputs, formatted otherwise");
-        vm.writeFile(input, '{"n":2}');
-        assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "other inputs");
-        vm.removeFile(input);
-        assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "no input");
-
-        vm.writeJson('"0x12"', journal, ".checked.inputHash");
-        vm.expectRevert(bytes("fixture.json's checked.inputHash is not a hash: a person must resolve it"));
-        g.plan(net, "fixture.check");
-        vm.removeDir(string.concat("deployments/", net), true);
+        vm.writeFile(string.concat(dir, "/fixture.json"), string.concat('{"token":"', vm.toString(journaled), '"}'));
     }
 
     function test_plan_warnsOfARoleWhoseCreationCodeThisBuildNoLongerMakes() public {
-        CertGraph g = new CertGraph();
+        DoneGraph g = new DoneGraph();
         string memory net = "rehearsal-guards-older";
-        address token = address(new ToyPayload(1));
-        _certificate(net, token, token, token.codehash);
+        _fixture(net, address(new ToyPayload(1)));
         string memory journal = string.concat("deployments/", net, "/fixture.json");
         vm.writeJson('"deployments/x/ToyPayload.metadata.json"', journal, ".tokenMetadata");
         vm.writeJson(vm.toString(keccak256(vm.getCode("ToyPayload.sol:ToyPayload"))), journal, ".tokenCreationCodeHash");
@@ -241,22 +222,12 @@ contract GuardsTest is Test, Declares {
         vm.writeFile(
             string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"probe"}}}'
         );
-        vm.writeFile(string.concat("deployments/", net, "/fixture.input.json"), '{"n":2}');
-        vm.writeJson(vm.toString(keccak256(vm.parseJson('{"n":1}'))), journal, ".checked.inputHash");
-        assertTrue(vm.contains(g.plan(net, "fixture.check"), warning), "a unit with a node due");
+        assertTrue(vm.contains(new DueGraph().plan(net, "fixture.check"), warning), "a unit with a node due");
         vm.writeFile(journal, vm.replace(vm.readFile(journal), '"tokenCreationCodeHash"', '"tokenCreationCode"'));
         assertFalse(
             vm.contains(g.plan(net, "fixture.check"), "# warning"), "a role without a recorded creation code hash"
         );
         vm.removeDir(string.concat("deployments/", net), true);
-    }
-
-    function test_certify_writesNothingOnADryRun() public {
-        CertifyUnit unit = new CertifyUnit();
-        string memory net = _network("guards-dry");
-        unit.simulate();
-        unit.certify(net, '{"evmBlock":1}');
-        assertFalse(vm.exists(string.concat(DIR, net, "/toy.json")), "a dry run left a certificate");
     }
 
     function test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing() public {
@@ -266,36 +237,6 @@ contract GuardsTest is Test, Declares {
         assertFalse(ok);
         assertTrue(vm.contains(string(ret), " is not OtherRuntime.sol:OtherRuntime"), string(ret));
         assertFalse(vm.exists(string.concat(DIR, net, "/toy.json")));
-    }
-
-    function test_plan_refusesATargetThatExcludesTheCertifierOfANodeItNeeds_unlessTheNodeIsDone() public {
-        CertGraph g = new CertGraph();
-        string memory net = "rehearsal-guards-target";
-        vm.createDir(string.concat("deployments/", net), true);
-        vm.writeFile(string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337}}}');
-        vm.expectRevert(bytes("cannot reach fixture.deploy: fixture.deploy is done only by fixture.check: target that"));
-        g.plan(net, "fixture.deploy");
-
-        address token = address(new ToyPayload(1));
-        _certificate(net, token, token, token.codehash);
-        assertEq(g.plan(net, "fixture.deploy"), "# chain l2 31337 local\n# done fixture.deploy\n");
-        vm.removeDir(string.concat("deployments/", net), true);
-    }
-
-    function test_plan_acceptsEitherOfSeveralCertifiers() public {
-        SiblingGraph g = new SiblingGraph();
-        string memory net = "rehearsal-guards-siblings";
-        vm.createDir(string.concat("deployments/", net), true);
-        vm.writeFile(
-            string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"local"}}}'
-        );
-        assertTrue(vm.contains(g.plan(net, "fixture.check.0"), "forge script"));
-        assertTrue(vm.contains(g.plan(net, "fixture.check.1"), "forge script"));
-        vm.expectRevert(
-            bytes("cannot reach fixture.deploy: fixture.deploy is done only by fixture.check.0: target that")
-        );
-        g.plan(net, "fixture.deploy");
-        vm.removeDir(string.concat("deployments/", net), true);
     }
 
     function test_recoverStep_isReadFromTheScriptsCompiledAbi() public {

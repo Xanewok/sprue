@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
+`checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
+has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with
+`_endCheck()`, which refuses unless the step proved every role of `_roles()` and journals the receipts of
+the deployed ones; a probe judges the step due only while a receipt is unjournaled and findable, so a rerun
+of an unchanged deployment sends and writes nothing. Migrating a unit:
+
+- `_certify()`, `_certify(_certificate().with...())`, `_certificate`, `_beginChecked`, `_certifyRole` and
+  `Certificate` become `_endCheck()`. What a certificate carried (extra facts, `withCode`, `withAddress`)
+  is read live by the steps that need it.
+- `.doneByCheck()` is removed, and every step of a unit needs a probe or a `<fn>Due` view
+  (`MissingDoneRule` otherwise). `graph.generated.json`'s `doneRule.kind` is `probe` for a unit that answers
+  `IProbe.probe`.
+- `_checked(role)` and `_checkedOptional(role)` become `_at(role)` for another unit's role (or `_atOther`
+  in a view, which also reads an `extern` role from its unit's input; the journal's stamp must name the
+  chain the step selected), a live read of what that unit
+  configured, and, where the order matters, `.needs("<unit>.check")`. Nothing enforces that edge; a
+  dependent that reads another unit's configuration reads it live.
+- `_recordAbsent` and the generic replacement for an absent role are removed: a unit that allows a role to
+  be absent decides it from its own input, and refuses once code appears.
+- Removed with the certificate: `unitInputHash`, `_journalChecked`, `Step.byCheck`, and the export's
+  `Node.certified` and `certifiedBy`.
+- Plans read each chain a check reads, so a plan needs an RPC for each of them. `rehearse` no longer
+  compares a copied journal with its fork, and the tag offer keys on a journal stamped with a live chain
+  for a unit whose `<unit>.check` the last plan printed as done.
+
 `plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> does not make; it
 stays deployed, and no step replaces it` for each role of the target's units whose journaled creation code
 differs from this build, after the `# chain` lines, while one of the unit's nodes in the plan is not done;
@@ -12,14 +38,13 @@ Roles: a unit declares each contract once, by how its address is made, in an `in
 `create(name, artifact)`, `create2(name, artifact, key)` (the input's `<key>.salt` and `<key>.address`) or
 `extern(name, key, codeHash)`, with `.args(bytes)` or `.args(fn)` (a role given both is refused by name),
 `.ensure(fn)` and `.unit(unitName)`. A step written `external step(network)` calls `_deploy(role)`, which
-sends the role or proves its reuse, `_at(role)`, which proves it without a send, and `_certify()`, which
-certifies every role of `_roles()`, in its order, once the step proved them
-(`_certify(_certificate().with...(...))` adds facts); a role outside `_roles()` is refused. A role is proven
+sends the role or proves its reuse, `_at(role)`, which proves it without a send, and `_endCheck()`, which
+ends a `check` once the step proved every role of `_roles()`; a role outside `_roles()` is refused. A role is proven
 by the identity its journal records: a CREATE by its recorded deployer and nonce (the pin, with a known creation
 transaction); a CREATE2 by the factory under its
 recorded salt and initcode hash, not this build's; an extern by its pinned code hash. Its recorded arguments
-must be the declared ones and its `.ensure` must pass; another unit's role is proven by its identity and code,
-and `_checked(role)` also requires that unit's certificate of it. A source edit after a deployment orphans
+must be the declared ones and its `.ensure` must pass; another unit's role is proven by its identity and code.
+A source edit after a deployment orphans
 nothing, and `plan` warns of it. Where `network.json` pins a deployer, only the pin sends a declared CREATE
 role, whatever `--unsafe-unexpected-deployer` says: a CREATE address follows from its sender. A CREATE2 role
 is proven whoever sent it. `contract X is Unit, Recovers` adds a `recover(string)` derived from `_roles()`,
@@ -27,7 +52,7 @@ telling roles of one artifact apart by their arguments; `_onRecover` adds a unit
 recovery code adds about 49 KB to a unit's initcode. `_send(target, call)` sends a call the step decided on
 itself.
 
-Breaking: `Roles` adds `_deploy(Role)`, `_at(Role)`, `_certify()` and the non-virtual `_send(address,bytes)`
+Breaking: `Roles` adds `_deploy(Role)`, `_at(Role)`, `_endCheck()` and the non-virtual `_send(address,bytes)`
 and `_send(address,uint256,bytes)`: a unit's own function of one of these names with the same parameters no
 longer compiles, and a unit's own `_deploy` or `_at` passed as a function pointer is now ambiguous. A reused
 `_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
@@ -72,12 +97,6 @@ Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").
 
-Fixed: a certificate of other inputs than the unit's current ones no longer keeps its nodes done. A
-certificate now records `inputHash`, the hash of the unit's parsed input file, and `plan` judges a `check`,
-and the steps it certifies, due again once that input changes. A `.doneByCheck()` step then runs again, so it
-must send only what the chain lacks. A certificate without the key, written before, is judged as before
-until its `check` runs again.
-
 `_deployRoleCreate2(journal, role, artifact, args, salt, at, authenticate)` is a deploy step for a role
 the CREATE2 factory creates at the input's `at` for `salt`. A journaled role that landed is proven by its
 recorded salt and code, then `authenticate`. Otherwise this build with `args` must land at `at`: a role
@@ -102,23 +121,14 @@ transfer, which may go to an address without code.
 
 Breaking, for tests: a creation proof that finds no transaction now refuses in a test as in a script.
 A test that relies on forge keeping no transaction history calls `unit.trustTestCreations()`.
-`_certificate(role, addr)` starts a certificate without journaling a receipt, for a contract the unit
-did not deploy.
-
 For tests, `Probes.due(unit, step, sender)` judges a step as the plan does: true while due, false once
 done, and the step's own revert otherwise.
-
-A `check` step builds its certificate with `_certify(_certificate(journal, role, addr).withCode("vault",
-vault).withUint(...))`: `_certificate` journals the role's receipt and starts the certificate, each
-`with...` adds a key, and `_certify` writes it on the role's code hash, prints it once and ends the step.
 
 `plan` judges a step that has no `Due` view by running it as its sender in a probe that reverts its EVM
 state: the step
 is due at its first `_startBroadcast()` or journal write, done if it returns, and waits with its reason
-if it reverts. `Due` views stay as the explicit form. Breaking: in a unit that answers the probe, a
-`check` certifies only itself and the steps marked `.doneByCheck()`; other steps it follows are now
-judged by their probe. A step that calls `vm.startBroadcast` directly waits until it calls
-`_startBroadcast()`, gets a `Due` view, or is marked. The export's `doneRule` has the kind `probe`.
+if it reverts. `Due` views stay as the explicit form. A step that calls `vm.startBroadcast` directly waits until it calls
+`_startBroadcast()` or gets a `Due` view. The export's `doneRule` has the kind `probe`.
 
 `_want(holds, target, call)` sends `call` in the step's broadcast unless `holds`. `_startBroadcast()`
 opens a broadcast only when forge has none open, and `_done()` closes it and reports whether the step
@@ -152,7 +162,7 @@ runs and waits for it to exit. Before, a signal to `run` ended it alone and left
 dry run writing journals, with no lock held.
 
 Fixed: `plan`, `run` and `rehearse` read the graph itself, not the saved `graph.generated.json`, to judge
-a target, to compare a rehearsal's certificates with its forks, and to choose the journals that an
+a target, and to choose the journals that an
 attended run leaves out of its git status and offers tags for. A target the graph lacks exits 2 with one
 line, and a rehearsal checks every journal of its copy. Only `mermaid` reads the saved file.
 
@@ -184,13 +194,6 @@ longer needs `DEPLOYER`. `rehearse` still needs `DEPLOYER` or a pin. `run` refus
 deployer it cannot sign as, and both print `deployer <address>, from <source>` on standard output. With
 `--unsafe-unexpected-deployer` the pin's steps send as `DEPLOYER`, or as the run's signer when the run
 cannot sign as the pin; a `DEPLOYER` that a person set is never replaced.
-
-`_recordAbsent(obj, role, at)` records in a certificate that `role` has no code at `at`, and
-`_checkedOptional(unit, role)` reads a role that may be absent: `(true, addr)` as `_checked` reads it, or
-`(false, address(0))` while the recorded address still has no code. Code there since the check reverts,
-so a dependent never builds on a stale absence. `_checked` refuses an absent role.
-
-Fixed: a certificate no longer carries keys that an earlier check wrote in the same forge run.
 
 The reference moved from `README.md` to `GUIDE.md`; a link to a README section needs the new file.
 
@@ -239,7 +242,7 @@ selector forms are unchanged.
 `rehearse` gives a fork of a chain that `bin/chains.json` lists that chain's code-size limit. It lists
 Robinhood Chain and its testnet, at 98304 bytes.
 
-The tag offer skips a unit certified only on test or local chains, even when its network also names
+The tag offer skips a unit whose journal is stamped only with test or local chains, even when its network also names
 a live chain that it reads.
 
 A step's view or predicate whose file read or JSON parse fails, such as on a missing input file,
@@ -249,12 +252,12 @@ as `# cannot reach`, which made a setup mistake end as a wait (exit 3). A failed
 ## 0.1.2
 
 When an attended run on a live chain ends done or waiting, it offers an annotated tag
-`deploy/<network>/<unit>` for each certified unit, at the commit its journal records, and its push. A
+`deploy/<network>/<unit>` for each unit whose check the plan printed done, at the commit its journal records, and its push. A
 rerun offers what is missing. An existing tag of another tree, a remote tag at another commit, a dirty
 journal and several commits are reported, never tagged or overwritten. A failed push keeps the run's status.
 
-`rehearse` refuses a fork that lacks the code a copied journal's check certifies, as at a `--block`
-before the deployment, which the copied `checked` would otherwise show as done.
+`rehearse` refuses a fork that lacks the code a copied journal records, as at a `--block`
+before the deployment.
 
 `sprue rehearse <network> <target>` runs a target on Anvil forks it starts, in a fresh copy
 `<paths.rehearsal>-<network>` of the network's files, as impersonated senders: no key signs, and a

@@ -3,7 +3,6 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {unitInputHash, unitInputPath} from "../src/Journal.sol";
 import {Probes} from "../src/Probes.sol";
 import {Unit} from "../src/Unit.sol";
 import {ToyPayload} from "./ToyPayload.sol";
@@ -21,7 +20,7 @@ contract UnitHarness is Unit {
 }
 
 /// @notice The unit layer (`Journal`, `ForgeBroadcasts`, `Deployment`) with a unit of its own and no
-///         project: the nonce fence, the deployer pin, `_deployIdentified`, recovery and certificates.
+///         project: the nonce fence, the deployer pin, `_deployIdentified` and recovery.
 contract CoreUnitTest is Test {
     uint256 private constant FENCED = 777;
     uint256 private constant FREE = 31337;
@@ -147,26 +146,6 @@ contract CoreUnitTest is Test {
             )
         );
         unit.landed(network, ops);
-    }
-
-    /// @dev Read where the graph reads it, `paths.deployments`, though the unit's own files are elsewhere.
-    function test_check_recordsTheGraphsHashOfTheUnitsInput_whenItHasOne() public {
-        _network("input-hash", FREE, "");
-        unit.deploy(network);
-        unit.check(network);
-        assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash"));
-
-        string memory input = unitInputPath(network, "toy");
-        vm.createDir(string.concat("deployments/", network), true);
-        vm.writeFile(input, '{"n":1,"m":"x"}');
-        unit.check(network);
-        bytes32 recorded = vm.parseJsonBytes32(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash");
-        assertEq(recorded, unitInputHash(network, "toy"));
-        vm.writeFile(input, '{ "m": "x",\n  "n": 1 }\n');
-        assertEq(unitInputHash(network, "toy"), recorded, "a formatting edit changed the hash");
-        vm.writeFile(input, '{"n":2,"m":"x"}');
-        assertTrue(unitInputHash(network, "toy") != recorded);
-        vm.removeDir(string.concat("deployments/", network), true);
     }
 
     // ==== The deployer pin ====
@@ -841,113 +820,8 @@ contract CoreUnitTest is Test {
         unit.requireNoStray(network, address(0));
     }
 
-    // ==== Certificates ====
-
-    function test_checked_refusesAMissingWrongChainCodelessOrChangedCertificate() public {
-        _deployChecked("checked-refused");
-        string memory path = string.concat(dir, "/toy.json");
-        string memory checked = vm.readFile(path);
-
-        // A wrong value on each side of the right one, so no ordering test passes for equality.
-        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".checked.toyCodeHash");
-        vm.expectRevert(bytes("toy's code differs from toy.json's check"));
-        unit.checkedToy(network);
-        vm.writeJson(vm.toString(bytes32(type(uint256).max)), path, ".checked.toyCodeHash");
-        vm.expectRevert(bytes("toy's code differs from toy.json's check"));
-        unit.checkedToy(network);
-
-        vm.writeFile(path, checked);
-        vm.writeJson("1", path, ".checked.mainChainId");
-        vm.expectRevert(bytes("toy.json was checked on another chain"));
-        unit.checkedToy(network);
-        vm.writeJson(vm.toString(block.chainid + 1), path, ".checked.mainChainId");
-        vm.expectRevert(bytes("toy.json was checked on another chain"));
-        unit.checkedToy(network);
-
-        vm.writeFile(path, checked);
-        vm.writeJson(vm.toString(makeAddr("no code")), path, ".checked.toy");
-        vm.expectRevert(bytes(_noCode("toy", makeAddr("no code"))));
-        unit.checkedToy(network);
-
-        vm.writeFile(path, string.concat('{"toy": "', vm.toString(_journalOf("toy", ".toy")), '"}'));
-        vm.expectRevert(bytes("toy.json is unchecked: run its check step"));
-        unit.checkedToy(network);
-
-        vm.removeFile(path);
-        vm.expectRevert(bytes("toy.json is unchecked: run its check step"));
-        unit.checkedToy(network);
-    }
-
-    /// @dev A role's own chain key wins over the default chain's `mainChainId`: a two-chain unit's role is read there.
-    function test_checked_readsARoleOnItsOwnChain() public {
-        _deployChecked("checked-own-chain");
-        string memory path = string.concat(dir, "/toy.json");
-        vm.writeJson("1", path, ".checked.mainChainId");
-        vm.writeJson(vm.toString(block.chainid), path, ".checked.toyChainId");
-        assertEq(unit.checkedToy(network), _journalOf("toy", ".toy"));
-
-        vm.writeJson("1", path, ".checked.toyChainId");
-        vm.expectRevert(bytes("toy.json was checked on another chain"));
-        unit.checkedToy(network);
-    }
-
-    function test_checkedOptional_readsACertifiedRoleAsPresent_andRefusesWhatCheckedRefuses() public {
-        _deployChecked("optional-present");
-        (bool present, address addr) = unit.checkedOptional(network, "toy");
-        assertTrue(present);
-        assertEq(addr, _journalOf("toy", ".toy"));
-
-        string memory path = string.concat(dir, "/toy.json");
-        vm.writeJson("false", path, ".checked.toyAbsent");
-        (present,) = unit.checkedOptional(network, "toy");
-        assertTrue(present, "a false absence is not one");
-
-        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".checked.toyCodeHash");
-        vm.expectRevert(bytes("toy's code differs from toy.json's check"));
-        unit.checkedOptional(network, "toy");
-    }
-
-    /// @dev An absence holds only while its address stays empty: code there since the check is refused.
-    function test_checkedOptional_readsARecordedAbsence_untilCodeAppearsAtItsAddress() public {
-        _network("optional-absent", FREE, "");
-        address at = makeAddr("absent toy");
-        address spare = makeAddr("spare");
-        unit.checkAbsent(network, at, spare);
-
-        (bool present, address addr) = unit.checkedOptional(network, "toy");
-        assertFalse(present);
-        assertEq(addr, address(0));
-        vm.etch(spare, hex"00");
-        vm.expectRevert(bytes("spare has code since toy.json recorded it absent: a person must resolve it"));
-        unit.checkedOptional(network, "spare");
-        vm.expectRevert(bytes(_noCode("toy", at)));
-        unit.checkedToy(network);
-
-        vm.etch(at, hex"00");
-        vm.expectRevert(bytes("toy has code since toy.json recorded it absent: a person must resolve it"));
-        unit.checkedOptional(network, "toy");
-        vm.expectRevert(bytes("toy has code: certify it instead"));
-        unit.checkAbsent(network, at, spare);
-
-        vm.etch(at, "");
-        vm.writeJson("1", string.concat(dir, "/toy.json"), ".checked.mainChainId");
-        vm.expectRevert(bytes("toy.json was checked on another chain"));
-        unit.checkedOptional(network, "toy");
-    }
-
-    /// @dev Forge keeps serialized objects across one run: a certificate keeps no key of an earlier one.
-    function test_certificate_keepsNoKeyOfAnEarlierCheckInTheSameRun() public {
-        _network("certificate-fresh", FREE, "");
-        unit.deploy(network);
-        unit.checkAbsent(network, makeAddr("absent toy"), makeAddr("spare"));
-        unit.check(network);
-        (bool present,) = unit.checkedOptional(network, "toy");
-        assertTrue(present, "the certificate kept toyAbsent");
-    }
-
     /// @dev A reset chain shows no code where the journal records a landed role. The same nonce would
-    ///      resend the pending intent, and a used one would deploy afresh: either would let the stale
-    ///      `checked` vouch for an unchecked contract with the same code.
+    ///      resend the pending intent, and a used one would deploy afresh.
     function test_deploy_refusesARoleRecordedAsLanded_whoseAddressHasNoCode() public {
         _network("reset", FREE, "");
         unit.deploy(network);
@@ -966,6 +840,7 @@ contract CoreUnitTest is Test {
         unit.deploy(network);
         vm.stopBroadcast();
 
+        // An older journal's certificate is evidence of landing, never completion.
         vm.writeFile(path, journal);
         vm.writeJson(string.concat('{"toy":"', vm.toString(toy), '"}'), path, ".checked");
         vm.setNonceUnsafe(ops, nonce + 1);
@@ -1002,27 +877,39 @@ contract CoreUnitTest is Test {
         reader.recordedOf(network, "other", "toy");
     }
 
-    /// @dev An equal identity leaves the journal byte for byte, so the builder writes what
-    ///      `_certifyRole` wrote; its keys are the ones `_checked` reads.
-    function test_certificate_certifiesAsCertifyRole_andAddsKeysThatCheckedReads() public {
-        _deployChecked("certificate");
-        string memory path = string.concat(dir, "/toy.json");
-        string memory journal = vm.readFile(path);
-        unit.checkBuilt(network, address(0));
-        assertEq(vm.readFile(path), journal);
-        // Without the receipt step: the certificate is the same.
-        unit.checkBuilt(network, address(1));
-        assertEq(vm.readFile(path), journal);
+    /// @dev A `check` is the step that journals a receipt: a probe finds it due while one can be found and is
+    ///      unrecorded, and done when none can be found or it is recorded.
+    function test_check_isDueOnlyWhileAFoundReceiptIsUnrecorded() public {
+        _network("check-due", FREE, "");
+        unit.deploy(network);
+        bytes memory check = abi.encodeCall(unit.check, (network));
+        assertFalse(Probes.due(address(unit), check, ops), "no receipt to find");
 
-        address spare = address(new ToyPayload(7));
-        unit.checkBuilt(network, spare);
-        (bool present, address addr) = unit.checkedOptional(network, "spare");
-        assertTrue(present);
-        assertEq(addr, spare);
-        assertEq(vm.parseJsonUint(vm.readFile(path), ".checked.tag"), 1);
+        address addr = _journalOf("toy", ".toy");
+        bytes32 hash = keccak256("the payload's creation");
+        unit.confirm(hash);
+        string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/", vm.toString(block.chainid));
+        vm.createDir(records, true);
+        vm.writeFile(
+            string.concat(records, "/deploy-latest.json"),
+            string.concat(
+                '{"chain": ',
+                vm.toString(block.chainid),
+                ', "transactions": [], "receipts": [{"contractAddress": "',
+                vm.toLowercase(vm.toString(addr)),
+                '", "transactionHash": "',
+                vm.toString(hash),
+                '"}]}'
+            )
+        );
+        assertTrue(Probes.due(address(unit), check, ops));
+        assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".toyTx"), "the probe journaled");
+
+        unit.check(network);
+        assertFalse(Probes.due(address(unit), check, ops));
     }
 
-    function test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity() public {
+    function test_check_rerunAtALaterBlock_leavesTheJournalByteForByte() public {
         _deployChecked("check-rerun");
         string memory path = string.concat(dir, "/toy.json");
         string memory journal = vm.readFile(path);
@@ -1030,19 +917,6 @@ contract CoreUnitTest is Test {
 
         unit.check(network);
         assertEq(vm.readFile(path), journal);
-
-        vm.writeJson("1", path, ".checked.retired");
-        unit.check(network);
-        assertFalse(vm.keyExistsJson(vm.readFile(path), ".checked.retired"), "a shrunk identity kept its old key");
-        assertEq(vm.parseJsonUint(vm.readFile(path), ".checked.evmBlock"), block.number);
-
-        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".checked.toyCodeHash");
-        unit.check(network);
-        assertEq(
-            vm.parseJsonBytes32(vm.readFile(path), ".checked.toyCodeHash"),
-            _journalOf("toy", ".toy").codehash,
-            "a changed value kept its old certificate"
-        );
     }
 
     // ==== The default chain ====
