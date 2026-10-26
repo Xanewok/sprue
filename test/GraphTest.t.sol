@@ -168,7 +168,7 @@ contract GraphFixtureTest is GraphTest {
         _world("zero");
         Sent[] memory sent = upTo("token.deploy");
         TokenUnit fresh = new TokenUnit();
-        vm.expectRevert();
+        vm.expectRevert(bytes("a witnessed creation needs its initcode"));
         fresh.trustTestCreationAt(sent[0].to, "");
     }
 
@@ -186,7 +186,7 @@ contract GraphFixtureTest is GraphTest {
         VaultUnit fresh = new VaultUnit();
         fresh.trustTestCreationAt(sent[0].to, sent[0].data);
         fresh.trustTestCreationAt(sent[1].to, sent[1].data);
-        vm.expectRevert();
+        vm.expectRevert(bytes("vault's witnessed creation sent other initcode or arguments than its input"));
         fresh.check(net);
     }
 }
