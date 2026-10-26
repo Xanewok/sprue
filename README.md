@@ -11,6 +11,7 @@ record across scripts, so a finished script that runs again sends every CREATE a
 unit, one deploy script, keeps a committed journal of what landed. A deployment of many scripts
 across chains and weeks can be stopped, rerun, reviewed and recovered. How sprue compares with
 Hardhat Ignition, treb, Cannon and others is in [DESIGN.md](DESIGN.md#prior-art).
+Why sprue is shaped this way, from effect kinds to build-system theory: [MODEL.md](MODEL.md).
 
 ## What it does
 
