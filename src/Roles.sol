@@ -63,13 +63,14 @@ function extern(string memory name, string memory key, bytes32 codeHash) pure re
 library RoleLib {
     /// @dev Constructor arguments fixed in the source.
     function args(Role memory r, bytes memory value) internal pure returns (Role memory) {
+        if (r.computed) revert(_twice(r));
         r.fixedArgs = value;
-        r.computed = false;
         return r;
     }
 
     /// @dev Constructor arguments built when used, from the inputs and the roles already deployed.
     function args(Role memory r, function() internal returns (bytes memory) fn) internal pure returns (Role memory) {
+        if (r.fixedArgs.length != 0) revert(_twice(r));
         r.argsFn = fn;
         r.computed = true;
         return r;
@@ -91,6 +92,11 @@ library RoleLib {
 }
 
 function _noArgs() pure returns (bytes memory) {}
+
+/// @dev Neither form may win silently: an author who wrote both meant one.
+function _twice(Role memory r) pure returns (string memory) {
+    return string.concat(r.name, "'s .args is given both as bytes and as a function: keep one");
+}
 
 function _ensureNothing(address, bytes memory) pure {}
 

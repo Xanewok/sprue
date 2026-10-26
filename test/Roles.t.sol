@@ -102,6 +102,12 @@ contract RolesToy is ToyJournal {
         _certify(_certificate().withUint("extra", 5));
     }
 
+    function bothArgs(bool bytesFirst) external pure {
+        Role memory r = create("both", "ToyPayload");
+        if (bytesFirst) r.args(abi.encode(uint256(1))).args(_toyArgs);
+        else r.args(_toyArgs).args(abi.encode(uint256(1)));
+    }
+
     function atToyOutsideAStep() external returns (address) {
         return _at(toy());
     }
@@ -285,6 +291,13 @@ contract RolesTest is Test {
         assertEq(vm.getNonce(ops), 1, "a rerun sent");
         assertEq(unit.checks(), 1, "the reuse ran no check");
         assertEq(unit.atToy(network), toy);
+    }
+
+    function test_args_refusesBothForms() public {
+        vm.expectRevert(bytes("both's .args is given both as bytes and as a function: keep one"));
+        unit.bothArgs(true);
+        vm.expectRevert(bytes("both's .args is given both as bytes and as a function: keep one"));
+        unit.bothArgs(false);
     }
 
     function test_at_outsideAStep_provesOnEveryCall() public {
