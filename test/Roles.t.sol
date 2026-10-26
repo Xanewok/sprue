@@ -373,6 +373,12 @@ contract RolesTest is Test {
         unsent.recover(network);
     }
 
+    function test_at_aJournalWithoutTheRole_isRefusedByName() public {
+        _network("unjournaled", vm.toString(ops));
+        vm.expectRevert(bytes("roles.json records no toyCodeHash"));
+        unit.atToy(network);
+    }
+
     /// @dev forge simulates a send in an earlier block than the one it lands in, so a constructor that stores
     ///      `block.timestamp` in an immutable lands with another code hash than the journal's simulated one.
     function test_at_aRoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsCreationInput() public {

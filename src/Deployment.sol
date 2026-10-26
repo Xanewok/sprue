@@ -200,14 +200,17 @@ abstract contract Deployment is ForgeBroadcasts {
         returns (address addr)
     {
         string memory key = string.concat(".", role);
-        addr = _addr(journal, key);
-        if (
-            addr.code.length != 0 && _has(journal, string.concat(key, "CodeHash"))
-                && addr.codehash != vm.parseJsonBytes32(journal, string.concat(key, "CodeHash"))
-                && _has(journal, string.concat(key, "InitcodeHash")) && _madeByInitcode(journal, role, addr, create2)
-        ) {
-            if (!_inProbe()) _put(string.concat(key, "CodeHash"), vm.toString(addr.codehash));
-            return addr;
+        string memory hashKey = string.concat(key, "CodeHash");
+        // Read the address only where `_requireRecordedCode` would: it names a journal that lacks the role.
+        if (_has(journal, hashKey) && _has(journal, string.concat(key, "InitcodeHash"))) {
+            addr = _addr(journal, key);
+            if (
+                addr.code.length != 0 && addr.codehash != vm.parseJsonBytes32(journal, hashKey)
+                    && _madeByInitcode(journal, role, addr, create2)
+            ) {
+                if (!_inProbe()) _put(hashKey, vm.toString(addr.codehash));
+                return addr;
+            }
         }
         return _requireRecordedCode(journal, role);
     }
