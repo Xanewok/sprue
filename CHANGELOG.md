@@ -40,6 +40,11 @@ records, its runs on this chain (`<records>/<script file>/<chain id>/`) and its 
 (`<records>/multi/<script file>-*/`), for a CREATE only (409k gas there), and searches the chain for a role
 another script created. `Unit._deployScript()` is virtual, for a unit outside `<paths.units>/<unit>/`.
 
+Fixed: `plan` no longer fails with `Failed to deploy script: execution reverted` on a node whose block gas
+limit is below what creating one unit costs (about 30M gas, mostly its code). Forge runs each unit creation
+and each probe of the graph as a transaction of its own, capped at that limit; the graph's commands now pass
+`--disable-block-gas-limit`, as the graph never sends.
+
 Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").

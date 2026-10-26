@@ -264,7 +264,9 @@ function track(child) {
 
 // The graph script's lines that start with `<tag> `, without the tag.
 async function graph(GRAPH, tag, sig, rest = [], env = {}) {
-  const r = await forgeShowingCompile(["script", GRAPH, "--sig", sig, ...rest], env);
+  // The graph never sends. Forge runs each of its unit creations and probes as a transaction of its own,
+  // which the node's block gas limit would cap: a unit carries the whole library, about 30M gas to create.
+  const r = await forgeShowingCompile(["script", GRAPH, "--sig", sig, "--disable-block-gas-limit", ...rest], env);
   if (r.error) fail(1, `cannot run forge: ${r.error.message}`);
   if (r.status !== 0) {
     // The graph is the authority on its targets: its own refusal is a usage error, not a forge failure.
