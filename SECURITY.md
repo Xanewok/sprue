@@ -31,6 +31,8 @@ end-to-end scenario for each invariant.
   or a role whose recorded deployment can no longer land, is also refused while a known deployer (the
   sender, the pin, any journal's deployer) has used more than 256 nonces, or has a CREATE with code
   no journal records. An address in the journal's `retired` list passes both checks.
+- A unit's proof of its own CREATE role requires that the role's creation transaction created it and sent
+  its declared constructor arguments, whatever its journal records.
 - A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
   `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
 
@@ -38,10 +40,7 @@ end-to-end scenario for each invariant.
 
 - Steps must be idempotent: a rerun sends nothing that the chain already has. The library cannot tell
   a step that repeats a send from one that does not.
-- A declared role's `.ensure` must check the state that later transactions change. Its constructor
-  arguments are proven against the journal's record of them, which no step re-reads from the creation
-  transaction: a hand edit of `<role>Args` alone, with the same code, passes until something compares it
-  with the chain.
+- A declared role's `.ensure` must check the state that later transactions change.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
