@@ -1142,6 +1142,35 @@ contract CoreUnitTest is Test {
         later.requireCreatedWith(network);
     }
 
+    /// @dev A reset chain shows no code where the journal records a landed role. The same nonce would
+    ///      resend the pending intent, and a used one would deploy afresh: either would let the stale
+    ///      `checked` vouch for an unchecked contract with the same code.
+    function test_deployRole_refusesARoleRecordedAsLanded_whoseAddressHasNoCode() public {
+        _network("reset", FREE, "");
+        unit.deploy(network);
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        address toy = vm.parseJsonAddress(journal, ".toy");
+        uint64 nonce = uint64(vm.parseJsonUint(journal, ".toyNonce"));
+        bytes memory refusal = bytes(
+            "toy.json records toy as landed, but the RPC shows no code at its address: the RPC lags or the chain was reset; a person must resolve it"
+        );
+        vm.etch(toy, "");
+
+        vm.writeJson(vm.toString(keccak256("the creation")), path, ".toyTx");
+        vm.setNonceUnsafe(ops, nonce);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
+        vm.stopBroadcast();
+
+        vm.writeFile(path, journal);
+        vm.writeJson(string.concat('{"toy":"', vm.toString(toy), '"}'), path, ".checked");
+        vm.setNonceUnsafe(ops, nonce + 1);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
+        vm.stopBroadcast();
+    }
+
     function test_inputFile_namesTheUnitWhoseInputIsRead() public {
         _network("input-file", FREE, "");
         vm.writeFile(string.concat(dir, "/other.input.json"), '{"n":"3","big":"11","later":"<fill>"}');

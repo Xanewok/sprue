@@ -160,6 +160,7 @@ abstract contract Deployment is ForgeBroadcasts {
         existing = _addr(journal, key);
         require(existing != address(0), string.concat("journal ", role, " is the zero address"));
         if (existing.code.length != 0) return existing;
+        _requireNoLandedRecord(journal, role);
 
         require(
             _has(journal, string.concat(key, "Deployer")),
@@ -391,7 +392,10 @@ abstract contract Deployment is ForgeBroadcasts {
             _samePendingIntent(journal, role, artifact, args)
                 && _addr(journal, string.concat(key, "Deployer")) == sender
                 && _uint(journal, string.concat(key, "Nonce")) == next
-        ) return address(0);
+        ) {
+            _requireNoLandedRecord(journal, role);
+            return address(0);
+        }
         if (!_has(journal, key)) {
             _requireNoStray(journal, role, artifact);
             _requireNoUnjournaled(journal, role, sender);
@@ -416,10 +420,26 @@ abstract contract Deployment is ForgeBroadcasts {
         }
         addr = _addr(journal, string.concat(".", role));
         if (addr != address(0) && addr.code.length == 0 && _samePendingIntent(journal, role, artifact, args)) {
+            _requireNoLandedRecord(journal, role);
             return address(0);
         }
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) _requireRecordedCode(journal, role);
+    }
+
+    /// @dev A receipt or a check of `role` says it landed. With no code at its address, the RPC lags or the
+    ///      chain was reset, and a resend or a replacement would let the stale `checked` vouch for an
+    ///      unchecked contract with the same code.
+    function _requireNoLandedRecord(string memory journal, string memory role) internal view {
+        require(
+            !_has(journal, string.concat(".", role, "Tx")) && !_has(journal, string.concat(".checked.", role)),
+            string.concat(
+                _unit(),
+                ".json records ",
+                role,
+                " as landed, but the RPC shows no code at its address: the RPC lags or the chain was reset; a person must resolve it"
+            )
+        );
     }
 
     /// @dev Whether the journal records `role` at an address with no code, and its recorded
@@ -964,6 +984,7 @@ abstract contract Deployment is ForgeBroadcasts {
                     && vm.parseJsonBytes32(journal, string.concat(key, "Salt")) == salt,
                 string.concat("the input's create2.salt differs from ", _unit(), ".json's")
             );
+            if (!landed) _requireNoLandedRecord(journal, role);
         } else {
             _requireNoStray(journal, role, artifact, at);
         }
