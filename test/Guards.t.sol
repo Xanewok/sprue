@@ -134,7 +134,7 @@ contract GuardsTest is Test, Declares {
         return name;
     }
 
-    function test_deployRole_stampsTheSelectedChain() public {
+    function test_deploy_stampsTheSelectedChain() public {
         SelectedChainToyUnit unit = new SelectedChainToyUnit();
         string memory net = _network("guards-selected");
         unit.deployOn(net, 5);
@@ -143,7 +143,7 @@ contract GuardsTest is Test, Declares {
         assertFalse(vm.keyExistsJson(journal, ".mainChainId"));
     }
 
-    function test_deployRole_stampsTheDefaultChainByDefault() public {
+    function test_deploy_stampsTheDefaultChainByDefault() public {
         MovedToyUnit unit = new MovedToyUnit();
         string memory net = _network("guards-default-stamp");
         unit.deployOn(net, 5);
@@ -259,7 +259,7 @@ contract GuardsTest is Test, Declares {
         assertFalse(vm.exists(string.concat(DIR, net, "/toy.json")), "a dry run left a certificate");
     }
 
-    function test_deployRole_refusesACreateThatIsNotTheArtifactAndRecordsNothing() public {
+    function test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing() public {
         ImpostorToyUnit unit = new ImpostorToyUnit();
         string memory net = _network("guards-impostor");
         (bool ok, bytes memory ret) = address(unit).call(abi.encodeCall(unit.deploy, (net)));

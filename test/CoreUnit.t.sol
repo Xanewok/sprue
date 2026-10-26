@@ -218,7 +218,7 @@ contract CoreUnitTest is Test {
 
     // ==== _deployIdentified ====
 
-    function test_deployRole_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment() public {
+    function test_deploy_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment() public {
         _network("hook", FREE, "");
 
         assertEq(
@@ -242,7 +242,7 @@ contract CoreUnitTest is Test {
 
     /// @dev A pending intent is sent again only as the same transaction: the sender at the
     ///      recorded nonce, with the recorded initcode.
-    function test_deployRole_aPendingIntent_isSentAgainOnlyAsTheSameTransaction() public {
+    function test_deploy_aPendingIntent_isSentAgainOnlyAsTheSameTransaction() public {
         _network("pending", FREE, "");
         uint256 nonce = vm.getNonce(ops);
         uint256 before = vm.snapshotState();
@@ -270,7 +270,7 @@ contract CoreUnitTest is Test {
         assertEq(vm.getNonce(ops), nonce + 1);
     }
 
-    function test_deployRole_anIntentAtALaterNonceThanTheSenders_isRefused() public {
+    function test_deploy_anIntentAtALaterNonceThanTheSenders_isRefused() public {
         _network("later-nonce", FREE, "");
         uint256 nonce = vm.getNonce(ops);
         uint256 before = vm.snapshotState();
@@ -295,7 +295,7 @@ contract CoreUnitTest is Test {
 
     /// @dev The journal would take a receipt if the refusal came after `_recordDeployment`; a
     ///      revert does not undo a file write.
-    function test_deployRole_authenticatesAReusedAddressBeforeAnyJournalWrite() public {
+    function test_deploy_authenticatesAReusedAddressBeforeAnyJournalWrite() public {
         _network("authenticate", FREE, "");
         unit.deploy(network);
         string memory path = string.concat(dir, "/toy.json");
@@ -315,7 +315,7 @@ contract CoreUnitTest is Test {
         assertTrue(vm.contains(runner, string.concat("process.env.", dirty, " = ")), dirty);
     }
 
-    function test_deployRole_aRecordedRoleKeepsTheCodeItsJournalNames() public {
+    function test_deploy_aRecordedRoleKeepsTheCodeItsJournalNames() public {
         _network("recorded-code", FREE, "");
         unit.deploy(network);
         string memory path = string.concat(dir, "/toy.json");
@@ -342,7 +342,7 @@ contract CoreUnitTest is Test {
         unit.landed(network, ops);
     }
 
-    function test_deployRole_aSimulationJournalsNothing() public {
+    function test_deploy_aSimulationJournalsNothing() public {
         _network("simulation", FREE, "");
         unit.simulate();
 
@@ -352,7 +352,7 @@ contract CoreUnitTest is Test {
         assertEq(unit.hooks(), 0);
     }
 
-    function test_deployRole_recordsTheReceiptOnlyTheChainConfirms() public {
+    function test_deploy_recordsTheReceiptOnlyTheChainConfirms() public {
         _network("receipt", FREE, "");
         unit.deploy(network);
         address addr = _journalOf("toy", ".toy");
@@ -432,7 +432,7 @@ contract CoreUnitTest is Test {
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
     /// @dev An intent whose nonce another transaction used can never land: the step deploys afresh, and a
     ///      clean send over the dirty mark that intent left clears it.
-    function test_deployRole_aCleanSendOverASpentIntentClearsItsDirtyMark() public {
+    function test_deploy_aCleanSendOverASpentIntentClearsItsDirtyMark() public {
         _network("dirty", FREE, "");
         DirtyToyUnit dirty = new DirtyToyUnit();
         dirty.setTestSender(ops);
@@ -455,7 +455,7 @@ contract CoreUnitTest is Test {
         assertFalse(vm.parseJsonBool(m, ".toyDirty"));
     }
 
-    function test_deployRole_theCommitStaysPendingOnNull_andOnlyPendingIsReplaced() public {
+    function test_deploy_theCommitStaysPendingOnNull_andOnlyPendingIsReplaced() public {
         bytes32 hash = keccak256("the payload's creation");
         unit.confirm(hash);
         string[2] memory commits = ["null", '"abc1234"'];
@@ -915,7 +915,7 @@ contract CoreUnitTest is Test {
     /// @dev A reset chain shows no code where the journal records a landed role. The same nonce would
     ///      resend the pending intent, and a used one would deploy afresh: either would let the stale
     ///      `checked` vouch for an unchecked contract with the same code.
-    function test_deployRole_refusesARoleRecordedAsLanded_whoseAddressHasNoCode() public {
+    function test_deploy_refusesARoleRecordedAsLanded_whoseAddressHasNoCode() public {
         _network("reset", FREE, "");
         unit.deploy(network);
         string memory path = string.concat(dir, "/toy.json");
