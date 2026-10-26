@@ -32,7 +32,8 @@ contract FoundryFactsTest is Test {
         revert("missing account access");
     }
 
-    /// @dev Counting sends needs CALL and CREATE accesses attributed to the broadcaster without code.
+    /// @dev A fixture that counts a step's sends from the state diff finds them as CALL and CREATE accesses
+    ///      whose accessor is the broadcaster.
     function test_broadcast_recordsSenderAsCallAndCreateAccessor() public {
         assertEq(sender.code.length, 0);
         vm.startStateDiffRecording();
@@ -45,7 +46,8 @@ contract FoundryFactsTest is Test {
         assertEq(_access(accesses, VmSafe.AccountAccessKind.Create, created).accessor, sender);
     }
 
-    /// @dev Counting sends and Replay use nonce deltas to detect sends, excluding static calls.
+    /// @dev A fixture that checks its send count against the sender's nonce relies on each broadcast call and
+    ///      create advancing it, and a static call not.
     function test_broadcast_incrementsNonceForCallAndCreateButNotStaticCalls() public {
         uint256 nonce = vm.getNonce(sender);
         vm.startBroadcast(sender);
@@ -58,7 +60,8 @@ contract FoundryFactsTest is Test {
         vm.stopBroadcast();
     }
 
-    /// @dev Counting sends must include a reverted top-level broadcast call: it advances the nonce.
+    /// @dev A fixture that counts a step's sends by nonce must count a reverted top-level broadcast call: it
+    ///      advances the nonce.
     function test_broadcast_revertedCallIsRecordedAndStillAdvancesTheNonce() public {
         uint256 nonce = vm.getNonce(sender);
         vm.startStateDiffRecording();
@@ -72,7 +75,8 @@ contract FoundryFactsTest is Test {
         assertEq(vm.getNonce(sender), nonce + 1);
     }
 
-    /// @dev Kill after send k restores EVM state separately from its file checkpoint.
+    /// @dev A fixture that stops a step after some of its sends and runs it again must restore journal files
+    ///      itself: reverting the EVM state leaves them.
     function test_snapshot_restoresTimestampAndNonceButKeepsFileWrites() public {
         vm.createDir("cache/core-test", true);
         string memory path = string.concat("cache/core-test/foundry-facts-", vm.toString(vm.randomUint()));
@@ -92,7 +96,8 @@ contract FoundryFactsTest is Test {
         vm.removeFile(path);
     }
 
-    /// @dev Kill after send k replays CREATE initcode from the restored sender nonce.
+    /// @dev A fixture that replays a step's first sends after reverting the EVM state relies on a replayed
+    ///      CREATE landing at its recorded address.
     function test_snapshot_replayedCreateLandsAtRecordedAddress() public {
         uint256 nonce = vm.getNonce(sender);
         uint256 id = vm.snapshotState();
@@ -114,7 +119,8 @@ contract FoundryFactsTest is Test {
         assertGt(replayed.code.length, 0);
     }
 
-    /// @dev Counting sends filters accessors without code, so nested calls must retain contract accessors.
+    /// @dev A fixture that keeps only accesses whose accessor has no code relies on nested calls naming the
+    ///      calling contract, not the broadcaster.
     function test_broadcast_onlyTopLevelCallHasSenderAsAccessor() public {
         vm.startStateDiffRecording();
         vm.startBroadcast(sender);
