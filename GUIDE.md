@@ -144,7 +144,9 @@ Each refusal names its remedy. These need a person:
 - A refusal that says "a person must resolve it" or "a person must choose" has no safe default. Do not
   delete records or switch keys to get past it.
 
-A node that a `check` certified stays done while the journal holds `checked`, whatever the chain holds.
+A node that a `check` certified stays done while the journal holds `checked`, whatever the chain holds,
+unless the unit's input file changed since the certificate: then the `check` and the nodes it certifies run
+again.
 A probed step is judged on the chain every time.
 After resetting a development chain, delete the network's journals and that chain's records under
 `broadcast/`, or a rehearsal network's whole directory.

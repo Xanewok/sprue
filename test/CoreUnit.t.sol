@@ -147,6 +147,21 @@ contract CoreUnitTest is Test {
         unit.landed(network, ops);
     }
 
+    function test_check_recordsTheHashOfTheUnitsInput_whenItHasOne() public {
+        _network("input-hash", FREE, "");
+        unit.deploy(network);
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash"));
+
+        string memory input = '{"n":1}';
+        vm.writeFile(string.concat(dir, "/toy.input.json"), input);
+        unit.check(network);
+        assertEq(
+            vm.parseJsonBytes32(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash"),
+            keccak256(bytes(input))
+        );
+    }
+
     // ==== The deployer pin ====
 
     function test_fence_appliesOnlyWhereTheProjectFencesAChain() public {

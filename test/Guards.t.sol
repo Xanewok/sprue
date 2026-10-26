@@ -187,6 +187,29 @@ contract GuardsTest is Test, Declares {
         vm.removeDir(string.concat("deployments/", net), true);
     }
 
+    function test_certificate_ofOtherInputsIsNotDone_andOneWithoutTheirHashIs() public {
+        CertGraph g = new CertGraph();
+        string memory net = "rehearsal-guards-inputs";
+        string memory input = string.concat("deployments/", net, "/fixture.input.json");
+        string memory journal = string.concat("deployments/", net, "/fixture.json");
+        address token = address(new ToyPayload(1));
+        _certificate(net, token, token, token.codehash);
+        vm.writeFile(
+            string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"probe"}}}'
+        );
+        string memory done = "# chain l2 31337 local\n# done fixture.deploy\n# done fixture.check\n";
+        vm.writeFile(input, '{"n":1}');
+        assertEq(g.plan(net, "fixture.check"), done, "a certificate without inputHash");
+
+        vm.writeJson(vm.toString(keccak256('{"n":1}')), journal, ".checked.inputHash");
+        assertEq(g.plan(net, "fixture.check"), done, "the certified inputs");
+        vm.writeFile(input, '{"n":2}');
+        assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "other inputs");
+        vm.removeFile(input);
+        assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "no input");
+        vm.removeDir(string.concat("deployments/", net), true);
+    }
+
     function test_certify_writesNothingOnADryRun() public {
         CertifyUnit unit = new CertifyUnit();
         string memory net = _network("guards-dry");

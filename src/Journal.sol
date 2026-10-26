@@ -492,14 +492,17 @@ abstract contract Journal is Script, IProbe {
     }
 
     /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
-    ///      id and the role's address. The caller adds its own keys and ends with `_certify`.
-    ///      Forge keeps a serialized object for the whole run, so it starts empty: no key of an
-    ///      earlier check in the same run survives into this certificate.
+    ///      id, the role's address and, when the unit has an input file, `inputHash`, the hash of its
+    ///      bytes: a plan judges a certificate of other inputs stale. The caller adds its own keys and
+    ///      ends with `_certify`. Forge keeps a serialized object for the whole run, so it starts
+    ///      empty: no key of an earlier check in the same run survives into this certificate.
     function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
         obj = string.concat(role, "-checked");
         vm.serializeJson(obj, "{}");
         vm.serializeUint(obj, "evmBlock", block.number);
         vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
+        string memory input = inputPath(_deployments(), _networkName(), _unit());
+        if (vm.exists(input)) vm.serializeBytes32(obj, "inputHash", keccak256(bytes(vm.readFile(input))));
         vm.serializeAddress(obj, role, addr);
     }
 
