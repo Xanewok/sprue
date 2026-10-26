@@ -603,22 +603,6 @@ async function main(argv) {
       for (const c of group.chains) chainMap[c].rpc = fork.url;
     }
     writeFileSync(`${dir}/network.json`, `${JSON.stringify(net, null, 2)}\n`);
-    // A copied check keeps its unit done without reading the fork, so the fork must hold the code it
-    // certified: a --block before the deployment would show a contract that is not there as done.
-    for (const f of readdirSync(dir).filter((f) => f.endsWith(".json") && f !== "network.json" && !/\.(input|metadata)\.json$/.test(f)).sort()) {
-      const unit = f.slice(0, -5);
-      const checked = readJson(`${dir}/${f}`)?.checked;
-      if (!isObject(checked)) continue;
-      for (const [key, hash] of Object.entries(checked)) {
-        const role = key.endsWith("CodeHash") ? key.slice(0, -"CodeHash".length) : "";
-        if (!/^0x[0-9a-fA-F]{40}$/.test(checked[role]) || typeof hash !== "string") continue;
-        const id = String(checked[`${role}ChainId`] ?? checked[`${home}ChainId`]);
-        const fork = forks.find((k) => k.chains.some((c) => String(chainMap[c].id) === id));
-        if (fork && must("cast", ["codehash", checked[role], "--rpc-url", fork.url]).toLowerCase() !== hash.toLowerCase()) {
-          fail(2, `refusing: the fork of ${fork.chains.join(",")} lacks the code ${unit}.json certifies for ${role} at ${checked[role]}; fork a block after its deployment`);
-        }
-      }
-    }
     const dirty = exec("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
     if (dirty.status !== 0 || dirty.out) process.env.DEPLOY_TREE_DIRTY = "1";
     out(`senders are impersonated; no key signs\n`);
@@ -864,7 +848,7 @@ async function main(argv) {
     if (!/^[0-9]+$/.test(now)) fail(1, `cannot read the clock at ${clock}`);
     return { late: BigInt(now) < BigInt(at), clock };
   };
-  // The journal and its check stay the record; a tag helps people find it.
+  // The journal stays the record; a tag helps people find it.
   const offerTags = () => {
     const git = (...args) => exec("git", args, ["ignore", "pipe", "ignore"]);
     const branch = git("branch", "--show-current").out;
@@ -876,9 +860,8 @@ async function main(argv) {
     const yes = (q) => ask(`${q} Type yes: `) === "yes";
     for (const unit of [...units].sort()) {
       const j = readJson(`${DEPLOYMENTS}/${network}/${unit}.json`);
-      if (!isObject(j?.checked)) continue;
       // A tag marks what landed on a live chain, not a test deployment that reads one.
-      if (!Object.entries(j.checked).some(([k, v]) => k.endsWith("ChainId") && live.has(String(v)))) continue;
+      if (!isObject(j) || !Object.entries(j).some(([k, v]) => k.endsWith("ChainId") && live.has(String(v)))) continue;
       const tag = `deploy/${network}/${unit}`;
       const ref = `refs/tags/${tag}`;
       // One tag by name: push.followTags would add others.
@@ -899,7 +882,7 @@ async function main(argv) {
       if (!local) {
         if (!yes(`Tag ${tag} at ${commits[0]}, which ${unit}'s journal records?`)) continue;
         const r = spawnSync("git", ["tag", "-a", "-F", "-", tag, commits[0]], {
-          input: `${unit} on ${network}, certified by its check. This tag never moves.\n\n${JSON.stringify(j, null, 2)}\n`,
+          input: `${unit} on ${network}. This tag never moves.\n\n${JSON.stringify(j, null, 2)}\n`,
           stdio: ["pipe", "ignore", "inherit"],
         });
         if (r.status !== 0) { note("git tag failed"); continue; }

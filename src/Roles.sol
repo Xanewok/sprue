@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Deployment} from "./Deployment.sol";
-import {Certificate, Input} from "./Journal.sol";
+import {Input} from "./Journal.sol";
 
 /// @dev How a role's address is made, which fixes how its reuse is proven.
 enum Kind {
@@ -118,7 +118,7 @@ abstract contract Roles is Deployment {
     Proved[] private _proved;
     mapping(bytes32 => bool) private _checking;
 
-    /// @dev The unit's roles, in the order its certificate lists them and its `recover` journals them.
+    /// @dev The unit's roles, in the order its `recover` journals them.
     function _roles() internal view virtual returns (Role[] memory) {}
 
     function _list(Role memory a) internal pure returns (Role[] memory r) {
@@ -141,7 +141,7 @@ abstract contract Roles is Deployment {
         (r[0], r[1], r[2], r[3]) = (a, b, c, d);
     }
 
-    /// @dev Ends the step with `_done()` unless the body did, as `_certify` does. An early `return` still
+    /// @dev Ends the step with `_done()` unless the body did, as `_endCheck` does. An early `return` still
     ///      reaches it.
     modifier step(string calldata network) {
         _use(network);
@@ -177,21 +177,16 @@ abstract contract Roles is Deployment {
     /// @dev `r`'s address, proven, without a send. For another unit's role (`.unit(unitName)`), its arguments
     ///      and `.ensure` are its unit's to prove, so only its identity and code are.
     function _at(Role memory r) internal returns (address addr) {
-        bool own = _own(r);
-        if (own) {
-            uint256 proved = _provedIndex(r.name);
-            if (proved != type(uint256).max) return _proved[proved].addr;
-            _requireDeclared(r);
-        }
+        if (!_own(r)) return _atOther(r);
+        uint256 proved = _provedIndex(r.name);
+        if (proved != type(uint256).max) return _proved[proved].addr;
+        _requireDeclared(r);
         if (r.kind == Kind.Extern) {
-            addr = _requiredAddress(_inputFile(own ? _unit() : r.declaredBy), r.key);
+            addr = _requiredAddress(_inputFile(_unit()), r.key);
             _requireCode(addr, r.name);
             require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
-            if (!own) return addr;
             _enterCheck(r);
             r.ensureFn(addr, "");
-        } else if (!own) {
-            return _atOther(r);
         } else {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
@@ -205,20 +200,15 @@ abstract contract Roles is Deployment {
         _proven(r, addr);
     }
 
-    /// @dev Another unit's role as that unit's `check` certified it, for a role whose configuration after its
-    ///      deploy matters: its certified address must be the one its journal's identity proves. The step
-    ///      needs `.needs("<unit>.check")`. `_at` is the default, for what the role's code fixes.
-    function _checked(Role memory r) internal view returns (address addr) {
-        require(!_own(r), string.concat(r.name, " is this unit's role: prove it with _at"));
-        addr = _checked(r.declaredBy, r.name);
-        if (r.kind == Kind.Extern) return addr;
-        require(
-            _atOther(r) == addr,
-            string.concat(r.declaredBy, ".json's check certified another ", r.name, " than it records")
-        );
-    }
-
-    function _atOther(Role memory r) private view returns (address addr) {
+    /// @dev Another unit's role, proven as `_at` proves it, and readable in a view: what the role's code fixes
+    ///      is proven here, and what its unit configured after the deploy is for the step to read.
+    function _atOther(Role memory r) internal view returns (address addr) {
+        if (r.kind == Kind.Extern) {
+            addr = _requiredAddress(_inputFile(r.declaredBy), r.key);
+            _requireCode(addr, r.name);
+            require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
+            return addr;
+        }
         string memory journal = _journalOf(r.declaredBy);
         string memory key = string.concat(".", r.name);
         require(_has(journal, key), string.concat(r.declaredBy, ".json records no ", r.name));
@@ -242,7 +232,7 @@ abstract contract Roles is Deployment {
         _checking[key] = true;
     }
 
-    /// @dev `recover` and the certificate take the roles from `_roles()`, so a role the unit uses must be there.
+    /// @dev `recover` and `_endCheck` take the roles from `_roles()`, so a role the unit uses must be there.
     function _requireDeclared(Role memory r) private view {
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
@@ -279,33 +269,22 @@ abstract contract Roles is Deployment {
         return type(uint256).max;
     }
 
-    /// @dev Certifies every role of `_roles()`, which the step must have proven, with `_certificate()`, and ends
-    ///      the step.
-    function _certify() internal returns (string memory) {
-        return _certify(_certificate());
-    }
-
-    /// @dev The certificate of every role of `_roles()`, in that order, each with its code hash; a `with...`
-    ///      adds facts before `_certify`. Refuses a declared role the step did not prove with `_deploy` or
-    ///      `_at`. Journals each deployed role's receipt.
-    function _certificate() internal returns (Certificate memory c) {
-        require(_proved.length != 0, "the step proved no role: prove each role it certifies with _at");
-        Proved[] memory order = new Proved[](_proved.length);
-        uint256 n;
+    /// @dev Ends a `check`: every role of `_roles()` must be one the step proved with `_deploy` or `_at`. Journals
+    ///      each deployed role's receipt; a probe judges the step due while one is unrecorded, so the step runs
+    ///      once to record it and is done by what it reads after.
+    function _endCheck() internal returns (string memory) {
+        require(_proved.length != 0, "the step proved no role: prove each role it ends with _at");
+        string memory journal = _journal();
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
             if (!_own(declared[i])) continue;
             uint256 at = _provedIndex(declared[i].name);
             require(at != type(uint256).max, string.concat("the step did not prove ", declared[i].name));
-            order[n++] = _proved[at];
+            Proved memory p = _proved[at];
+            if (p.kind == Kind.Extern) continue;
+            _requireReceipt(journal, p.name, p.addr, p.kind == Kind.Create2);
         }
-        string memory journal = _journal();
-        c = _certificate(order[0].name, order[0].addr);
-        for (uint256 i; i < order.length; ++i) {
-            if (order[i].kind == Kind.Create) _recordReceipt(journal, order[i].name, order[i].addr);
-            else if (order[i].kind == Kind.Create2) _recordCreate2Receipt(journal, order[i].name, order[i].addr);
-            if (i != 0) c.withCode(order[i].name, order[i].addr);
-        }
+        return _done(false);
     }
 
     /// @dev Rebuilds a lost journal from forge's broadcast records: each CREATE role of `_roles()`, in order,

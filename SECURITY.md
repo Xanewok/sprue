@@ -62,8 +62,8 @@ end-to-end scenario for each invariant.
 - A step's done check must stay done once it holds. sprue judges a done step before its date and does
   not wait for the date, so a check that holds before the date and fails after it reports the step
   done, and the step is never sent.
-- sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
-  reads the role through `_checked` re-reads its certified code before it sends and refuses if the
+- sprue does not wait for finality. A reorg can undo a step the journal records. A step that
+  reads the role through `_at` re-reads its code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.
 - An RPC node can lag behind the node that took the last send. The run then stops at the step that
   cannot see that send yet, with "has no code" or exit 5 and the plan unchanged; run again once the

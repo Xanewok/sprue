@@ -20,8 +20,8 @@ Why sprue is shaped this way, from effect kinds to build-system theory: [MODEL.m
 - A step can wait for a date or for a fact on chain. Before a future date, `run` stops with exit code
   4 unless you pass `--wait`; on Anvil it moves the clock.
 - One network can span several chains, and a step on one chain can read what landed on another.
-- A step that reads another unit's contract through `_checked` re-reads its code first, and refuses if
-  it differs from what that unit's check certified.
+- A step that reads another unit's contract through `_at` re-reads its code first, and refuses if
+  it differs from what that unit's journal records.
 - Every command a plan prints is a plain `forge script` command that you can read, paste and run.
 - `sprue rehearse` runs a target on Anvil forks of the real chains, with the senders impersonated.
 
@@ -44,12 +44,11 @@ Three layers own different kinds of correctness.
   atomically when the transaction lands.
 - **sprue** owns the deploy process, and its guarantees are exact within the limits stated here:
   - A step is done only when its own check says so at the chain's head: its body would send nothing, or
-    its `Due` view says it has no work. A unit's certificate is the exception: it marks its `check` steps
-    done until the unit's input changes.
+    its `Due` view says it has no work.
   - A role, a named contract of the deployment, is deployed once on a live chain whose `network.json` pins
     the deployer, even after its journal is lost. [SECURITY.md](SECURITY.md#limits) names where this does
     not hold.
-  - A role that `_deploy`, `_at` or `_checked` returns is proven against the chain. A CREATE role must
+  - A role that `_deploy` or `_at` returns is proven against the chain. A CREATE role must
     be its recorded deployer's CREATE at its recorded nonce, and its creation transaction must have sent
     the declared constructor arguments. A CREATE2 role must be the factory's address for its journaled salt
     and initcode hash. An extern role must have its pinned code hash. Two gaps remain: a CREATE2 role's
@@ -79,8 +78,7 @@ function steps() external view returns (Step[] memory s) {
 
 The vault waits for the token unit's check, sends `fund` only after the `openAt` date in its input file
 `vault.input.json`, and checks itself last. `plan` judges `deploy` and `fund` by running them in a
-probe: a step is due while it would still send. `check` is done once it writes the certificate, the
-record of the unit's addresses that other units read.
+probe: a step is due while it would still send. `check` is judged the same way: done while what it asserts holds.
 [GUIDE.md](GUIDE.md) explains the concepts and how to set up your own project, rehearse, configure and
 recover.
 

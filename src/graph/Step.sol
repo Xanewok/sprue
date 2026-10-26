@@ -55,7 +55,6 @@ struct Step {
     string onChain;
     string[] readChains;
     bool ownForks;
-    bool byCheck;
 }
 
 using StepLib for Step global;
@@ -144,14 +143,6 @@ library StepLib {
     /// @dev The step's script creates its own forks, so its command passes no `--rpc-url`.
     function ownsForks(Step memory s) internal pure returns (Step memory) {
         s.ownForks = true;
-        return s;
-    }
-
-    /// @dev The certificate of a later `check` of the step's unit marks it done, and no probe judges
-    ///      it: for a step that cannot tell its own work is done. The step must stay safe to run again:
-    ///      a change of the unit's input makes the certificate stale, and the step then runs again.
-    function doneByCheck(Step memory s) internal pure returns (Step memory) {
-        s.byCheck = true;
         return s;
     }
 }

@@ -282,12 +282,12 @@ scenario_rerun() {
   grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
   out=$(G plan rerun vault.check 2>&1) || true
   local all; all=$(G plan --verbose rerun vault.check 2>&1) || true
-  # Another input makes vault.check due again, so the vault's unit has a node left.
-  local input=deployments/rerun/vault.input.json
-  cp "$input" "$W.vault-input"
-  jq -c '. + {"note":1}' "$W.vault-input" >"$input"
+  # An unjournaled receipt makes vault.check due again, so the vault's unit has a node left.
+  local journal=deployments/rerun/vault.json
+  cp "$journal" "$W.vault-journal"
+  jq -c 'del(.vaultTx, .vaultBlock)' "$W.vault-journal" >"$journal"
   local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
-  mv "$W.vault-src" "$vault"; mv "$W.vault-input" "$input"
+  mv "$W.vault-src" "$vault"; mv "$W.vault-journal" "$journal"
   ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan of a finished target warned: $out"
   grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$all" \
     || die "rerun: plan --verbose did not warn of older code: $all"
@@ -337,7 +337,7 @@ scenario_wait() {
   local bumper=$!
   PATH="$PWD/stub:$PATH" exits 0 G run wait vault.check --wait
   wait "$bumper"
-  [ -n "$(jq -r '.checked // empty' deployments/wait/vault.json)" ] || die "wait: --wait did not finish the target"
+  all_done wait "$(G plan wait vault.check 2>>log)"
   # A date moved past the finished funding: the run stops neither at it nor sends.
   local nonce; nonce=$(cast nonce "$OPS" --rpc-url "$GETH")
   jq ".openAt = $(($(now "$GETH") + 3600))" deployments/wait/vault.input.json >vault.input.json
@@ -399,7 +399,7 @@ scenario_kill() {
   # With no broadcast record, the chain shows the creation by the journal's deployer and nonce: here
   # nonce 1, a block after the transaction that spent nonce 0.
   mkdir -p broadcast/DeployToken.s.sol && mv broadcast/DeployToken.s.sol "$W/records.kill"
-  jq 'del(.tokenTx, .tokenBlock, .checked)' $d/token.json >"$W/j" && mv "$W/j" $d/token.json
+  jq 'del(.tokenTx, .tokenBlock)' $d/token.json >"$W/j" && mv "$W/j" $d/token.json
   G run kill token.check >/dev/null 2>>log || die "kill: check without a record failed: $(tail -n 3 log)"
   rm -rf broadcast/DeployToken.s.sol && mv "$W/records.kill" broadcast/DeployToken.s.sol
   [ "$(cast receipt "$(jq -r .tokenTx $d/token.json)" contractAddress --rpc-url "$RPC" 2>/dev/null | tr A-F a-f)" \
@@ -501,7 +501,7 @@ scenario_two_chain() {
   [ "$(cast block-number --rpc-url "$RPC") $(cast block-number --rpc-url "$rcv")" = "$b0" ] || die "two-chain: rehearse mined on a real node"
   exits 0 G run local receiver.notify.2
   for w in 0 1 2; do
-    [ "$(opened $w)" = "$(jq -r .checked.source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
+    [ "$(opened $w)" = "$(jq -r .source deployments/local/source.json)" ] || die "two-chain: window $w is not open"
   done
   [ "$(now "$rcv")" -ge "$((at + 2 * 86400))" ] || die "two-chain: the receiver's clock did not reach the last window"
   [ "$(now)" -lt "$at" ] || die "two-chain: the source's clock was moved"
@@ -525,8 +525,6 @@ scenario_two_chain() {
 scenario_rehearse() {
   local d=deployments/rehearsal-main dead=0x000000000000000000000000000000000000dEaD b0 out url
   network main 1 "$(($(now "$LIVE") + 1000))"
-  # Only a unit's journal certifies: an input that has a `checked` object does not.
-  jq '. + {checked: {token: "'"$dead"'", tokenCodeHash: "0x00"}}' deployments/main/vault.input.json >"$W/j" && mv "$W/j" deployments/main/vault.input.json
   cast rpc anvil_setBalance "$dead" 0x8ac7230489e80000 --rpc-url "$LIVE" >/dev/null
   b0=$(cast block-number --rpc-url "$LIVE")
   local go=(env DEPLOYER="$dead" G rehearse)
@@ -537,7 +535,7 @@ scenario_rehearse() {
   grep -q "^deployer $dead, from DEPLOYER$" <<<"$out" || die "rehearse: the deployer and its source were not printed"
   [ "$(cast block-number --rpc-url "$LIVE")" = "$b0" ] || die "rehearse: the real chain mined a block"
   [ ! -e deployments/main/token.json ] || die "rehearse: the source network got a journal"
-  jq -e .checked "$d/vault.json" >/dev/null || die "rehearse: the vault is not checked in $d: $(tail -c 600 <<<"$out")"
+  jq -e .vault "$d/vault.json" >/dev/null || die "rehearse: the vault is not deployed in $d: $(tail -c 600 <<<"$out")"
   url=$(grep -o '^fork l2 chain 1 block [0-9]* http://[0-9.:]*' <<<"$out" | awk '{print $NF}')
   [ -n "$url" ] || die "rehearse: no fork line: $(tail -c 600 <<<"$out")"
   ! cast chain-id --rpc-url "$url" >/dev/null 2>&1 || die "rehearse: the fork still runs"
@@ -628,18 +626,10 @@ scenario_rehearse() {
   echo "FOUNDRY_ETH_RPC_URL=$LIVE" >.env
   refused 'forge would take FOUNDRY_ETH_RPC_URL, eth_rpc_url (.env or foundry.toml) over the forks' "${go[@]}" main token.check
   rm .env
-  # A copied check whose code the fork lacks, as at a --block before its deployment, is refused.
+  # A copied journal whose code the fork lacks, as at a --block before its deployment, is not done.
   cp "$d/token.json" deployments/main/token.json
-  refused 'lacks the code token.json certifies' "${go[@]}" main token.check
-  # The certificates are those of the copy's journals, whatever units the saved export names.
-  cp "$d/token.json" deployments/main/token.json
-  stale_export '(.nodes[] | select(.unit == "token") | .unit) = "renamed"'
-  refused 'lacks the code token.json certifies' "${go[@]}" main vault.check
-  git checkout -q script/deploy/graph.generated.json
-  # A role certified on another chain is read on that chain's fork, and this network forks none.
-  jq '.checked.tokenChainId = 99' "$d/token.json" >deployments/main/token.json
-  out=$("${go[@]}" main token.check 2>&1) || true
-  ! grep -q 'lacks the code' <<<"$out" || die "rehearse: a role was read on another chain's fork"
+  out=$("${go[@]}" main token.check 2>&1 </dev/null) && die "rehearse: a copied journal whose code the fork lacks was done"
+  grep -q 'shows no code at its address' <<<"$out" || die "rehearse: a copied journal whose code the fork lacks: $out"
   rm deployments/main/token.json
   refused 'cannot reach nope.check: unknown target' "${go[@]}" main nope.check
   refused 'usage:' "${go[@]}" --wait main token.check
@@ -761,7 +751,7 @@ scenario_attended() {
   echo "ok  attended refusals send nothing, a change during the question stops the send, no sends nothing, yes sends once and asks every step, the rehearsal directories need the ignore line"
 }
 
-# On a live chain an attended run offers a tag at the journal's commit for each certified unit, and its
+# On a live chain an attended run offers a tag at the journal's commit for each unit, and its
 # push. A rerun offers only what is missing; a failed push keeps the run's status; a tag never moves.
 scenario_tag() {
   command -v python3 >/dev/null || { echo "skip tag: it needs python3"; return; }
@@ -832,7 +822,7 @@ scenario_tag() {
   out=$(tty yes "${run[@]}" 2>&1) || die "tag: a rerun failed: $(tail -c 600 <<<"$out")"
   grep -q 'not tagged: tokenDirty records a dirty tree' <<<"$out" || die "tag: a dirty journal was offered: $(tail -c 600 <<<"$out")"
   ! git ls-remote --tags origin "refs/tags/$tag" | grep -q . || die "tag: a dirty journal's tag was pushed"
-  # A unit certified on a test chain gets no offer, though its network also names a live chain.
+  # A unit on a test chain gets no offer, though its network also names a live chain.
   live_node $((PORT + 6)) 11155111
   network stage 11155111
   echo '{"chains":{"l2":{"id":11155111,"rpc":"stage"},"eth":{"id":10,"rpc":"prod"}}}' >deployments/stage/network.json
@@ -840,7 +830,7 @@ scenario_tag() {
   out=$(tty yes,yes,yes,yes,yes,yes G run stage token.check --account e2e 2>&1) \
     || die "tag: the test-chain run failed: $(tail -c 600 <<<"$out")"
   grep -q '# chain eth 10 live' <<<"$out" || die "tag: the stage network names no live chain: $(tail -c 600 <<<"$out")"
-  jq -e '.checked' deployments/stage/token.json >/dev/null || die "tag: the test-chain run certified nothing"
+  jq -e '.token' deployments/stage/token.json >/dev/null || die "tag: the test-chain run deployed nothing"
   ! git rev-parse -q --verify refs/tags/deploy/stage/token >/dev/null || die "tag: a test-chain unit was tagged"
   ! grep -q 'deploy/stage/token' <<<"$out" || die "tag: a test-chain unit was offered: $(tail -c 600 <<<"$out")"
   rm -rf "$W.remote"
@@ -866,13 +856,13 @@ scenario_lag() {
   for i in 1 2 3 4 5 6; do
     rc=0; out=$(env -u DEPLOYER G run lag vault.check 2>&1) || rc=$?
     [ "$rc" = 0 ] && break
-    ! grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags" <<<"$out" || seen=yes
+    ! grep -aq "its plan is unchanged after sending it\|a step is due again after sending it" <<<"$out" || seen=yes
     grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|a step is due again after sending it\|the vault is not funded" <<<"$out" \
       || die "lag: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
     cast rpc evm_mine --rpc-url "$up" >/dev/null
   done
   [ "$rc" = 0 ] || die "lag: not done after $i runs"
-  [ "$seen" = yes ] || die "lag: no run said a role has no code, so the node did not lag"
+  [ "$seen" = yes ] || die "lag: no run stopped on a send it could not see, so the node did not lag"
   [ "$(cast nonce "$OPS" --rpc-url "$up")" = 3 ] || die "lag: $(cast nonce "$OPS" --rpc-url "$up") transactions, not 3"
   for p in $nodes; do kill "$p" 2>/dev/null || true; done
   echo "ok  lag a lagging RPC stops each run at what it cannot see yet, and the reruns end done, each transaction once"
@@ -884,7 +874,7 @@ scenario_lag() {
 scenario_lag_wave() {
   local up out rc nodes i seen=no v=script/deploy/units/vault/DeployVault.s.sol
   cp "$v" "$W.vault"
-  sed -i.bak -e 's/needs("token.check")/needs("token.deploy")/' -e 's/_checked("token", "token")/_recorded("token", "token")/g' \
+  sed -i.bak -e 's/needs("token.check")/needs("token.deploy")/' \
     -e 's/_step("vault.check", this.check).needs("vault.fund")/&.needs("token.check")/' "$v" && rm -f "$v.bak"
   nodes=$PIDS; LAG=1 live_node $((PORT + 8)) 1337; nodes=${PIDS#"$nodes"}
   up=$(sed -n 's/^Listening on \(.*\)$/http:\/\/\1/p' "$W.node-$((PORT + 8)).log")

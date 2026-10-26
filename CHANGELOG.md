@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Breaking: completion is decided only by live checks. The `checked` certificate is gone: `_certify`,
+`_certificate`, `_beginChecked`, `_certifyRole`, `_recordAbsent`, `_checked`, `_checkedOptional`,
+`Certificate` and `.doneByCheck()` are removed, and a journal's `checked` object is ignored. A `check`
+step ends with `_endCheck()`, which refuses unless the step proved every role of `_roles()` and journals
+the receipts of the deployed ones; a probe judges the step due only while one is unjournaled. Every step
+of a unit needs a probe or a `<fn>Due` view. Read another unit's role with `_at(role)`, or
+`_atOther(role)` in a view, which also reads an `extern` role from its unit's input, and read what that
+unit configured in the step, so a changed bind is refused. `rehearse` no longer compares a copied journal
+with its fork, and the tag offer keys on a journal stamped with a live chain.
+
 `plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> does not make; it
 stays deployed, and no step replaces it` for each role of the target's units whose journaled creation code
 differs from this build, after the `# chain` lines, while one of the unit's nodes in the plan is not done;

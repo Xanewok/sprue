@@ -46,10 +46,6 @@ contract ToyGraph is Graph {
         _validateGraph();
     }
 
-    function _journalChecked(string memory, string memory) internal pure override returns (bool) {
-        return false;
-    }
-
     function _input(string memory, string memory) internal pure override returns (string memory) {
         return "100";
     }

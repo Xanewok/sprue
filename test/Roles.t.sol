@@ -82,24 +82,18 @@ contract RolesToy is ToyJournal {
     function check(string calldata network) external step(network) {
         _at(toy());
         _at(second());
-        _certify();
+        _endCheck();
     }
 
     function checkReversed(string calldata network) external step(network) {
         _at(second());
         _at(toy());
-        _certify();
+        _endCheck();
     }
 
     function checkToyOnly(string calldata network) external step(network) {
         _at(toy());
-        _certify();
-    }
-
-    function checkWithFact(string calldata network) external step(network) {
-        _at(toy());
-        _at(second());
-        _certify(_certificate().withUint("extra", 5));
+        _endCheck();
     }
 
     function bothArgs(bool bytesFirst) external pure {
@@ -242,12 +236,6 @@ contract ReaderToy is ToyJournal {
     function read(string calldata network) external returns (address a) {
         _use(network);
         a = _at(TOY());
-        _done(false);
-    }
-
-    function readChecked(string calldata network) external returns (address a) {
-        _use(network);
-        a = _checked(TOY());
         _done(false);
     }
 
@@ -566,33 +554,26 @@ contract RolesTest is Test {
         assertEq(SecondPayload(vm.parseJsonAddress(_journal(), ".second")).tag(), uint256(uint160(unit.atToy(network))));
     }
 
-    // ==== Certificates ====
+    // ==== Ending a check ====
 
-    function test_certify_listsTheDeclaredRolesInOrder_whateverOrderTheStepProvedThem() public {
-        _network("certify", vm.toString(ops));
-        unit.deployBoth(network);
-        unit.check(network);
-        string memory first = _journal();
-        assertEq(vm.parseJsonAddress(first, ".checked.toy"), vm.parseJsonAddress(first, ".toy"));
-        assertEq(vm.parseJsonAddress(first, ".checked.second"), vm.parseJsonAddress(first, ".second"));
-        assertTrue(vm.keyExistsJson(first, ".checked.secondCodeHash"));
-
-        unit.checkReversed(network);
-        assertEq(_journal(), first, "the order of _at changed the certificate");
-    }
-
-    function test_certify_refusesADeclaredRoleTheStepDidNotProve() public {
+    function test_endCheck_refusesADeclaredRoleTheStepDidNotProve() public {
         _network("unproved", vm.toString(ops));
         unit.deployBoth(network);
         vm.expectRevert(bytes("the step did not prove second"));
         unit.checkToyOnly(network);
     }
 
-    function test_certificate_takesTheStepsOwnFacts() public {
-        _network("facts", vm.toString(ops));
+    function test_endCheck_doesNotDependOnTheOrderTheStepProvedTheRoles() public {
+        _network("order", vm.toString(ops));
         unit.deployBoth(network);
-        unit.checkWithFact(network);
-        assertEq(vm.parseJsonUint(_journal(), ".checked.extra"), 5);
+        _set(".toyTx", '"0x01"');
+        _set(".toyBlock", "1");
+        _set(".secondTx", '"0x02"');
+        _set(".secondBlock", "1");
+        string memory journal = _journal();
+        unit.check(network);
+        unit.checkReversed(network);
+        assertEq(_journal(), journal);
     }
 
     // ==== Other kinds ====
@@ -775,19 +756,6 @@ contract RolesTest is Test {
         string memory got = vm.readFile(string.concat(dir, "/twin.json"));
         assertEq(vm.parseJsonAddress(got, ".left"), left);
         assertEq(vm.parseJsonAddress(got, ".right"), right);
-    }
-
-    function test_checked_readsAnotherUnitsCertifiedRole_matchingItsIdentity() public {
-        _network("checked", vm.toString(ops));
-        unit.deployBoth(network);
-        unit.check(network);
-        ReaderToy reader = new ReaderToy();
-        assertEq(reader.readChecked(network), vm.parseJsonAddress(_journal(), ".toy"));
-
-        _set(".checked.toy", string.concat('"', vm.toString(vm.parseJsonAddress(_journal(), ".second")), '"'));
-        _set(".checked.toyCodeHash", vm.toString(vm.parseJsonAddress(_journal(), ".second").codehash));
-        vm.expectRevert(bytes("roles.json's check certified another toy than it records"));
-        reader.readChecked(network);
     }
 
     function _create(string memory name, address addr, uint256 nonce, bytes memory args)

@@ -9,9 +9,9 @@ What sprue assumes, what it guarantees, and the decisions behind it. [GUIDE.md](
 - **Why is the journal written before the send?** `forge script` runs the whole script, journal writes
   included, and only then broadcasts. A journal that names the intent (deployer, nonce, initcode hash)
   before the transaction exists lets a rerun tell a lost send from a pending one.
-- **Why is "done" a certificate in a file, not a chain read?** `plan` must be cheap and must not need every
-  chain. A unit's `check` writes `checked` once; a dependent re-reads the certified code on chain before it
-  sends, so a stale certificate refuses instead of deploying onto the wrong code.
+- **Why is "done" read from the chain and never recorded?** A record of done goes stale when a bind or a
+  setting changes after it, and nothing re-reads what the record stood for. A step is done by its probe or
+  its `Due` view, read at the chain's head, and the journal caches only what is stable once landed.
 - **Why does `plan` print commands instead of the tool sending in-process?** Each step has its own sender,
   its own forks and its own dry run. A separate `forge script` per step is the unit the person approves, and
   the graph's `rehearse` only simulates for the same reason. Every line is a plain command a person can paste.
@@ -56,19 +56,18 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 |---|---|
 | A role is deployed only if its journal lacks it or its recorded deployment can no longer land; a pending intent is resent only as the same transaction. | `CoreUnit.t.sol` `test_deploy_aPendingIntent_isSentAgainOnlyAsTheSameTransaction`; e2e `scenario_kill` |
 | The intent is journaled before the address; a simulation outside a rehearsal network journals nothing. | `test_deploy_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment`, `test_deploy_aSimulationJournalsNothing` |
-| A dry run writes no certificate (outside a rehearsal network). | `Guards.t.sol` `test_certify_writesNothingOnADryRun` |
-| A rerun of a finished target changes no block, nonce or journal bytes. | e2e `scenario_rerun`; `test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity`; `CertifyIdentity.t.sol` |
+| A rerun of a finished target changes no block, nonce or journal bytes. | e2e `scenario_rerun`; `test_check_rerunAtALaterBlock_leavesTheJournalByteForByte` |
 | The fence refuses when a CREATE of a known deployer has code no journal accounts for, and never on an unfenced chain. | `FenceModel.t.sol` `testFuzz_fence_*` |
 | A deployed contract has the artifact's code, immutables aside, unless the unit overrides `_requireBuild`; a reused one has the journal's code hash, or the code that exactly the journaled initcode left where it landed (a CREATE2 address, or a CREATE's creation transaction, shows that initcode). | `test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing`, `test_deploy_aRoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsCreationInput`; `Create2Code.t.sol` |
 | A declared role is returned only when its address follows from the identity its journal records (deployer and nonce, or factory, salt and initcode hash), its code hash (as in the row above) and recorded arguments are the journal's and the declared ones, a CREATE's known creation transaction created it and sent the declared arguments, and its `.ensure` passes; another unit's role, by its identity and code. | `Roles.t.sol` `test_at_*`, `test_create2_*`, `test_extern_*`, `test_check_runsOnEveryReuse_andItsRefusalStopsTheStep` |
 | Where `network.json` pins a deployer, a declared CREATE role was created by the pin, and only the pin sends one, whatever the opt-in to another key. A CREATE2 role is proven whoever sent it. | `Roles.t.sol` `test_deploy_onAPinnedNetwork_refusesAnotherKey_evenWithTheOptIn`, `test_at_refusesARecordedDeployerOtherThanThePin`, `test_pin_aNetworkThatListsFormerDeployers_isRefusedByName`, `test_create2_isProvenWhoeverSentIt`; e2e `scenario_failure` |
 | `recover` journals only one unambiguous, current deployment and writes nothing before every check passes. | `CoreUnit.t.sol` `test_recover_refuses*`, `test_recover_ofACompleteJournal_sendsAndWritesNothing`; e2e `scenario_recover` |
 | Node order is the lowest ready node by unit, then declaration; a cycle is refused with its ids. | `GraphOrder.t.sol` `testFuzz_order_*`, `testFuzz_cycleNamesARealLoop` |
-| Every step has a done rule; a target that excludes the certifying `check` of a node it needs is refused, unless the node is done. | `StepBuilders.t.sol` `test_check*`, `test_dueCheckCannotCertifyAncestors`; `Guards.t.sol` `test_plan_refusesATargetThatExcludesTheCertifierOfANodeItNeeds_unlessTheNodeIsDone` |
+| Every step has a done rule. A `check` is judged live: once what it asserts changed, it is not done. | `StepBuilders.t.sol` `test_aStepWithoutADoneRuleIsRefused`; `Probe.t.sol` `test_plan_judgesACheckLive_andRefusesOnceWhatItAssertsChanged`; `Roles.t.sol` `test_endCheck_*` |
 | A probe sends nothing, writes no journal or build record, and keeps no EVM state; a step is due at its first send or write, and a direct broadcast is refused. | `Probe.t.sol` `test_plan_*` |
 | A production node never depends on a test-only node. | `StepBuilders.t.sol` `test_productionNeverNeedsATestNode` |
 | A malformed pin is refused before any send; under a pin, another key sends a CREATE2 role only with the opt-in, and a rerun that sends nothing passes with any sender. | `CoreUnit.t.sol` `test_pin_*`; `Create2Code.t.sol` `test_deployRoleCreate2_refusesAnotherDeployerThanThePin_beforeTheFactoryCall`, `test_deployRoleCreate2_anotherDeployerThanThePin_sendsWithTheOptIn` |
-| An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
+| An input date on a step off the default chain is refused . | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send builds into `out/`, as `forge config` resolves it. | e2e `scenario_failure` |
@@ -97,22 +96,18 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    `_done` ends a step by printing what it sent, the files to commit and the next `plan` command;
    `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
    broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.
-6. **Done has four forms, and a step needs one.** A probe: the step itself, run and reverted, is due at
+6. **Done has three forms, and a step needs one.** A probe: the step itself, run and reverted, is due at
    its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). The
-   certificate of a same-unit `check`, for the `check` and the steps marked `.doneByCheck()` that it
-   reaches through `needs`, and for every step of a unit that cannot be probed. For a node with no step, a
-   predicate (`until`) that anyone may satisfy. Construction refuses a step with none (`MissingDoneRule`).
-   A `check` after another `check` of one journal needs a view, since the first `checked` would mark it done.
+   For a node with no step, a predicate (`until`) that anyone may satisfy. Construction refuses a step with
+   none (`MissingDoneRule`). A `check` is an ordinary probed step: `_endCheck` makes it due only while a
+   deployed role's receipt is unjournaled.
    The probe runs under a prank, because forge refuses its broadcast cheatcodes under one: forge keeps the
    transactions of a reverted call in the dry run, which `--resume` would send. It pranks as the step's
-   sender, `.by` or the plan's own. A receipt still to journal is not work, since forge writes the record
-   after the run. A graph asks a unit whether it answers the probe with a static call, so asking runs
-   nothing. Rejected: certifying every unmarked step that
-   a `check` follows (it hides drift after the certificate, and prints a step before its needs land).
-7. **`check` certifies once.** It writes `checked` only if the journal lacks it or its identity differs; the
-   block keys `evmBlock`, `l1Block` and `l2Block` are not identity, so they record where the role was first
-   certified and a rerun leaves the journal unchanged. Rejected: rewriting on every run (noisy diffs, no
-   cacheable block).
+   sender, `.by` or the plan's own. A receipt still to journal is not work for a deploy step, since forge
+   writes the record after the run; the unit's `check` journals it. A graph asks a unit whether it answers the probe with a static call, so asking runs
+   nothing. Rejected: a certificate of a `check` that marks steps done (it hides drift after the
+   certificate, and a changed bind stays done).
+7. **`check` writes nothing but receipts.** A rerun leaves the journal unchanged.
 8. **A node is a gate, a view, or a predicate on chain state.** A time gate reads a contract's view where
    one exists (movable until reached); a date in an input is only a forecast. The step's own read-only check
    decides due or done; making the contract enforce the condition when the step runs is the unit author's
@@ -168,9 +163,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     `deployments/<network>/`'s files into `<paths.rehearsal>-<network>`, starts one Anvil per `rpc` alias,
     names each fork's loopback URL as the copy's `rpc` for its chains, and runs `run`'s loop on the copy, unattended, with `--unlocked` and every
     sender impersonated. No key signs, so a fork that keeps a public chain id never holds a transaction the
-    real chain would accept. Copied journals keep `checked`, so a landed unit stays done without reading the
-    fork, as on the real chain. So a fork that lacks a certified role's code, as at a `--block` before its
-    deployment, is refused. It shows only what Anvil reproduces: no bridge delivery between forks, and no
+    real chain would accept. Every step is judged on the fork, as on the real chain, so a `--block` before a
+    deployment shows it as not done. It shows only what Anvil reproduces: no bridge delivery between forks, and no
     L2's own rules.
 
 ### Prior art

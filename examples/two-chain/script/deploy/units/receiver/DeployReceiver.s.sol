@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Unit} from "sprue/Unit.sol";
 import {Step} from "sprue/graph/Step.sol";
+import {SOURCE} from "../source/DeploySource.s.sol";
 import {Receiver} from "./Receiver.sol";
 
 /// @dev The receiver contract already exists on its chain: `receiver.input.json` names it. The unit opens
@@ -24,7 +25,7 @@ contract DeployReceiver is Unit {
     function notify(string calldata network, uint8 window) external returns (string memory) {
         _adopt(network);
         _selectChain("source");
-        address source = _checked("source", "source");
+        address source = _at(SOURCE());
         Receiver receiver = _receiver();
         _want(receiver.opened(window) != address(0), address(receiver), abi.encodeCall(Receiver.open, (window, source)));
         return _done();

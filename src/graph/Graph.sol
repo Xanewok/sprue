@@ -46,12 +46,7 @@ abstract contract Graph is Script {
         bool due;
         /// @dev The step creates its own forks, so `plan` prints its command without `--rpc-url`.
         bool ownForks;
-        /// @dev Done once the unit's journal holds `checked`. `plan` reads that file and does not
-        ///      call the step.
-        bool certified;
-        /// @dev The `check` nodes whose certificate makes this node done. Empty unless `certified`.
-        string[] certifiedBy;
-        /// @dev A step of a unit that answers `IProbe.probe`, with no `Due` view, not certified: once its
+        /// @dev A step of a unit that answers `IProbe.probe`, with no `Due` view: once its
         ///      needs are done, the plan judges it by running it there.
         bool probed;
         /// @dev Makes this a predicate node, which sends nothing. It names a view on the unit that
@@ -229,12 +224,10 @@ abstract contract Graph is Script {
             Node storage n = _nodes[i];
             Visit memory visit;
             visit.node = i;
-            // Alone, a certified step is still sent, so its date is judged too.
-            if (passed[i] || (!alone && n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
+            if (passed[i]) {
                 visit.status = Status.Done;
             } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || n.probed || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
-                _requireCertificateAhead(target, i, statuses, visits, count);
             } else {
                 if (bytes(n.gate).length != 0) {
                     require(
@@ -268,60 +261,10 @@ abstract contract Graph is Script {
             if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
                 visit.status = Status.Due;
             }
-            if (visit.status != Status.Done && n.certified && !alone && !_anyNeeded(n.certifiedBy, needed)) {
-                revert(
-                    _cannotReach(target, string.concat(n.id, " is done only by ", n.certifiedBy[0], ": target that"))
-                );
-            }
             statuses[i] = visit.status;
             visits[count++] = visit;
             if (visit.status == Status.NotJudged) break;
         }
-    }
-
-    /// @dev `nodeIndex` stops the plan until its needs are done. A need that only its unit's certificate
-    ///      marks done stays undone unless this plan sends a `check` of that unit before `nodeIndex`, and
-    ///      every later plan would stop at `nodeIndex` again.
-    function _requireCertificateAhead(
-        string memory target,
-        uint256 nodeIndex,
-        Status[] memory statuses,
-        Visit[] memory visits,
-        uint256 count
-    ) private view {
-        bool[] memory needed = _closure(nodeIndex);
-        for (uint256 c; c < nodeIndex; ++c) {
-            Node storage certified = _nodes[c];
-            if (!needed[c] || statuses[c] == Status.Done || !certified.certified) continue;
-            bytes32 journal = keccak256(bytes(vm.split(certified.id, ".")[0]));
-            bool ahead;
-            for (uint256 v; v < count && !ahead; ++v) {
-                Node storage check = _nodes[visits[v].node];
-                ahead = !check.due && keccak256(bytes(check.step)) == keccak256("check")
-                    && keccak256(bytes(vm.split(check.id, ".")[0])) == journal;
-            }
-            require(
-                ahead,
-                _cannotReach(
-                    target,
-                    string.concat(
-                        _nodes[nodeIndex].id,
-                        " waits for ",
-                        certified.id,
-                        ", which only a check of its unit marks done, and none is sent before it: give ",
-                        certified.id,
-                        " a Due view, or plan such a check first"
-                    )
-                )
-            );
-        }
-    }
-
-    function _anyNeeded(string[] storage ids, bool[] memory needed) private view returns (bool) {
-        for (uint256 i; i < ids.length; ++i) {
-            if (needed[_index(ids[i])]) return true;
-        }
-        return false;
     }
 
     function _executeTarget(string memory network, string memory target) internal returns (bool reached) {
@@ -397,9 +340,7 @@ abstract contract Graph is Script {
         internal
         returns (Status status, string memory reason)
     {
-        if (passed || (n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
-            return (Status.Done, "");
-        }
+        if (passed) return (Status.Done, "");
         if (bytes(n.until).length != 0) {
             (bool ok, bytes memory ret) = n.unit.call(_calldata(n, n.until, network));
             if (!ok) return (Status.Waiting, _reason(n.id, ret));
@@ -424,7 +365,7 @@ abstract contract Graph is Script {
         if (!_isBroadcastUnderPrank(result)) return (Status.Waiting, _reason(n.id, result));
         return (
             Status.Waiting,
-            "it calls vm.startBroadcast or vm.broadcast, which a probe cannot judge: call _startBroadcast(), give it a Due view, or mark it doneByCheck"
+            "it calls vm.startBroadcast or vm.broadcast, which a probe cannot judge: call _startBroadcast() or give it a Due view"
         );
     }
 
@@ -487,7 +428,7 @@ abstract contract Graph is Script {
             n.testOnly = s.testOnly;
             if (s.hasArg) n.arg = vm.toString(s.arg);
             n.due = s.dueSelector != 0;
-            n.probed = probes && s.kind == StepKind.Call && !n.due && !s.byCheck;
+            n.probed = probes && s.kind == StepKind.Call && !n.due;
             n.ownForks = s.ownForks;
         }
     }
@@ -550,9 +491,7 @@ abstract contract Graph is Script {
 
     /// @dev Call after the last `_add`. Reverts unless every dependency exists, no production node
     ///      depends on a test-only node, every node's unit is registered and the graph has no cycle,
-    ///      and every step has a done rule: a `Due` view, a probe, or a `check` step of its unit that
-    ///      reaches it through `needs`. A `check` certifies itself, and of its ancestors only those
-    ///      that no probe judges. Sorts the nodes (`_order`).
+    ///      and every step has a done rule: a `Due` view or a probe. Sorts the nodes (`_order`).
     function _validateGraph() internal {
         for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
@@ -565,28 +504,8 @@ abstract contract Graph is Script {
         _order();
 
         for (uint256 i; i < _nodes.length; ++i) {
-            Node storage check = _nodes[i];
-            if (check.due || keccak256(bytes(check.step)) != keccak256("check")) continue;
-            bool[] memory ancestors = _closure(i);
-            bytes32 journal = keccak256(bytes(vm.split(check.id, ".")[0]));
-            for (uint256 j; j <= i; ++j) {
-                Node storage n = _nodes[j];
-                if (
-                    ancestors[j] && n.unit == check.unit && !n.due && (j == i || !n.probed) && bytes(n.step).length != 0
-                        && keccak256(bytes(vm.split(n.id, ".")[0])) == journal
-                ) {
-                    // An earlier `check` among the ancestors is refused: it would write `checked` first,
-                    // and that would mark this `check` done without running it.
-                    require(j == i || keccak256(bytes(n.step)) != keccak256("check"), MissingDoneRule(check.id));
-                    n.certified = true;
-                    n.probed = false;
-                    n.certifiedBy.push(check.id);
-                }
-            }
-        }
-        for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
-            require(bytes(n.step).length == 0 || n.due || n.certified || n.probed, MissingDoneRule(n.id));
+            require(bytes(n.step).length == 0 || n.due || n.probed, MissingDoneRule(n.id));
         }
     }
 
@@ -700,8 +619,6 @@ abstract contract Graph is Script {
             active = type(uint256).max;
         }
     }
-
-    function _journalChecked(string memory net, string memory unit) internal view virtual returns (bool);
 
     function _input(string memory net, string memory ref) internal view virtual returns (string memory);
 
@@ -916,9 +833,7 @@ abstract contract Graph is Script {
     function _doneRuleJson(Node storage n) private view returns (string memory) {
         string memory kind;
         string memory signature;
-        if (n.certified) {
-            kind = "certificate";
-        } else if (n.probed) {
+        if (n.probed) {
             kind = "probe";
             signature = _signature(n, n.step);
         } else if (bytes(n.until).length != 0) {

@@ -195,15 +195,30 @@ abstract contract ForgeBroadcasts is Journal {
         _recordReceipt(journal, role, deployed, true);
     }
 
+    /// @dev `_recordReceipt` for a `check`: a probe finds the step due while a receipt is unjournaled and the
+    ///      records or the chain show one, since the run that journals it is the step's work. With none to be
+    ///      found, the step has nothing to journal.
+    function _requireReceipt(string memory journal, string memory role, address deployed, bool create2) internal {
+        if (_receiptRecorded(journal, role)) return;
+        if (_inProbe()) {
+            (, uint256 landed,) = _findReceipt(journal, role, deployed, create2);
+            if (landed != 0) revert StepDue();
+            return;
+        }
+        _recordReceipt(journal, role, deployed, create2);
+    }
+
+    function _receiptRecorded(string memory journal, string memory role) internal view returns (bool) {
+        return _has(journal, string.concat(".", role, "Tx")) && _has(journal, string.concat(".", role, "Block"));
+    }
+
     function _recordReceipt(string memory journal, string memory role, address deployed, bool create2) private {
         // forge writes a send's record after the run, so a probe would find its receipt and plan the step
         // again after every send. The step's next run, or `check`, journals it.
         if (_inProbe()) return;
         // A recorded receipt is final. A rerun must not replace the transaction or block the journal
         // names.
-        if (_has(journal, string.concat(".", role, "Tx")) && _has(journal, string.concat(".", role, "Block"))) {
-            return;
-        }
+        if (_receiptRecorded(journal, role)) return;
         (bytes32 hash, uint256 landed, string memory record) = _findReceipt(journal, role, deployed, create2);
         if (landed == 0) {
             console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
