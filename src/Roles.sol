@@ -195,7 +195,7 @@ abstract contract Roles is Deployment {
         } else {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
-            addr = _requireRecordedCode(journal, r.name);
+            addr = r.kind == Kind.Create ? _requireLandedCode(journal, r.name) : _requireRecordedCode(journal, r.name);
             if (r.kind == Kind.Create) _requireCreateIdentity(journal, r.name, a);
             else _requireCreate2Record(journal, r.name, a, true);
             _enterCheck(r);

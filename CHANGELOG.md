@@ -49,6 +49,13 @@ records, its runs on this chain (`<records>/<script file>/<chain id>/`) and its 
 (`<records>/multi/<script file>-*/`), for a CREATE only (409k gas there), and searches the chain for a role
 another script created. `Unit._deployScript()` is virtual, for a unit outside `<paths.units>/<unit>/`.
 
+Fixed: a CREATE role whose constructor reads the block, such as an immutable set to `block.timestamp`, was
+refused on every run after its send ("<role>'s code differs from <unit>.json"): the journal holds the code
+hash of forge's simulation, which runs in an earlier block than the send lands in. The unit's own proof of
+the role now takes the landed code when the transaction that created it sent exactly the journaled initcode,
+and its next step run or `check` journals that code's hash. Until then, another unit's `_at` of the role
+still refuses.
+
 Fixed: `plan` no longer fails with `Failed to deploy script: execution reverted` on a node whose block gas
 limit is below what creating one unit costs (about 30M gas, mostly its code). Forge runs each unit creation
 and each probe of the graph as a transaction of its own, capped at that limit; the graph's commands now pass

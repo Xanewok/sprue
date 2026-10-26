@@ -190,6 +190,30 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
+    /// @dev `_requireRecordedCode` for a CREATE role, which also takes the code its creation left. forge journals
+    ///      the code hash of a simulation, which runs the constructor in an earlier block than the send lands in,
+    ///      so a constructor that reads the block leaves other code. Only the creation transaction, sending
+    ///      exactly the journaled initcode, vouches for that code. Outside a probe its hash replaces the journal's.
+    function _requireLandedCode(string memory journal, string memory role) internal returns (address addr) {
+        string memory key = string.concat(".", role);
+        addr = _addr(journal, key);
+        if (
+            addr.code.length != 0 && _has(journal, string.concat(key, "CodeHash"))
+                && addr.codehash != vm.parseJsonBytes32(journal, string.concat(key, "CodeHash"))
+                && _has(journal, string.concat(key, "InitcodeHash"))
+        ) {
+            bytes32 hash = _createTx(journal, role);
+            if (
+                hash != 0 && _createdIn(hash, addr, false) != 0
+                    && keccak256(_sentInput(hash)) == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))
+            ) {
+                if (!_inProbe()) _put(string.concat(key, "CodeHash"), vm.toString(addr.codehash));
+                return addr;
+            }
+        }
+        return _requireRecordedCode(journal, role);
+    }
+
     /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
     function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
         // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
@@ -238,7 +262,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoUnjournaled(journal, role, sender);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) _requireLandedCode(journal, role);
     }
 
     /// @dev `_reuseForSend` for a `Due` view. A view shares the step's decision but knows neither the
@@ -261,7 +285,7 @@ abstract contract Deployment is ForgeBroadcasts {
             return address(0);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) _requireLandedCode(journal, role);
     }
 
     /// @dev A receipt or a check of `role` says it landed. With no code at its address, the RPC lags or the
