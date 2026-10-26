@@ -12,6 +12,10 @@ contract GraphMutantsTest is GraphTest {
         string memory dir = "deployments/graphtest-source-raw";
         vm.createDir(dir, true);
         vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"local"}}}');
+        vm.writeFile(
+            string.concat(dir, "/raw.input.json"),
+            string.concat('{"operator":"', vm.toString(makeAddr("operator")), '"}')
+        );
         _useGraph(new RawGraph(), "graphtest-source-raw", string.concat("raw-", vm.toString(vm.randomUint())));
     }
 
@@ -32,6 +36,11 @@ contract GraphMutantsTest is GraphTest {
     function test_quiet_failsOnARawSendWhoseCalldataStartsLikeAProbe() public {
         vm.expectRevert("raw.stray sends on a rerun");
         this.again("raw.stray");
+    }
+
+    function test_quiet_failsOnABodyThatBranchesOnItsCaller() public {
+        vm.expectRevert("raw.gated is not done by the planner");
+        this.again("raw.gated");
     }
 
     function test_runNode_failsOnASendOutsideTheStepsCall() public {

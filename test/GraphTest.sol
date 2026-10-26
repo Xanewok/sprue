@@ -75,12 +75,15 @@ abstract contract GraphTest is Test, IFixtureHost {
         return vm.parseJsonAddress(vm.readFile(path), key);
     }
 
-    /// @dev Reverts unless a rerun of every step `target` needs sends nothing. Run it after `upTo(target)`.
+    /// @dev Reverts unless the planner calls every step `target` needs done and a rerun of its body sends
+    ///      nothing. Run it after `upTo(target)`. A body is entered from the graph, as the planner's probe is not:
+    ///      a body that branches on `msg.sender` shows as the planner and the body disagreeing.
     function quiet(string memory target) internal {
         bool[] memory needed = _closure(target);
         for (uint256 i; i < needed.length; ++i) {
             Graph.Node memory n = _graph.node(i);
             if (!needed[i] || bytes(n.step).length == 0) continue;
+            require(_graph.status(_net, n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
             require(runNode(n.id).length == 0, string.concat(n.id, " sends on a rerun"));
         }
     }

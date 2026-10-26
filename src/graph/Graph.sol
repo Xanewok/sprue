@@ -294,7 +294,10 @@ abstract contract Graph is Script {
     ///         `NotJudged` when the plan stops before `id`.
     function status(string calldata network, string calldata id) external returns (Status) {
         _home = _fork(type(uint256).max);
+        // A test judges steps as `fixtureRun` sends them.
+        if (vm.isContext(VmSafe.ForgeContext.TestGroup)) _fixture = msg.sender;
         (Visit[] memory visits, uint256 count) = _walk(network, id, new bool[](_nodes.length), false);
+        _fixture = address(0);
         uint256 at = _index(id);
         for (uint256 i; i < count; ++i) {
             if (visits[i].node == at) return visits[i].status;
