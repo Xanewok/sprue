@@ -18,12 +18,12 @@ end-to-end scenario for each invariant.
   not seen; a status line names a path and its state, not its contents, so an edit to a file already
   modified or untracked is not seen either. A clean checkout at the start keeps that list short;
   `--allow-dirty` waives it, and is refused when any chain of the network is live.
-- One `run` or `rehearse` of a network, or `plan` of a rehearsal copy, runs at a time: a second
-  refuses while the first, or a forge the first started, runs. Each holds a file named by its pid in
-  the git directory, and writes it before it reads the other files, so two runs that start together
-  may both refuse but never both go on. A file whose process has exited is removed; if a new process
-  gets that pid first, the run refuses and names the file to remove. A signal to the runner stops the
-  forge that runs and waits for it to exit before the lock is released.
+- One `run` or `rehearse` of a network, or `plan` of a rehearsal copy, runs at a time: a second refuses
+  while the first, or a forge the first started, runs. Each holds a file named by its pid in the git
+  directory's `sprue-locks/<network>/`, and writes it before it reads the other files, so two runs that
+  start together may both refuse but never both go on. A file whose process has exited is removed; if a
+  new process gets that pid first, the run refuses and names the file to remove. A signal to the runner
+  stops the forge that runs and waits for it to exit before the lock is released.
 - A deploy step on a network that pins `deployer` sends only with that key, unless the run opts out
   with `--unsafe-unexpected-deployer`.
 - A role the journal lacks is deployed only if no broadcast record of the chain holds a CREATE of its
@@ -65,6 +65,17 @@ end-to-end scenario for each invariant.
   node catches up. forge's nonce check refuses a send simulated before the sender's own last
   transaction, but not one that repeats another account's change that the lagging node hides, which
   can fund the same target twice. Use an RPC with a consistent head (DESIGN.md).
+- The run lock stops only accidental concurrent runs from one checkout, such as a second terminal or a
+  forgotten background job, so that two runs do not interleave their writes to the journals and forge's
+  `broadcast/` records. Another clone or worktree, another machine or a CI runner never sees it, and
+  nothing on chain knows about it, so it gives no safety between runners. Between runners, only checks
+  against the chain stop a duplicate send: forge refuses a send simulated before the same key's last
+  transaction, on a live chain the nonce fence refuses to deploy a role again once another runner's
+  CREATE by a known deployer has code, and a contract may refuse a second set-once value or a flag
+  already set. A send computed from a read, such as a top-up amount from a balance, has no guard of its
+  own when the runners send with different keys: both can send it. With one key, forge simulates and
+  sends at the latest nonce, not the pending one, so the two runs' sends take the same nonces and one
+  of each lands.
 - A failing RPC stops the runner. A receipt that cannot be read while a step journals its deployment
   is left out of the journal, and the step goes on.
 
