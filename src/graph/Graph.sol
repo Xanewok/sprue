@@ -402,7 +402,7 @@ abstract contract Graph is Script {
         return true;
     }
 
-    function _status(string memory network, Node storage n) internal returns (Status status, string memory reason) {
+    function _status(string memory network, Node storage n) internal returns (Status, string memory reason) {
         if (bytes(n.until).length != 0) {
             (bool ok, bytes memory ret) = n.unit.call(_calldata(n, n.until, network));
             if (!ok) return (Status.Waiting, _reason(n.id, ret));

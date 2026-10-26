@@ -35,7 +35,7 @@ contract TokenUnit is FixtureUnit {
 
     function check(string calldata network) external step(network) {
         _at(TOKEN());
-        _certify();
+        _endCheck();
     }
 
     function _roles() internal pure override returns (Role[] memory) {
@@ -81,7 +81,7 @@ contract VaultUnit is FixtureUnit {
 
     function check(string calldata network) external step(network) {
         require(FixtureToken(_at(TOKEN())).balanceOf(_at(vault())) != 0, "the vault is not funded");
-        _certify();
+        _endCheck();
     }
 
     function vault() internal pure returns (Role memory) {
