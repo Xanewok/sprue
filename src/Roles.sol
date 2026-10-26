@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Deployment} from "./Deployment.sol";
 import {Certificate, Input} from "./Journal.sol";
+import {engine} from "./SprueEngine.sol";
 
 /// @dev How a role's address is made, which fixes how its reuse is proven.
 enum Kind {
@@ -299,13 +300,13 @@ abstract contract Roles is Deployment {
             require(at != type(uint256).max, string.concat("the step did not prove ", declared[i].name));
             order[n++] = _proved[at];
         }
-        string memory journal = _journal();
-        c = _certificate(order[0].name, order[0].addr);
-        for (uint256 i; i < order.length; ++i) {
-            if (order[i].kind == Kind.Create) _recordReceipt(journal, order[i].name, order[i].addr);
-            else if (order[i].kind == Kind.Create2) _recordCreate2Receipt(journal, order[i].name, order[i].addr);
-            if (i != 0) c.withCode(order[i].name, order[i].addr);
+        string[] memory names = new string[](n);
+        address[] memory addrs = new address[](n);
+        uint8[] memory kinds = new uint8[](n);
+        for (uint256 i; i < n; ++i) {
+            (names[i], addrs[i], kinds[i]) = (order[i].name, order[i].addr, uint8(order[i].kind));
         }
+        c = Certificate(engine().certificate(_ctx(true, true), _journal(), names, addrs, kinds), names[0], addrs[0]);
     }
 
     /// @dev Rebuilds a lost journal from forge's broadcast records: each CREATE role of `_roles()`, in order,

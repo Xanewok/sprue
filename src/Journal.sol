@@ -24,8 +24,12 @@ function inputPath(string memory root, string memory network, string memory unit
 /// @dev True for the rehearsal prefix itself and for `<prefix>-<suffix>`. A name that merely starts
 ///      with the prefix, such as `<prefix>ing`, is a real network.
 function isRehearsalNetwork(string memory network) view returns (bool) {
+    return isRehearsalNetworkIn(rehearsalPrefix(), network);
+}
+
+function isRehearsalNetworkIn(string memory prefix, string memory network) pure returns (bool) {
     bytes memory name = bytes(network);
-    bytes memory test = bytes(rehearsalPrefix());
+    bytes memory test = bytes(prefix);
     if (name.length < test.length || (name.length > test.length && name[test.length] != "-")) return false;
     for (uint256 i; i < test.length; ++i) {
         if (name[i] != test[i]) return false;
@@ -162,9 +166,7 @@ abstract contract Journal is Script, IProbe {
 
     /// @dev The chain whose id stamps the journal (`<chain>ChainId`). Virtual so that a test can
     ///      choose its own rule.
-    function _defaultChain(string memory network) internal view virtual returns (string memory) {
-        return defaultChain(network);
-    }
+    function _defaultChain(string memory network) internal view virtual returns (string memory);
 
     function _networkName() internal view virtual returns (string memory) {
         return _usedNetwork;
@@ -185,63 +187,11 @@ abstract contract Journal is Script, IProbe {
         if (
             !_inProbe()
                 && (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun))
-        ) {
-            _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
-            if (_rehearsal()) {
-                _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
-            }
-        }
+        ) _checkOutputs();
     }
 
-    /// @notice The first call of a unit step. `network` names a directory under the deployments path.
-    ///         Reverts unless the selected chain is the network's default chain (`sprue.json`'s
-    ///         `chains.default`, else the network's only chain), before it reads the unit's own
-    ///         journal. Returns that journal.
-    function _use(string memory network) internal returns (string memory journal) {
-        _adopt(network);
-        string memory path = string.concat(_dir(), "/network.json");
-        require(vm.exists(path), string.concat(path, " is missing: name a network under ", _deployments(), "/"));
-        string memory file = vm.readFile(path);
-        require(
-            block.chainid == chainId(file, _defaultChain(file)),
-            string.concat("the RPC's chain is not ", network, "'s default chain")
-        );
-        _requireClient();
-        journal = _journal();
-        string memory stamp = _stampKey(file);
-        if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
-    }
-
-    /// @dev Reads only the environment, which cannot see `foundry.toml`: the runner checks
-    ///      `forge config` too.
-    function _requireOutput(string memory label, string memory variable, string memory unset, string memory expected)
-        internal
-        view
-    {
-        string memory actual = vm.envOr(variable, unset);
-        require(
-            keccak256(bytes(actual)) == keccak256(bytes(expected)),
-            string.concat(
-                "forge would keep this run's ", label, " in ", actual, ", not ", expected, ": run it as plan prints"
-            )
-        );
-    }
-
-    /// @dev The RPC server this forge script sends to, however forge resolved it (a `FOUNDRY_*` variable
-    ///      beats `--rpc-url`), is Anvil exactly when the network is a rehearsal one, unless the chain is
-    ///      local. The runner checks the server it resolves; this checks the one the sends reach. Only a
-    ///      broadcast sends: a dry run, or a simulated rehearsal against a server other than Anvil, stays
-    ///      legitimate. `--resume` sends the cached transactions without this check.
-    function _requireClient() internal {
-        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) return;
-        if (keccak256(bytes(chainKind(block.chainid))) == keccak256("local")) return;
-        bool anvil = vm.indexOf(abi.decode(vm.rpc("web3_clientVersion", "[]"), (string)), "anvil/") == 0;
-        bool rehearsal = isRehearsalNetwork(_networkName());
-        string memory why = rehearsal
-            ? " is not served by Anvil, which a rehearsal network requires"
-            : " is served by Anvil, a development node: rehearse on a rehearsal network";
-        require(anvil == rehearsal, string.concat("chain ", vm.toString(block.chainid), why));
-    }
+    /// @dev The refusal of a send or dry run whose forge would keep its records elsewhere than the network's.
+    function _checkOutputs() internal virtual;
 
     /// @dev The journal's chain stamp is `<default chain>ChainId`, the key `_selectChain` checks for that chain.
     function _stampKey(string memory network) internal view returns (string memory) {
@@ -251,39 +201,11 @@ abstract contract Journal is Script, IProbe {
     /// @dev The chain a step has selected, which a deployment's stamp names. A unit that selects
     ///      other chains tracks the last one.
     function _selectedChain() internal view virtual returns (string memory) {
-        return _defaultChain(_networkJson());
+        return "";
     }
 
     function _selectedStampKey() internal view returns (string memory) {
         return string.concat(".", _selectedChain(), "ChainId");
-    }
-
-    function _putChainStamp() internal {
-        _put(_selectedStampKey(), vm.toString(block.chainid));
-    }
-
-    /// @notice The last call of a unit step. It logs what happened (nothing to send, simulated, or
-    ///         sent), the `git add` command for the files to commit, and the `plan` command to run
-    ///         next, which it returns. The graph owns the order, so a step never names its
-    ///         successor.
-    function _done(bool sends) internal returns (string memory command) {
-        _stepOpen = false;
-        _stepEnded();
-        if (_inProbe()) return "";
-        if (!sends) console.log("nothing to send");
-        else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
-        else console.log("simulated: rerun with --broadcast to send");
-        console.log(string.concat("git add ", _dir(), " broadcast"));
-        command = string.concat(
-            isRehearsalNetwork(_networkName()) ? outputsEnv(_dir()) : "",
-            "forge script ",
-            _graphScript(),
-            " --sig 'plan(string,string)' ",
-            _networkName(),
-            " <node> --rpc-url ",
-            planRpc(_networkJson())
-        );
-        console.log(string.concat("next: ", command));
     }
 
     /// @dev Called by `_done`, so that the next step of a run starts afresh.
@@ -406,49 +328,6 @@ abstract contract Journal is Script, IProbe {
             || vm.isContext(VmSafe.ForgeContext.ScriptResume) || _rehearsal();
     }
 
-    /// @dev The address of `unit`'s `role`, as that unit's `check` step certified it. Reverts unless
-    ///      the journal holds `checked`, it was made on the selected chain, and the code at the
-    ///      address still has the certified hash. A unit should read the contracts it depends on
-    ///      through this and not from another unit's uncertified keys. The certificate's chain is
-    ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
-    function _checked(string memory unit, string memory role) internal view returns (address addr) {
-        string memory record = _checkedRecord(unit, role);
-        addr = _addr(record, string.concat(".checked.", role));
-        _requireCode(addr, role);
-        require(
-            addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
-            string.concat(role, "'s code differs from ", unit, ".json's check")
-        );
-    }
-
-    /// @dev The address `unit`'s journal records for `role`, before that unit's `check`: on the chain the
-    ///      journal is stamped with, with the code hash it records. Unlike `_checked`, nothing vouches for
-    ///      the role's configuration, so read through it only what the role's code fixes.
-    function _recorded(string memory unit, string memory role) internal view returns (address addr) {
-        string memory record = _journalOf(unit);
-        string memory key = string.concat(".", role);
-        require(_has(record, key), string.concat(unit, ".json records no ", role));
-        addr = _addr(record, key);
-        _requireCode(addr, role);
-        require(
-            _has(record, string.concat(key, "CodeHash"))
-                && addr.codehash == vm.parseJsonBytes32(record, string.concat(key, "CodeHash")),
-            string.concat(role, "'s code differs from ", unit, ".json")
-        );
-    }
-
-    /// @dev `unit`'s journal on this network, refused unless it is stamped with this chain.
-    function _journalOf(string memory unit) internal view returns (string memory record) {
-        string memory path = string.concat(_dir(), "/", unit, ".json");
-        require(vm.exists(path), string.concat(unit, ".json is missing"));
-        record = vm.readFile(path);
-        string memory stamp = _stampKey(_networkJson());
-        require(
-            _has(record, stamp) && _uint(record, stamp) == block.chainid,
-            string.concat(unit, ".json is not this chain's")
-        );
-    }
-
     /// @dev Checked before the code hash: an RPC that lags behind the node that took the send shows no
     ///      code, which is not other code.
     function _requireCode(address addr, string memory role) internal view {
@@ -463,23 +342,6 @@ abstract contract Journal is Script, IProbe {
         );
     }
 
-    /// @dev `_checked` for a role that may not exist on this chain: `(false, address(0))` where the
-    ///      check recorded the role absent with `_recordAbsent`, while its address still has no code.
-    ///      Code there since the check reverts, so a dependent never builds on a stale absence.
-    function _checkedOptional(string memory unit, string memory role)
-        internal
-        view
-        returns (bool present, address addr)
-    {
-        string memory record = _checkedRecord(unit, role);
-        string memory absent = string.concat(".checked.", role, "Absent");
-        if (!_has(record, absent) || !vm.parseJsonBool(record, absent)) return (true, _checked(unit, role));
-        require(
-            _addr(record, string.concat(".checked.", role)).code.length == 0,
-            string.concat(role, " has code since ", unit, ".json recorded it absent: a person must resolve it")
-        );
-    }
-
     /// @dev Adds to the certificate `obj` that `role` is absent: `at`, where it would be, has no code.
     ///      Returns the object's JSON so far. `_checked` refuses the role; `_checkedOptional` reads it.
     function _recordAbsent(string memory obj, string memory role, address at) internal returns (string memory) {
@@ -488,56 +350,12 @@ abstract contract Journal is Script, IProbe {
         return vm.serializeBool(obj, string.concat(role, "Absent"), true);
     }
 
-    function _checkedRecord(string memory unit, string memory role) private view returns (string memory record) {
-        string memory path = string.concat(_dir(), "/", unit, ".json");
-        record = vm.exists(path) ? vm.readFile(path) : "{}";
-        require(_has(record, ".checked"), string.concat(unit, ".json is unchecked: run its check step"));
-        string memory chainKey = string.concat(".checked.", role, "ChainId");
-        require(
-            _uint(record, _has(record, chainKey) ? chainKey : string.concat(".checked", _stampKey(_networkJson())))
-                == block.chainid,
-            string.concat(unit, ".json was checked on another chain")
-        );
-    }
-
-    /// @dev Writes `checked` when `_writing()` and the journal does not already hold an equal one.
-    ///      Equality ignores the values of the fixed keys `evmBlock`, `l1Block` and `l2Block`: a block
-    ///      records where the role was first certified, so a rerun leaves the journal byte for byte.
-    function _certify(string memory checked) internal {
-        if (!_writing()) return;
-        string memory journal = _journal();
-        if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
-        if (_inProbe()) revert StepDue();
-        vm.writeJson(checked, _path(), ".checked");
-    }
-
-    /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
-    ///      id, the role's address and, when the unit has an input file, `inputHash`
-    ///      (`unitInputHash`): a plan judges a certificate of other inputs stale. The caller adds its own
-    ///      keys and ends with `_certify`. Forge keeps a serialized object for the whole run, so it starts
-    ///      empty: no key of an earlier check in the same run survives into this certificate.
-    function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
-        obj = string.concat(role, "-checked");
-        vm.serializeJson(obj, "{}");
-        vm.serializeUint(obj, "evmBlock", block.number);
-        vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
-        bytes32 input = unitInputHash(_networkName(), _unit());
-        if (input != 0) vm.serializeBytes32(obj, "inputHash", input);
-        vm.serializeAddress(obj, role, addr);
-    }
-
-    /// @dev Ends the certificate `obj` of a unit that certifies one role, on that role's code hash.
-    function _certifyRole(string memory obj, string memory role, address addr) internal returns (string memory) {
-        _certify(vm.serializeBytes32(obj, string.concat(role, "CodeHash"), addr.codehash));
-        return _done(false);
-    }
-
-    function _isBlockKey(string memory key) private pure returns (bool) {
+    function _isBlockKey(string memory key) internal pure returns (bool) {
         bytes32 h = keccak256(bytes(key));
         return h == keccak256("evmBlock") || h == keccak256("l1Block") || h == keccak256("l2Block");
     }
 
-    function _sameIdentity(string memory journal, string memory checked) private view returns (bool) {
+    function _sameIdentity(string memory journal, string memory checked) internal view returns (bool) {
         string[] memory keys = vm.parseJsonKeys(checked, "$");
         if (vm.parseJsonKeys(journal, ".checked").length != keys.length) return false;
         for (uint256 i; i < keys.length; ++i) {

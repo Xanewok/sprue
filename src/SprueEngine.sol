@@ -2,16 +2,55 @@
 pragma solidity ^0.8.27;
 
 import {console} from "forge-std/Script.sol";
-import {VmSafe} from "forge-std/Vm.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, planRpc} from "./Chains.sol";
+import {
+    PROJECT_FILE,
+    chainId,
+    chainKindIn,
+    defaultChainIn,
+    pathIn,
+    planRpcIn,
+    rehearsalPrefixIn,
+    validatedProject
+} from "./Chains.sol";
 import {requireBuild as checkBuild, requireLost as checkLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts, VmRpcJson} from "./ForgeBroadcasts.sol";
-import {isRehearsalNetwork, outputsEnv, slashed} from "./Journal.sol";
+import {isRehearsalNetworkIn, outputsEnv, slashed, unitInputHash} from "./Journal.sol";
 
 /// @dev What the engine needs of the unit that calls it, as its first argument: the engine keeps no state, so
 ///      each call carries the unit's view of the run. `host` is set only under `forge test`, where a unit
 ///      may answer the engine's test hooks; a script may not use its own address.
+/// @dev Where the engine is placed, and the only way to reach it. A static call to it is not a transaction of a
+///      broadcast. Places it on first use, in a view too: forge allows `vm.etch` in a static frame, which only
+///      the compiler forbids. The engine's code is a cache of the build, so a probe that places it and reverts
+///      leaves nothing a rerun reads.
+address constant ENGINE = address(uint160(uint256(keccak256("sprue.engine.v1"))));
+
+function engine() view returns (ISprueEngine) {
+    if (ENGINE.code.length == 0) _asView(_place)();
+    return ISprueEngine(ENGINE);
+}
+
+function _place() {
+    Vm cheat = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    bytes memory code;
+    try cheat.getDeployedCode("SprueEngine.sol:SprueEngine") returns (bytes memory found) {
+        code = found;
+    } catch {
+        revert("sprue's engine is not found by name: a contract named SprueEngine in this project hides it");
+    }
+    cheat.etch(ENGINE, code);
+    cheat.allowCheatcodes(ENGINE);
+    cheat.makePersistent(ENGINE);
+}
+
+function _asView(function() f) pure returns (function() view g) {
+    assembly ("memory-safe") {
+        g := f
+    }
+}
+
 /// @dev The initcode and argument hashes of a contract the unit's `_deployRole` created in this run.
 struct Created {
     bytes32 initcodeHash;
@@ -39,6 +78,8 @@ struct Ctx {
     string deployments;
     string network;
     string script;
+    string graph;
+    bytes32 projectHash;
     string defaultChain;
     string selected;
     bool fenced;
@@ -103,6 +144,7 @@ interface ISprueEngine {
         string[2][] calldata roles,
         ForgeBroadcasts.Create[] calldata found
     ) external view;
+    function validateProject(string calldata path) external view returns (string memory);
     function requireBuild(address addr, string calldata artifact) external view;
     function requireLost(address addr, address deployer, uint256 nonce, string calldata unit) external view;
     function reuseForSend(
@@ -177,6 +219,31 @@ interface ISprueEngine {
     function recordIntent(Ctx calldata ctx, string calldata role, string calldata artifact, bytes calldata args)
         external
         view;
+    function use(Ctx calldata ctx) external view returns (string memory);
+    function leave(Ctx calldata ctx, bool sends) external view returns (string memory);
+    function putChainStamp(Ctx calldata ctx) external view;
+    function checkOutputs(Ctx calldata ctx) external view;
+    function requireClient(Ctx calldata ctx) external view;
+    function checkedAddress(Ctx calldata ctx, string calldata unit, string calldata role)
+        external
+        view
+        returns (address);
+    function recorded(Ctx calldata ctx, string calldata unit, string calldata role) external view returns (address);
+    function journalOf(Ctx calldata ctx, string calldata unit) external view returns (string memory);
+    function checkedOptional(Ctx calldata ctx, string calldata unit, string calldata role)
+        external
+        view
+        returns (bool, address);
+    function certifyChecked(Ctx calldata ctx, string calldata checked) external view;
+    function beginChecked(Ctx calldata ctx, string calldata role, address addr) external view returns (string memory);
+    function certifyRole(Ctx calldata ctx, string calldata obj, string calldata role, address addr) external view;
+    function certificate(
+        Ctx calldata ctx,
+        string calldata journal,
+        string[] calldata names,
+        address[] calldata addrs,
+        uint8[] calldata kinds
+    ) external view returns (string memory);
     function create2Pre(
         Ctx calldata ctx,
         string calldata journal,
@@ -198,8 +265,11 @@ interface ISprueEngine {
 ///         with a static call, so no unit carries the code and no call is a broadcast transaction.
 /// @dev Stateless: every external function takes `Ctx` first, and reads it back from calldata.
 contract SprueEngine is ForgeBroadcasts {
-    function _ctx() private pure returns (Ctx memory) {
-        return abi.decode(msg.data[4:], (Ctx));
+    /// @dev Points into the call's own calldata: a getter copies the one field it returns, not the whole context.
+    function _ctx() private pure returns (Ctx calldata c) {
+        assembly ("memory-safe") {
+            c := add(4, calldataload(4))
+        }
     }
 
     function _unit() internal pure override returns (string memory) {
@@ -210,20 +280,43 @@ contract SprueEngine is ForgeBroadcasts {
         return _ctx().deployments;
     }
 
-    function _graphScript() internal pure override returns (string memory) {
-        revert("the engine names no graph script");
+    /// @dev The project's `sprue.json` as the unit validated it, else validated here: the engine keeps no state to
+    ///      remember it by.
+    function _project() private view returns (string memory json) {
+        json = vm.readFile(PROJECT_FILE);
+        if (keccak256(bytes(json)) != _ctx().projectHash) validatedProject(PROJECT_FILE);
     }
 
-    function _deployScript() internal pure override returns (string memory) {
-        return _ctx().script;
+    function _graphScript() internal view override returns (string memory) {
+        string memory graph = _ctx().graph;
+        return bytes(graph).length == 0 ? pathIn(_project(), "graph") : graph;
     }
 
-    function _defaultChain(string memory) internal pure override returns (string memory) {
-        return _ctx().defaultChain;
+    /// @dev Empty in the context means the one `Deploy*.s.sol` in the unit's directory.
+    function _deployScript() internal view override returns (string memory) {
+        string memory script = _ctx().script;
+        return bytes(script).length == 0 ? _defaultDeployScript() : script;
     }
 
-    function _selectedChain() internal pure override returns (string memory) {
-        return _ctx().selected;
+    /// @dev Empty in the context means the project's rule.
+    function _defaultChain(string memory network) internal view override returns (string memory) {
+        string memory chain = _ctx().defaultChain;
+        if (bytes(chain).length != 0) return chain;
+        chain = defaultChainIn(_project(), network);
+        require(bytes(chain).length != 0, "network.json has several chains and sprue.json sets no chains.default");
+        return chain;
+    }
+
+    function _selectedChain() internal view override returns (string memory) {
+        string memory chain = _ctx().selected;
+        return bytes(chain).length == 0 ? _defaultChain(_networkJson()) : chain;
+    }
+
+    function _checkOutputs() internal override {
+        _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
+        if (_rehearsal()) {
+            _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
+        }
     }
 
     function _networkName() internal pure override returns (string memory) {
@@ -323,6 +416,10 @@ contract SprueEngine is ForgeBroadcasts {
         Create[] calldata found
     ) external {
         _journalRecovered(journal, roles, found);
+    }
+
+    function validateProject(string calldata path) external view returns (string memory) {
+        return validatedProject(path);
     }
 
     function requireBuild(address addr, string calldata artifact) external view {
@@ -460,6 +557,79 @@ contract SprueEngine is ForgeBroadcasts {
 
     function recordDeployment(Ctx calldata, string calldata journal, Deployed calldata d) external returns (uint256) {
         return _recordDeployment(journal, d.role, d.artifact, d.args, d.addr, d.recorded, d.deployer, d.nonce, d.sent, d.dirty);
+    }
+
+    function use(Ctx calldata) external returns (string memory) {
+        return _enter();
+    }
+
+    function leave(Ctx calldata, bool sends) external returns (string memory) {
+        return _leave(sends);
+    }
+
+    function putChainStamp(Ctx calldata) external {
+        _putChainStamp();
+    }
+
+    function checkOutputs(Ctx calldata) external {
+        _checkOutputs();
+    }
+
+    function requireClient(Ctx calldata) external {
+        _requireClient();
+    }
+
+    function checkedAddress(Ctx calldata, string calldata unit, string calldata role) external view returns (address) {
+        return _checked(unit, role);
+    }
+
+    function recorded(Ctx calldata, string calldata unit, string calldata role) external view returns (address) {
+        return _recorded(unit, role);
+    }
+
+    function journalOf(Ctx calldata, string calldata unit) external view returns (string memory) {
+        return _journalOf(unit);
+    }
+
+    function checkedOptional(Ctx calldata, string calldata unit, string calldata role)
+        external
+        view
+        returns (bool, address)
+    {
+        return _checkedOptional(unit, role);
+    }
+
+    function certifyChecked(Ctx calldata, string calldata checked) external {
+        _certify(checked);
+    }
+
+    function beginChecked(Ctx calldata, string calldata role, address addr) external returns (string memory) {
+        return _beginChecked(role, addr);
+    }
+
+    function certifyRole(Ctx calldata, string calldata obj, string calldata role, address addr) external {
+        string memory checked = vm.serializeBytes32(obj, string.concat(role, "CodeHash"), addr.codehash);
+        console.log(string.concat("checked ", checked));
+        _certify(checked);
+    }
+
+    /// @dev The certificate object of the first proved role, with the others' addresses and code hashes, after
+    ///      the receipts of those a unit deployed. `kinds` are `Roles.Kind` values: an extern role has no receipt.
+    function certificate(
+        Ctx calldata,
+        string calldata journal,
+        string[] calldata names,
+        address[] calldata addrs,
+        uint8[] calldata kinds
+    ) external returns (string memory obj) {
+        obj = _beginChecked(names[0], addrs[0]);
+        for (uint256 i; i < names.length; ++i) {
+            if (kinds[i] != 2) _recordReceipt(journal, names[i], addrs[i], kinds[i] == 1);
+            if (i != 0) {
+                vm.serializeAddress(obj, names[i], addrs[i]);
+                vm.serializeBytes32(obj, string.concat(names[i], "CodeHash"), addrs[i].codehash);
+            }
+        }
     }
 
     // ==== Moved from `ForgeBroadcasts` and `Deployment` ====
@@ -856,13 +1026,13 @@ contract SprueEngine is ForgeBroadcasts {
     function _recoverCommand(Create memory c) private view returns (string memory) {
         return string.concat(
             ", or rebuild it: ",
-            isRehearsalNetwork(_networkName()) ? outputsEnv(_dir()) : "",
+            isRehearsalNetworkIn(rehearsalPrefixIn(_project()), _networkName()) ? outputsEnv(_dir()) : "",
             "forge script ",
             _deployScript(),
             " --sig 'recover(string)' ",
             _networkName(),
             " --rpc-url ",
-            planRpc(_networkJson()),
+            planRpcIn(_project(), _networkJson()),
             " --sender ",
             vm.toString(c.from)
         );
@@ -1789,5 +1959,196 @@ contract SprueEngine is ForgeBroadcasts {
         }
         if (sent) _recordDirty(role, dirty);
         else _recordReceipt(_journal(), role, at, true);
+    }
+
+    /// @notice The first call of a unit step. `network` names a directory under the deployments path.
+    ///         Reverts unless the selected chain is the network's default chain (`sprue.json`'s
+    ///         `chains.default`, else the network's only chain), before it reads the unit's own
+    ///         journal. Returns that journal.
+    function _enter() internal returns (string memory journal) {
+        string memory path = string.concat(_dir(), "/network.json");
+        require(vm.exists(path), string.concat(path, " is missing: name a network under ", _deployments(), "/"));
+        string memory file = vm.readFile(path);
+        require(
+            block.chainid == chainId(file, _defaultChain(file)),
+            string.concat("the RPC's chain is not ", _networkName(), "'s default chain")
+        );
+        _requireClient();
+        journal = _journal();
+        string memory stamp = _stampKey(file);
+        if (_has(journal, stamp)) require(_uint(journal, stamp) == block.chainid, "the journal is another chain's");
+    }
+
+    function _putChainStamp() internal {
+        _put(_selectedStampKey(), vm.toString(block.chainid));
+    }
+
+    /// @notice The last call of a unit step. It logs what happened (nothing to send, simulated, or
+    ///         sent), the `git add` command for the files to commit, and the `plan` command to run
+    ///         next, which it returns. The graph owns the order, so a step never names its
+    ///         successor.
+    function _leave(bool sends) internal returns (string memory command) {
+        if (_inProbe()) return "";
+        if (!sends) console.log("nothing to send");
+        else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
+        else console.log("simulated: rerun with --broadcast to send");
+        console.log(string.concat("git add ", _dir(), " broadcast"));
+        command = string.concat(
+            isRehearsalNetworkIn(rehearsalPrefixIn(_project()), _networkName()) ? outputsEnv(_dir()) : "",
+            "forge script ",
+            _graphScript(),
+            " --sig 'plan(string,string)' ",
+            _networkName(),
+            " <node> --rpc-url ",
+            planRpcIn(_project(), _networkJson())
+        );
+        console.log(string.concat("next: ", command));
+    }
+
+    /// @dev The address of `unit`'s `role`, as that unit's `check` step certified it. Reverts unless
+    ///      the journal holds `checked`, it was made on the selected chain, and the code at the
+    ///      address still has the certified hash. A unit should read the contracts it depends on
+    ///      through this and not from another unit's uncertified keys. The certificate's chain is
+    ///      `checked.<role>ChainId` if present, else the default chain's `checked.<chain>ChainId`.
+    function _checked(string memory unit, string memory role) internal view returns (address addr) {
+        string memory record = _checkedRecord(unit, role);
+        addr = _addr(record, string.concat(".checked.", role));
+        _requireCode(addr, role);
+        require(
+            addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
+            string.concat(role, "'s code differs from ", unit, ".json's check")
+        );
+    }
+
+    /// @dev The address `unit`'s journal records for `role`, before that unit's `check`: on the chain the
+    ///      journal is stamped with, with the code hash it records. Unlike `_checked`, nothing vouches for
+    ///      the role's configuration, so read through it only what the role's code fixes.
+    function _recorded(string memory unit, string memory role) internal view returns (address addr) {
+        string memory record = _journalOf(unit);
+        string memory key = string.concat(".", role);
+        require(_has(record, key), string.concat(unit, ".json records no ", role));
+        addr = _addr(record, key);
+        _requireCode(addr, role);
+        require(
+            _has(record, string.concat(key, "CodeHash"))
+                && addr.codehash == vm.parseJsonBytes32(record, string.concat(key, "CodeHash")),
+            string.concat(role, "'s code differs from ", unit, ".json")
+        );
+    }
+
+    /// @dev `unit`'s journal on this network, refused unless it is stamped with this chain.
+    function _journalOf(string memory unit) internal view returns (string memory record) {
+        string memory path = string.concat(_dir(), "/", unit, ".json");
+        require(vm.exists(path), string.concat(unit, ".json is missing"));
+        record = vm.readFile(path);
+        string memory stamp = _stampKey(_networkJson());
+        require(
+            _has(record, stamp) && _uint(record, stamp) == block.chainid,
+            string.concat(unit, ".json is not this chain's")
+        );
+    }
+
+    /// @dev `_checked` for a role that may not exist on this chain: `(false, address(0))` where the
+    ///      check recorded the role absent with `_recordAbsent`, while its address still has no code.
+    ///      Code there since the check reverts, so a dependent never builds on a stale absence.
+    function _checkedOptional(string memory unit, string memory role)
+        internal
+        view
+        returns (bool present, address addr)
+    {
+        string memory record = _checkedRecord(unit, role);
+        string memory absent = string.concat(".checked.", role, "Absent");
+        if (!_has(record, absent) || !vm.parseJsonBool(record, absent)) return (true, _checked(unit, role));
+        require(
+            _addr(record, string.concat(".checked.", role)).code.length == 0,
+            string.concat(role, " has code since ", unit, ".json recorded it absent: a person must resolve it")
+        );
+    }
+
+    function _checkedRecord(string memory unit, string memory role) private view returns (string memory record) {
+        string memory path = string.concat(_dir(), "/", unit, ".json");
+        record = vm.exists(path) ? vm.readFile(path) : "{}";
+        require(_has(record, ".checked"), string.concat(unit, ".json is unchecked: run its check step"));
+        string memory chainKey = string.concat(".checked.", role, "ChainId");
+        require(
+            _uint(record, _has(record, chainKey) ? chainKey : string.concat(".checked", _stampKey(_networkJson())))
+                == block.chainid,
+            string.concat(unit, ".json was checked on another chain")
+        );
+    }
+
+    /// @dev Writes `checked` when `_writing()` and the journal does not already hold an equal one.
+    ///      Equality ignores the values of the fixed keys `evmBlock`, `l1Block` and `l2Block`: a block
+    ///      records where the role was first certified, so a rerun leaves the journal byte for byte.
+    function _certify(string memory checked) internal {
+        if (!_writing()) return;
+        string memory journal = _journal();
+        if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
+        if (_inProbe()) revert StepDue();
+        vm.writeJson(checked, _path(), ".checked");
+    }
+
+    /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
+    ///      id, the role's address and, when the unit has an input file, `inputHash`
+    ///      (`unitInputHash`): a plan judges a certificate of other inputs stale. The caller adds its own
+    ///      keys and ends with `_certify`. Forge keeps a serialized object for the whole run, so it starts
+    ///      empty: no key of an earlier check in the same run survives into this certificate.
+    function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
+        obj = string.concat(role, "-checked");
+        vm.serializeJson(obj, "{}");
+        vm.serializeUint(obj, "evmBlock", block.number);
+        vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
+        bytes32 input = unitInputHash(_networkName(), _unit());
+        if (input != 0) vm.serializeBytes32(obj, "inputHash", input);
+        vm.serializeAddress(obj, role, addr);
+    }
+
+    /// @dev The script that a refusal's recovery command names: the one `Deploy*.s.sol` in the
+    ///      unit's directory. A broadcast record may come from any script that sent the CREATE, so
+    ///      the command cannot take the script from the record.
+    function _defaultDeployScript() internal view returns (string memory script) {
+        string memory dir = string.concat(pathIn(_project(), "units"), "/", _unit(), "/");
+        VmSafe.DirEntry[] memory files = vm.readDir(dir);
+        uint256 found;
+        for (uint256 i; i < files.length; ++i) {
+            string[] memory parts = vm.split(slashed(files[i].path), "/");
+            string memory name = parts[parts.length - 1];
+            if (vm.indexOf(name, "Deploy") == 0 && _endsWith(name, ".s.sol")) {
+                script = string.concat(dir, name);
+                ++found;
+            }
+        }
+        require(found == 1, string.concat(dir, " must hold exactly one Deploy*.s.sol"));
+    }
+
+    /// @dev Reads only the environment, which cannot see `foundry.toml`: the runner checks
+    ///      `forge config` too.
+    function _requireOutput(string memory label, string memory variable, string memory unset, string memory expected)
+        internal
+        view
+    {
+        string memory actual = vm.envOr(variable, unset);
+        require(
+            keccak256(bytes(actual)) == keccak256(bytes(expected)),
+            string.concat(
+                "forge would keep this run's ", label, " in ", actual, ", not ", expected, ": run it as plan prints"
+            )
+        );
+    }
+
+    /// @dev The RPC server this forge script sends to, however forge resolved it (a `FOUNDRY_*` variable
+    ///      beats `--rpc-url`), is Anvil exactly when the network is a rehearsal one, unless the chain is
+    ///      local. The runner checks the server it resolves; this checks the one the sends reach. Only a
+    ///      broadcast sends: a dry run, or a simulated rehearsal against a server other than Anvil, stays
+    ///      legitimate. `--resume` sends the cached transactions without this check.
+    function _requireClient() internal {
+        if (!vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) return;
+        if (keccak256(bytes(chainKindIn(_project(), block.chainid))) == keccak256("local")) return;
+        bool anvil = vm.indexOf(abi.decode(vm.rpc("web3_clientVersion", "[]"), (string)), "anvil/") == 0;
+        bool rehearsal = isRehearsalNetworkIn(rehearsalPrefixIn(_project()), _networkName());
+        string memory why = rehearsal
+            ? " is not served by Anvil, which a rehearsal network requires"
+            : " is served by Anvil, a development node: rehearse on a rehearsal network";
+        require(anvil == rehearsal, string.concat("chain ", vm.toString(block.chainid), why));
     }
 }

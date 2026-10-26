@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {cheats} from "./DeployChecks.sol";
+import {engine} from "./SprueEngine.sol";
 
 // A network's chains by name, from the `chains` map of its `network.json`. Each chain names its RPC by a
 // `foundry.toml` `[rpc_endpoints]` alias, never a URL, which may carry an API key. Only a rehearsal copy
@@ -31,8 +32,11 @@ function chainRpc(string memory network, string memory chain, bool optional) vie
 
 /// @dev The `rpc` that `plan` reads: the default chain's, else the first chain's. Never
 ///      reverts: a step prints it after it sends.
-function planRpc(string memory network) view returns (string memory rpc) {
-    string memory project = projectJson();
+function planRpc(string memory network) view returns (string memory) {
+    return planRpcIn(projectJson(), network);
+}
+
+function planRpcIn(string memory project, string memory network) view returns (string memory rpc) {
     string memory chain =
         cheats.keyExistsJson(project, ".chains.default") ? cheats.parseJsonString(project, ".chains.default") : "";
     if (bytes(chain).length == 0 || !cheats.keyExistsJson(network, string.concat(".chains.", chain))) {
@@ -101,7 +105,10 @@ function isFencedChainId(uint256 id) view returns (bool) {
 
 /// @dev Derived from `sprue.json` by chain id and never stored, so no edit to a journal changes it.
 function chainKind(uint256 id) view returns (string memory) {
-    string memory json = projectJson();
+    return chainKindIn(projectJson(), id);
+}
+
+function chainKindIn(string memory json, uint256 id) pure returns (string memory) {
     if (_listed(json, ".chains.local", id)) return "local";
     return _listed(json, ".chains.test", id) ? "test" : "live";
 }
@@ -153,15 +160,24 @@ function projectJson() view returns (string memory json) {
     assembly ("memory-safe") {
         checked := sload(slot)
     }
-    if (checked != keccak256(bytes(json))) validatedProject(PROJECT_FILE);
+    if (checked != keccak256(bytes(json))) engine().validateProject(PROJECT_FILE);
 }
 
 /// @dev Where a contract keeps the hash of the `sprue.json` it validated. Each step validates it once:
 ///      a full check costs dozens of cheatcodes, and a step reads the file in nearly every journal access.
 bytes32 constant PROJECT_CHECKED_SLOT = keccak256("sprue.project.checked");
 
+/// @dev The hash a contract remembered, which a call to the engine carries so that the engine does not validate
+///      the file again.
+function checkedProject() view returns (bytes32 checked) {
+    bytes32 slot = PROJECT_CHECKED_SLOT;
+    assembly ("memory-safe") {
+        checked := sload(slot)
+    }
+}
+
 function rememberProject() {
-    bytes32 hash = keccak256(bytes(validatedProject(PROJECT_FILE)));
+    bytes32 hash = keccak256(bytes(engine().validateProject(PROJECT_FILE)));
     bytes32 slot = PROJECT_CHECKED_SLOT;
     assembly ("memory-safe") {
         sstore(slot, hash)

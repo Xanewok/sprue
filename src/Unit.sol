@@ -3,9 +3,10 @@ pragma solidity ^0.8.27;
 
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, chainRpc, deploymentsDir, graphScript, isFencedChainId, isTestChain, unitsDir} from "./Chains.sol";
+import {chainId, chainRpc, deploymentsDir, isFencedChainId, isTestChain} from "./Chains.sol";
 import {Roles} from "./Roles.sol";
 import {isRehearsalNetwork, slashed} from "./Journal.sol";
+import {engine} from "./SprueEngine.sol";
 import {Declares} from "./graph/Step.sol";
 
 /// @notice The base of a deploy unit. It reads the network's `network.json`, keeps the unit's journal
@@ -13,28 +14,6 @@ import {Declares} from "./graph/Step.sol";
 abstract contract Unit is Roles, Declares {
     function _deployments() internal view override returns (string memory) {
         return deploymentsDir();
-    }
-
-    function _graphScript() internal view override returns (string memory) {
-        return graphScript();
-    }
-
-    /// @dev The script that a refusal's recovery command names: the one `Deploy*.s.sol` in the
-    ///      unit's directory. A broadcast record may come from any script that sent the CREATE, so
-    ///      the command cannot take the script from the record.
-    function _deployScript() internal view virtual override returns (string memory script) {
-        string memory dir = string.concat(unitsDir(), "/", _unit(), "/");
-        VmSafe.DirEntry[] memory files = vm.readDir(dir);
-        uint256 found;
-        for (uint256 i; i < files.length; ++i) {
-            string[] memory parts = vm.split(slashed(files[i].path), "/");
-            string memory name = parts[parts.length - 1];
-            if (vm.indexOf(name, "Deploy") == 0 && _endsWith(name, ".s.sol")) {
-                script = string.concat(dir, name);
-                ++found;
-            }
-        }
-        require(found == 1, string.concat(dir, " must hold exactly one Deploy*.s.sol"));
     }
 
     function _fenced() internal view override returns (bool) {
@@ -91,7 +70,7 @@ abstract contract Unit is Roles, Declares {
             block.chainid == chainId(_networkJson(), chain),
             string.concat("chain ", chain, "'s rpc serves another chain id than network.json's")
         );
-        _requireClient();
+        engine().requireClient(_ctx(false, true));
         journal = _journal();
         string memory key = string.concat(".", chain, "ChainId");
         if (_has(journal, key)) {

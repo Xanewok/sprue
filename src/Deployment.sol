@@ -4,10 +4,10 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId} from "./Chains.sol";
+import {chainId, checkedProject} from "./Chains.sol";
 import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
 import {Certificate} from "./Journal.sol";
-import {Created, Ctx, Deployed, ISprueEngine} from "./SprueEngine.sol";
+import {Created, Ctx, Deployed, ISprueEngine, engine} from "./SprueEngine.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
 ///      from deploying it twice.
@@ -134,27 +134,8 @@ abstract contract Deployment is ForgeBroadcasts {
 
     // ==== The engine ====
 
-    /// @dev Where `SprueEngine` is placed. A static call to it is not a transaction of a broadcast.
-    address internal constant ENGINE = address(uint160(uint256(keccak256("sprue.engine.v1"))));
-
-    /// @dev Places the engine on first use, outside a view too: forge allows `vm.etch` in a static frame, which
-    ///      only the compiler forbids. The engine's code is a cache of the build, so a probe that places it and
-    ///      reverts leaves nothing a rerun reads.
     function _engine() private view returns (ISprueEngine) {
-        if (ENGINE.code.length == 0) _asView(_place)();
-        return ISprueEngine(ENGINE);
-    }
-
-    function _place() private {
-        vm.etch(ENGINE, vm.getDeployedCode("SprueEngine.sol:SprueEngine"));
-        vm.allowCheatcodes(ENGINE);
-        vm.makePersistent(ENGINE);
-    }
-
-    function _asView(function() internal f) private pure returns (function() internal view g) {
-        assembly ("memory-safe") {
-            g := f
-        }
+        return engine();
     }
 
     /// @dev A test unit that answers the engine's hooks returns itself; a script must never name its own address.
@@ -162,11 +143,13 @@ abstract contract Deployment is ForgeBroadcasts {
         return address(0);
     }
 
-    function _ctx(bool script, bool chains) private view returns (Ctx memory c) {
+    function _ctx(bool script, bool chains) internal view returns (Ctx memory c) {
         c.host = _testHost();
         c.unit = _unit();
         c.deployments = _deployments();
         c.network = _networkName();
+        c.graph = _graphScript();
+        c.projectHash = checkedProject();
         if (script) c.script = _deployScript();
         if (chains) {
             c.defaultChain = _defaultChain(_networkJson());
@@ -242,7 +225,72 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     function _journalRecovered(string memory journal, string[2][] memory roles, Create[] memory found) internal {
-        _engine().journalRecovered(_ctx(false, true), journal, roles, found);
+        _engine().journalRecovered(_ctx(true, true), journal, roles, found);
+    }
+
+    function _use(string memory network) internal returns (string memory) {
+        _adopt(network);
+        return _engine().use(_ctx(false, true));
+    }
+
+    function _checkOutputs() internal override {
+        _engine().checkOutputs(_ctx(false, false));
+    }
+
+    /// @dev Empty: the engine reads `paths.graph` of `sprue.json`.
+    function _graphScript() internal view virtual override returns (string memory) {
+        return "";
+    }
+
+    /// @dev Empty: the engine finds the one `Deploy*.s.sol` in the unit's directory. A unit whose script lives
+    ///      elsewhere, as a test's, names it.
+    function _deployScript() internal view virtual override returns (string memory) {
+        return "";
+    }
+
+    /// @dev Empty: the engine applies the project's rule, `chains.default` else the network's only chain.
+    function _defaultChain(string memory) internal view virtual override returns (string memory) {
+        return "";
+    }
+
+    function _done(bool sends) internal returns (string memory) {
+        _stepOpen = false;
+        _stepEnded();
+        if (_inProbe()) return "";
+        return _engine().leave(_ctx(false, false), sends);
+    }
+
+    function _putChainStamp() internal {
+        _engine().putChainStamp(_ctx(false, true));
+    }
+
+    function _checked(string memory unit, string memory role) internal view returns (address) {
+        return _engine().checkedAddress(_ctx(false, true), unit, role);
+    }
+
+    function _recorded(string memory unit, string memory role) internal view returns (address) {
+        return _engine().recorded(_ctx(false, true), unit, role);
+    }
+
+    function _journalOf(string memory unit) internal view returns (string memory) {
+        return _engine().journalOf(_ctx(false, true), unit);
+    }
+
+    function _checkedOptional(string memory unit, string memory role) internal view returns (bool, address) {
+        return _engine().checkedOptional(_ctx(false, true), unit, role);
+    }
+
+    function _certify(string memory checked) internal {
+        _engine().certifyChecked(_ctx(false, true), checked);
+    }
+
+    function _beginChecked(string memory role, address addr) internal returns (string memory) {
+        return _engine().beginChecked(_ctx(false, true), role, addr);
+    }
+
+    function _certifyRole(string memory obj, string memory role, address addr) internal returns (string memory) {
+        _certify(vm.serializeBytes32(obj, string.concat(role, "CodeHash"), addr.codehash));
+        return _done(false);
     }
 
     function _ctxCreated(string memory journal, string memory role) private view returns (Ctx memory c) {
@@ -641,9 +689,7 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev Writes `c` on its role's code hash, prints it, and ends the step.
     function _certify(Certificate memory c) internal returns (string memory) {
-        string memory checked = vm.serializeBytes32(c.obj, string.concat(c.role, "CodeHash"), c.addr.codehash);
-        console.log(string.concat("checked ", checked));
-        _certify(checked);
+        _engine().certifyRole(_ctx(false, true), c.obj, c.role, c.addr);
         return _done(false);
     }
 
