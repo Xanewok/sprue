@@ -178,7 +178,7 @@ Surveyed 2026-10. No tool combined Solidity-only steps, plain CREATE, and gates 
 | Tool | Borrowed or lacking |
 |---|---|
 | Foundry alone | `broadcast/` and `--resume` finish one run; no graph, no journal, a rerun resends every CREATE. |
-| Hardhat Ignition | A module graph and an intent journal, refusing a rerun with other arguments (copied for a pending CREATE). Node-based; no code-hash check, no gates. |
+| Hardhat Ignition | A module graph and an intent journal, refusing a rerun with other arguments in every state (copied for a pending CREATE). Node-based; after a successful deploy it does not compare the bytecode; no gates. |
 | hardhat-deploy, rocketh | A file per deployment returned on rerun. TypeScript; redeploys on drift unless told to skip. |
 | Cannon | Step packages with snapshots. TOML recipe; a public registry. |
 | Sphinx, treb | Solidity declarations, Safe execution, same addresses on every chain. CREATE2 or CreateX deploys. |
@@ -186,8 +186,11 @@ Surveyed 2026-10. No tool combined Solidity-only steps, plain CREATE, and gates 
 | Catapulta | Hosted deploy and verification. A Node CLI and a service. |
 | Terraform | Plan and apply, `depends_on`, drift. Inverted authority: it trusts its state, sprue's steps trust the chain, and a lost journal makes a step refuse while records show the deployment. |
 
-What none has: a calendar of operations that the chain gates, and a code-hash check of every reused
-contract against its recorded build. What sprue lacks against them: Safe export for post-handover steps
+What none has: a calendar of operations that the chain gates, a code-hash check of every reused
+contract against its recorded build, and a declaration of how each send is done. Sphinx and treb take
+done from the chain; Ignition, hardhat-deploy and rocketh from a journal (hardhat-deploy reads the chain
+for a deterministic deploy, rocketh for its optional guards); Cannon from a step hash, plus a code check
+of a CREATE2 deploy. What sprue lacks against them: Safe export for post-handover steps
 (ROADMAP) and the same addresses across chains. Confirmations: Ignition asks once for any chain but 31337;
 Sphinx asks before a proposal; forge has no general confirmation for public networks.
 
