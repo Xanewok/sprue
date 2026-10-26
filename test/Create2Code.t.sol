@@ -39,7 +39,7 @@ contract Create2Unit is ToyUnit {
     }
 }
 
-/// @notice `requireCode` and the CREATE2 helpers, which `_deployRole` does not reach.
+/// @notice `requireCode` and the CREATE2 helpers, which `_deployIdentified` does not reach.
 contract Create2CodeTest is Test {
     address private constant FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     bytes private constant FACTORY_CODE =
@@ -144,39 +144,54 @@ contract Create2CodeTest is Test {
 
     /// @dev The pin refuses before the factory call: forge keeps a reverted run's broadcasts in its dry run.
     function test_deployRoleCreate2_refusesAnotherDeployerThanThePin_beforeTheFactoryCall() public {
-        Create2Unit unit = new Create2Unit();
-        address ops = makeAddr("ops");
-        address pin = makeAddr("pin");
-        unit.setTestSender(ops);
-        string memory net = "create2-checks";
-        string memory dir = string.concat(DIR, net);
-        if (vm.exists(dir)) vm.removeDir(dir, true);
-        vm.createDir(dir, true);
-        string memory networkJson = string.concat(dir, "/network.json");
-        vm.writeFile(
-            networkJson, string.concat('{"chains": {"main": {"id": 31337}}, "deployer": "', vm.toString(pin), '"}')
-        );
-        vm.chainId(31337);
-        vm.etch(FACTORY, FACTORY_CODE);
-        bytes32 salt = bytes32(uint256(1));
-        address at = vm.computeCreate2Address(
-            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
-        );
+        (Create2Unit unit, string memory net, bytes32 salt, address at) = _pinnedToAnother("create2-checks");
 
         vm.expectCall(FACTORY, "", 0);
         vm.expectRevert(
             bytes(
                 string.concat(
-                    vm.toString(ops),
+                    vm.toString(makeAddr("ops")),
                     " is not ",
-                    dir,
+                    DIR,
+                    net,
                     "/network.json's deployer ",
-                    vm.toString(pin),
+                    vm.toString(makeAddr("pin")),
                     ": run with that key, or pass --unsafe-unexpected-deployer to sprue (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
                 )
             )
         );
         unit.deploy2(net, salt, at);
+    }
+
+    function test_deployRoleCreate2_anotherDeployerThanThePin_sendsWithTheOptIn() public {
+        (Create2Unit unit, string memory net, bytes32 salt, address at) = _pinnedToAnother("create2-opt-in");
+        unit.allowOtherDeployer();
+
+        assertTrue(unit.deploy2(net, salt, at), "the opt-in did not send");
+        assertGt(at.code.length, 0);
+    }
+
+    /// @dev A network that pins `pin`, and a unit that sends as `ops`.
+    function _pinnedToAnother(string memory net)
+        private
+        returns (Create2Unit unit, string memory, bytes32 salt, address at)
+    {
+        unit = new Create2Unit();
+        unit.setTestSender(makeAddr("ops"));
+        string memory dir = string.concat(DIR, net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(dir, true);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains": {"main": {"id": 31337}}, "deployer": "', vm.toString(makeAddr("pin")), '"}')
+        );
+        vm.chainId(31337);
+        vm.etch(FACTORY, FACTORY_CODE);
+        salt = bytes32(uint256(1));
+        at = vm.computeCreate2Address(
+            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
+        );
+        return (unit, net, salt, at);
     }
 
     function test_deployRoleCreate2_checksTheRecordedCode_andTheAdoptedBuild() public {
@@ -244,10 +259,5 @@ contract Create2CodeTest is Test {
         string memory journal = vm.readFile(string.concat(dir, "/toy.json"));
         assertEq(vm.parseJsonBytes32(journal, ".toyTx"), toFactory);
         assertEq(vm.parseJsonUint(journal, ".toyBlock"), 5);
-
-        vm.writeJson(vm.toString(deployed), string.concat(dir, "/toy.json"), ".toy");
-        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(3)));
-        unit.send(bytes.concat(bytes32(uint256(1)), initcode));
-        assertEq(unit.findCreationInput(net), initcode, "the creation input is the initcode after the salt");
     }
 }

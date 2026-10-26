@@ -33,6 +33,10 @@ longer compiles, and a unit's own `_deploy` or `_at` passed as a function pointe
 `_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
 recorded arguments be the step's.
 
+Breaking: the deploy API before roles is deleted: `_deployRole`, `_recover`, `_recovering` and the 4-argument
+`_createToRecover`. A unit declares its contracts in `_roles()` and deploys them with `_deploy(role)`;
+`contract X is Unit, Recovers` gives it `recover`.
+
 Fixed: a deploy step's probe for a role its journal lacks ran the stray guard, which reads every script's
 records on the chain, at a gas cost that grew with the square of their size: 24 records of 160 kB cost 167M,
 so a probe ran out of gas. The guard now asks once per run whether it names the artifact, and frees each
@@ -70,18 +74,11 @@ Fixed: a role whose receipt or check is journaled but whose address shows no cod
 lagging RPC or a reset chain, instead of resent or replaced. Before, the stale `checked` entry vouched for
 a resent contract with the same code.
 
-`Proof.Journaled` proves a reused role by its journal's pinned CREATE record
-(`_requireJournaledCreate`), with no creation transaction. `_deployRole(journal, role, artifact, args,
-proof, check)` runs `check` after any proof, and `Proof.Authenticate` needs that form.
-`_reuseJournaled(journal, role, args)` is `_reuse` with that proof. `_requireJournaledCreate` refuses when
-`network.json` pins no deployer. For tests, `unit.trustTestCreationOf(journal, role)` trusts one role's
-journaled intent as its creation in this run.
+For tests, `unit.trustTestCreationOf(journal, role)` trusts one role's journaled intent as its creation in
+this run.
 
 `_inputFile(unit)` reads another unit's input file as an `Input`, and `_decided`, `_inputUint` and
 `_requiredAddress` take one, so that a refusal names the file read.
-
-`_requireJournaledCreate(journal, role, args)` holds a role's record to the step's arguments, the pinned
-deployer and the CREATE address of its recorded nonce. It reads the journal only.
 
 `_recorded(unit, role)` reads another unit's role before its `check`: the journal must record it on this
 chain, and its code must have the recorded hash.
@@ -89,29 +86,17 @@ chain, and its code must have the recorded hash.
 `_want(holds, target, value, call)` sends `value` wei with `call`; with an empty `call`, a plain
 transfer, which may go to an address without code.
 
-`_deployRole(journal, role, artifact, args, proof)` creates `artifact` from its initcode with `args`, so
-a unit needs no `create` callback, and proves a reuse by `proof`.
-
 Breaking, for tests: a creation proof that finds no transaction now refuses in a test as in a script.
 A test that relies on forge keeping no transaction history calls `unit.trustTestCreations()`.
-`_deployRole(..., create, Proof.WithArgs)` proves a reused role with `_requireCreatedWith`.
 `_certificate(role, addr)` starts a certificate without journaling a receipt, for a contract the unit
 did not deploy.
 
 For tests, `Probes.due(unit, step, sender)` judges a step as the plan does: true while due, false once
 done, and the step's own revert otherwise.
 
-`_reuse(journal, role, args)` returns a role's recorded address for a step after its deploy step, once
-its code is the journal's and its creation took `args` (`_requireCreatedWith`).
-
 A `check` step builds its certificate with `_certify(_certificate(journal, role, addr).withCode("vault",
 vault).withUint(...))`: `_certificate` journals the role's receipt and starts the certificate, each
 `with...` adds a key, and `_certify` writes it on the role's code hash, prints it once and ends the step.
-
-`_requireCreatedWith(journal, role, args)` proves a role's constructor arguments without this build's
-code: the creation input must be code that hashes to the journal's new `<role>CreationCodeHash`,
-followed by `args`. A role whose source changed after its deployment passes. A journal written before
-that key has the input proven against `<role>InitcodeHash` and `args` against `<role>Args`.
 
 `plan` judges a step that has no `Due` view by running it as its sender in a probe that reverts its EVM
 state: the step
@@ -124,13 +109,6 @@ judged by their probe. A step that calls `vm.startBroadcast` directly waits unti
 `_want(holds, target, call)` sends `call` in the step's broadcast unless `holds`. `_startBroadcast()`
 opens a broadcast only when forge has none open, and `_done()` closes it and reports whether the step
 created a transaction, from the broadcaster's nonce.
-
-`_requireCreatedFrom(journal, role, artifact, args)` proves that a role was created from this build's
-artifact with the step's constructor arguments: it compares the creation transaction's whole input, as
-the chain shows it, with the initcode. It reads only the transaction's hash from the journal, a
-broadcast record or the chain. `_deployRole` without an `authenticate` argument runs it on a reused
-role; with one, nothing changes. `_findCreationInput(journal, role)` returns that input for a unit
-that compares it with something else.
 
 Fixed: `_recordReceipt` finds a CREATE's transaction on the chain, by the journal's deployer and
 nonce, when no broadcast record holds its receipt, as after a killed forge. Before, the role had no

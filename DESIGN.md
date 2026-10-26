@@ -40,9 +40,9 @@ What sprue relies on and cannot check.
 - One operator and one key per journal, until a pending transaction resolves. The nonce fence reads the
   CREATE addresses of the sender, the pin and every journal's deployers, up to 256 nonces each; it does not
   see a CREATE2 deployment, a CREATE of any other key, or a transaction another key still has pending.
-- The unit author keeps steps idempotent, makes `_authenticate` check the state and arguments of a reused
-  contract (the library checks only code, and with `_requireCreatedFrom` the creation's arguments), and
-  makes `Due` views report real remaining work (SECURITY.md).
+- The unit author keeps steps idempotent, makes a role's `.ensure` check the state of a reused contract
+  (the library proves its identity, code and recorded constructor arguments), and makes `Due` views report
+  real remaining work (SECURITY.md).
 - The terminal check guards against an accident, not an agent: a keystore password file decrypts without a
   person. No agent or CI should hold a key for a public chain.
 - `sprue.json` and `network.json` are the project's to get right; sprue validates their shape, not their meaning.
@@ -91,8 +91,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    compiled from the unit's script has `recover(string)`. A stray CREATE2 landing is refused, not adopted.
 4. **Journals are per unit and committed.** Addresses, intent, the code each contract must have, and the
    build metadata. Git is the history. Stamped with the chain id the step last selected.
-5. **A deploy step converges.** `_deployRole` authenticates what it reuses, by the unit's `authenticate` or
-   by its creation (`_requireCreatedFrom`), and sends only a missing role;
+5. **A deploy step converges.** `_deploy(role)` proves what it reuses, by the identity its journal records
+   and the role's `.ensure`, and sends only a missing role;
    `_done` ends a step by printing what it sent, the files to commit and the next `plan` command;
    `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
    broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.

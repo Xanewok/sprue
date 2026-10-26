@@ -69,7 +69,7 @@ abstract contract ToyJournal is Roles, Declares {
     }
 }
 
-/// @dev One role, `toy`, deployed through `_deployRole` and certified by `check`.
+/// @dev One role, `toy`, deployed through `_deployIdentified` and certified by `check`.
 contract ToyUnit is ToyJournal {
     uint256 public tag = 1;
     uint256 public hooks;
@@ -96,38 +96,12 @@ contract ToyUnit is ToyJournal {
         sentInput = input;
     }
 
-    function findCreationInput(string calldata network) external returns (bytes memory) {
-        return _findCreationInput(_use(network), "toy");
-    }
-
-    function requireCreatedFrom(string calldata network) external {
-        _requireCreatedFrom(_use(network), "toy", "ToyPayload", abi.encode(tag));
-    }
-
-    function requireCreatedWith(string calldata network) external {
-        _requireCreatedWith(_use(network), "toy", abi.encode(tag));
-    }
-
     function recordedOf(string calldata network, string calldata unit, string calldata role)
         external
         returns (address)
     {
         _use(network);
         return _recorded(unit, role);
-    }
-
-    function requireJournaledCreate(string calldata network) external {
-        _requireJournaledCreate(_use(network), "toy", abi.encode(tag));
-    }
-
-    function requireJournaledCreateOf(string calldata network, string calldata unit) external {
-        _use(network);
-        _requireJournaledCreate(unit, _journalOf(unit), "toy", abi.encode(tag));
-    }
-
-    function deployJournaled(string calldata network) external returns (string memory) {
-        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.Journaled, _refusable);
-        return _done(sent);
     }
 
     function deploy2(string calldata network, bytes32 salt, address at) external returns (bool) {
@@ -142,36 +116,9 @@ contract ToyUnit is ToyJournal {
         return _inputUint(_inputFile(unit), key, 1, 10);
     }
 
-    function reuse(string calldata network) external returns (address) {
-        return _reuse(_use(network), "toy", abi.encode(tag));
-    }
-
-    function reuseJournaled(string calldata network) external returns (address) {
-        return _reuseJournaled(_use(network), "toy", abi.encode(tag));
-    }
-
-    function requireCreatedWithArgs(string calldata network, bytes calldata args) external {
-        _requireCreatedWith(_use(network), "toy", args);
-    }
-
-    function deployFromInitcode(string calldata network) external returns (string memory) {
-        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.WithArgs);
-        return _done(sent);
-    }
-
-    function deployWithArgs(string calldata network) external returns (string memory) {
-        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create, Proof.WithArgs);
-        return _done(sent);
-    }
-
-    function deployByCreation(string calldata network) external returns (string memory) {
-        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create);
-        return _done(sent);
-    }
-
     function deploy(string calldata network) external returns (string memory) {
         string memory m = _use(network);
-        (, bool sent) = _deployRole(m, "toy", "ToyPayload", abi.encode(tag), _create, _authenticate);
+        (, bool sent) = _deployIdentified(m, "toy", "ToyPayload", abi.encode(tag), _authenticate);
         return _done(sent);
     }
 
@@ -194,8 +141,7 @@ contract ToyUnit is ToyJournal {
         return _certify(c);
     }
 
-    /// @dev `_recover` with the test sender, which `_recovering` cannot take: it asks forge for
-    ///      its own, and a test has none but the default.
+    /// @dev A one-role `recover` with the test sender: forge has no other under `forge test`.
     function recover(string calldata network) external returns (string memory) {
         string memory m = _use(network);
         _startBroadcast();
@@ -204,14 +150,9 @@ contract ToyUnit is ToyJournal {
         string[2][] memory roles = new string[2][](1);
         roles[0] = ["toy", "ToyPayload"];
         Create[] memory found = new Create[](1);
-        found[0] = _createToRecover(m, "toy", "ToyPayload", sender);
+        found[0] = _createToRecover(m, "toy", "ToyPayload", sender, 0);
         _requireCurrent(found[0], "ToyPayload", abi.encode(tag));
         _journalRecovered(m, roles, found);
-        return _done(false);
-    }
-
-    function recoverAsForge(string calldata network) external returns (string memory) {
-        _recover(network, "toy", "ToyPayload", abi.encode(tag));
         return _done(false);
     }
 
@@ -282,15 +223,12 @@ contract ToyUnit is ToyJournal {
         journaledAtHook = vm.exists(_path()) && _has(vm.readFile(_path()), ".toyInitcodeHash");
     }
 
-    function _create(bytes memory args) private returns (address) {
-        return address(new ToyPayload(abi.decode(args, (uint256))));
-    }
-
     function _refusable(address, bytes memory) private view {
         require(!refuseReuse, "the check refused the reuse");
     }
 
     function _authenticate(address addr, bytes memory args) private view {
+        _refusable(addr, args);
         require(ToyPayload(addr).tag() == abi.decode(args, (uint256)), "the payload's tag differs from the input");
     }
 

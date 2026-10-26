@@ -38,12 +38,6 @@ end-to-end scenario for each invariant.
 
 - Steps must be idempotent: a rerun sends nothing that the chain already has. The library cannot tell
   a step that repeats a send from one that does not.
-- `_authenticate` must check the constructor arguments and state of a contract the journal reuses. The
-  library checks its code, not its state. `_requireCreatedFrom` checks the constructor arguments, as
-  the creation transaction on the chain shows them, and that the code is this build's;
-  `_requireCreatedWith` checks the arguments after the code the journal records, so its code's
-  identity rests on the journal and the certified code hash. The state that later transactions change
-  stays with the unit.
 - A declared role's `.ensure` must check the state that later transactions change. Its constructor
   arguments are proven against the journal's record of them, which no step re-reads from the creation
   transaction: a hand edit of `<role>Args` alone, with the same code, passes until something compares it
@@ -56,12 +50,11 @@ end-to-end scenario for each invariant.
 - A step journals each role's intent and address before forge sends. If the broadcast fails partway,
   some journaled addresses have no code yet. Rerun the step; a pending intent is sent again only as
   the same transaction.
-- `_requireCreatedFrom` finds a CREATE2 role's transaction only in its broadcast records or the
-  journal's `<role>Tx`, and a CREATE's on the chain only through an RPC that serves the deployer's
-  nonce at past blocks. Where it finds none, it refuses, in a test too unless the test calls `trustTestCreations()`. A
-  contract that the same unit's `_deployRole` created in this run is judged by that unit's record of
-  the chain, address and initcode, since a simulation's deployment has no transaction; another unit
-  proving it is refused.
+- A CREATE role is proven only with its creation transaction: the journal's `<role>Tx`, the unit's own
+  broadcast records, or the chain, through an RPC that serves the deployer's nonce at past blocks. Where
+  none shows it, the proof refuses, in a test too unless the test calls `trustTestCreations()`. A role that
+  the same unit created in this run passes without one, since a simulation's deployment has no
+  transaction; another unit proving it is refused.
 - Chains in `chains.local` and `chains.test` have no nonce fence. Losing a journal and its broadcast
   records there can deploy a role twice.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
