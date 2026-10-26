@@ -12,11 +12,13 @@ import {ForgeTranscript} from "./ForgeTranscript.sol";
 
 /// @notice Runs a project's real graph in process, under `forge test`, as the graph's commands would
 ///         run it: each step is sent by its own account and every send is counted from the state diff.
-/// @dev Guarantees: every send a step's call makes, including a raw `vm.broadcast`, is in the transcript, and a
-///      send made anywhere else in the run, such as by a `Due` view, fails the nonce check of a watched sender.
-///      The watched senders are the nodes' senders and forge's default sender; a send from any other account is
-///      in the transcript but has no nonce check. A body is entered from the graph, not from `--sender`; `quiet`
-///      catches a body that branches on its caller by requiring the planner's `Done`.
+/// @dev Guarantees: every send a step's call makes, including a raw `vm.broadcast`, is in the transcript. A send
+///      anywhere else in a run or a judgment, such as a `Due` view that broadcasts from any account, fails with
+///      its sender. A predicate's `_meet` runs outside the recording as the world's act: a broadcast in it from a
+///      watched account can fail the nonce reconciliation, and one from any other account is not seen. Each
+///      watched sender's nonce must move by its entries; the watched senders are the nodes' senders and forge's
+///      default sender. A body is entered from the graph, not from `--sender`; `quiet` probes it as the sender
+///      too, up to its first send (DESIGN.md, "The steps the fixture judges").
 abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     Graph private _graph;
     string private _net;

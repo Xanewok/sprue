@@ -52,7 +52,7 @@ What sprue relies on and cannot check.
 
 The test fixture (`test/GraphTest.sol`, which reads Foundry only through `test/ForgeTranscript.sol`) relies on
 these behaviours of `forge test`. Each is pinned in `test/FoundryFacts.t.sol`, so a Foundry upgrade that changes
-one fails there first.
+one fails there first, except those listed as not pinned below the table.
 
 | Behaviour | Pin |
 |---|---|
@@ -68,7 +68,12 @@ one fails there first.
 | A snapshot restores the clock and nonces but not files, and a replayed CREATE lands at its recorded address | `test_snapshot_restoresTimestampAndNonceButKeepsFileWrites`, `test_snapshot_replayedCreateLandsAtRecordedAddress` |
 | A broadcast from an account that has code is a call from that account whose parent frame belongs to the script that called `vm.broadcast` | `test_broadcast_fromAnAccountWithCodeHasAParentOfAnotherAccount` |
 | A prank makes a call from the pranked account, so a probe's call to its own unit shows as a send from that account; its parent is the probe's frame | `test_prank_makesAProbesSelfCallACallFromThePrankedAccount` |
-| A prank is still active in the called frame, so the fixture cannot enter a step as its sender: `quiet` probes each body as the step's sender, so a body that branches on `msg.sender` is caught | `test_prank_blocksTheCalledFramesBroadcast` |
+| A prank is still active in the called frame, so the fixture cannot enter a step as its sender; `quiet` probes each body as the step's sender instead (see below) | `test_prank_blocksTheCalledFramesBroadcast` |
+
+Not pinned: that a frame's parent is the nearest earlier frame one level up when siblings share a depth, and what
+happens to a frame whose parent was in an earlier recording segment (the fixture treats it as the graph's); that
+no record is written after a test ends; and that a script's dry run, broadcast and resume refuse the fixture's
+entry points (`test/FixtureGuard.s.sol` runs only as a dry run).
 
 ### The steps the fixture judges
 
