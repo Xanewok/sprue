@@ -33,6 +33,11 @@ longer compiles, and a unit's own `_deploy` or `_at` passed as a function pointe
 `_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
 recorded arguments be the step's.
 
+Fixed: a deploy step's probe for a role its journal lacks ran the stray guard, which reads every script's
+records on the chain, at a gas cost that grew with the square of their size: 24 records of 160 kB cost 167M,
+so a probe ran out of gas. The guard now asks once per run whether it names the artifact, and frees each
+record that holds none; the same probe costs 2.9M.
+
 Fixed: proving a CREATE role whose journal has no `<role>Tx` read every script's broadcast records, twice,
 so its gas grew with every unit and run: with 24 records of 100 kB one `_at` cost 175M gas, and a probe ran
 out of gas, which `plan` reported as `# cannot reach <step>: 0x`. It now reads only the unit's own script's
