@@ -6,6 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {Role, create} from "../src/Roles.sol";
 import {Unit} from "../src/Unit.sol";
 import {Step} from "../src/graph/Step.sol";
+import {Probes} from "../src/Probes.sol";
 import {RolesToy} from "./Roles.t.sol";
 
 /// @dev A `Unit` on this repository's `sprue.json`, which `ToyJournal` replaces.
@@ -109,5 +110,49 @@ contract UnitGasTest is Test {
             json = string.concat(json, i == 0 ? "" : ",", one);
         }
         json = string.concat(json, "]}");
+    }
+
+    /// @dev A role the journal lacks sends its deploy step to the stray guard, which reads every script's
+    ///      records on this chain: its gas must grow no faster than their size.
+    function test_deployProbe_ofAnUnjournaledRole_costsUnder5MGasWithTwoDozenRecords() public {
+        vm.chainId(31337);
+        address ops = makeAddr("ops");
+        string memory net = "roles-gas-stray";
+        string memory dir = string.concat("cache/core-test/deployments/", net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(string.concat(dir, "/broadcast/DeployOther.s.sol/31337"), true);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(ops), '"}')
+        );
+        string memory run = _creates(20);
+        for (uint256 i; i < 24; ++i) {
+            vm.writeFile(string.concat(dir, "/broadcast/DeployOther.s.sol/31337/run-", vm.toString(i), ".json"), run);
+        }
+        RolesToy unit = new RolesToy();
+        unit.setTestSender(ops);
+
+        uint256 before = gasleft();
+        assertTrue(Probes.due(address(unit), abi.encodeCall(RolesToy.deploy, (net)), ops));
+        assertLt(before - gasleft(), 5_000_000);
+        vm.removeDir(dir, true);
+    }
+
+    /// @dev About 160 kB: `n` CREATEs of another contract, each with 8 kB of initcode.
+    function _creates(uint256 n) private pure returns (string memory json) {
+        bytes memory input = new bytes(8000);
+        for (uint256 k; k < input.length; ++k) {
+            input[k] = "a";
+        }
+        string memory one = string.concat(
+            '{"transactionType":"CREATE","contractName":"Other","contractAddress":"0x2222222222222222222222222222222222222222","transaction":{"from":"0x3333333333333333333333333333333333333333","nonce":"0x1","input":"0x',
+            string(input),
+            '"}}'
+        );
+        json = '{"chain":31337,"transactions":[';
+        for (uint256 i; i < n; ++i) {
+            json = string.concat(json, i == 0 ? "" : ",", one);
+        }
+        json = string.concat(json, '],"receipts":[]}');
     }
 }

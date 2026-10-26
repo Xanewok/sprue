@@ -85,10 +85,13 @@ abstract contract ForgeBroadcasts is Journal {
                 string.concat("cannot rule out a stray ", artifact, ": ", files[i].errorMessage)
             );
             if (files[i].isDir || files[i].depth != 3 || !_endsWith(files[i].path, ".json")) continue;
+            uint256 mark = _freeMemory();
+            uint256 had = found.length;
             string memory path = slashed(files[i].path);
             string memory record = vm.readFile(path);
             if (_has(record, ".chain")) {
                 found = _createsIn(found, artifact, path, record, "");
+                if (found.length == had) _releaseMemory(mark);
                 continue;
             }
             // A multi-chain run's record holds one run per chain.
@@ -99,6 +102,22 @@ abstract contract ForgeBroadcasts is Journal {
             for (uint256 k; _has(record, string.concat(".deployments[", vm.toString(k), "]")); ++k) {
                 found = _createsIn(found, artifact, path, record, string.concat(".deployments[", vm.toString(k), "]"));
             }
+            if (found.length == had) _releaseMemory(mark);
+        }
+    }
+
+    function _freeMemory() private pure returns (uint256 at) {
+        assembly ("memory-safe") {
+            at := mload(0x40)
+        }
+    }
+
+    /// @dev Frees everything allocated since `_freeMemory` returned `at`; the caller must reference none of it.
+    ///      A scan of many records calls it after each record that yields nothing: a step never frees memory,
+    ///      and its gas grows with the square of what it holds, so a dozen records would end a probe.
+    function _releaseMemory(uint256 at) private pure {
+        assembly ("memory-safe") {
+            mstore(0x40, at)
         }
     }
 
@@ -112,6 +131,10 @@ abstract contract ForgeBroadcasts is Journal {
         string memory run
     ) private view returns (Create[] memory) {
         if (_uint(record, string.concat(run, ".chain")) != block.chainid) return found;
+        // One query for the whole run: a query per transaction copies the record each time.
+        if (!_has(record, string.concat("$", run, ".transactions[?(@.contractName == '", artifact, "')]"))) {
+            return found;
+        }
         for (uint256 j; _has(record, string.concat(run, ".transactions[", vm.toString(j), "]")); ++j) {
             string memory t = string.concat(run, ".transactions[", vm.toString(j), "]");
             if (!_isCreateOf(record, t, artifact)) continue;
@@ -246,6 +269,7 @@ abstract contract ForgeBroadcasts is Journal {
                 string memory path = slashed(files[i].path);
                 if (files[i].isDir || files[i].depth != depth || !_endsWith(path, ".json")) continue;
                 if (bytes(under).length != 0 && !vm.contains(path, under)) continue;
+                uint256 mark = _freeMemory();
                 string memory record = vm.readFile(path);
                 // A multi-chain run can create the same address on two chains.
                 bytes32[] memory sent = _matches(record, candidates);
@@ -253,6 +277,7 @@ abstract contract ForgeBroadcasts is Journal {
                     uint256 landed = _createdIn(sent[j], deployed, create2);
                     if (landed != 0) return (sent[j], landed, record);
                 }
+                _releaseMemory(mark);
             }
         } catch {}
         return (0, 0, "");
