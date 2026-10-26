@@ -51,12 +51,6 @@ abstract contract Unit is Roles, Declares {
         require(isTestChain(), "a test-only unit: name a test chain's network");
     }
 
-    /// @dev This unit forks each chain it selects once per run, so that a step's effects on a chain
-    ///      stay visible to the unit's next step. Both maps are keyed by the hash of the chain name.
-    ///      `_forkOf` holds the fork id plus one, so zero means not forked yet. `_headOf` holds the
-    ///      block the fork is pinned at.
-    mapping(bytes32 => uint256) private _forkOf;
-    mapping(bytes32 => uint256) private _headOf;
     string private _selected;
 
     function _selectedChain() internal view override returns (string memory) {
@@ -72,14 +66,8 @@ abstract contract Unit is Roles, Declares {
     ///      gives for `chain`, or than the journal's `<chain>ChainId` when it has one. Returns the
     ///      journal.
     function _selectChain(string memory chain) internal virtual returns (string memory journal) {
-        bytes32 id = keccak256(bytes(chain));
-        if (_forkOf[id] == 0) {
-            string memory url = _rpc(chain);
-            bytes memory head = vm.rpc(url, "eth_blockNumber", "[]");
-            _headOf[id] = uint256(bytes32(head)) >> (8 * (32 - head.length));
-            _forkOf[id] = _createForkAt(url, _headOf[id]) + 1;
-        }
-        vm.selectFork(_forkOf[id] - 1);
+        (uint256 fork,) = _forkOf(chain);
+        vm.selectFork(fork);
         _selected = chain;
         require(
             block.chainid == chainId(_networkJson(), chain),
@@ -99,8 +87,43 @@ abstract contract Unit is Roles, Declares {
     /// @dev The chain's own head block, as the node reported it when the fork was made (zero if
     ///      `chain` was not forked). On a rollup whose `block.number` reports its parent chain's
     ///      number, a check needs this to record the right block.
-    function _forkHead(string memory chain) internal view returns (uint256) {
-        return _headOf[keccak256(bytes(chain))];
+    function _forkHead(string memory chain) internal view returns (uint256 head) {
+        (, head) = _forkLabel(_forkSlot(chain));
+    }
+
+    /// @dev `chain`'s fork id and head, made on first use.
+    function _forkOf(string memory chain) internal returns (uint256 fork, uint256 head) {
+        address slot = _forkSlot(chain);
+        (fork, head) = _forkLabel(slot);
+        if (head == 0) {
+            (fork, head) = _makeFork(chain);
+            vm.label(slot, string.concat(vm.toString(fork), ":", vm.toString(head)));
+        }
+    }
+
+    /// @dev Forks `chain` at its head. Virtual only so that a test with no RPC can count the forks made.
+    function _makeFork(string memory chain) internal virtual returns (uint256 fork, uint256 head) {
+        string memory url = _rpc(chain);
+        bytes memory tip = vm.rpc(url, "eth_blockNumber", "[]");
+        head = uint256(bytes32(tip)) >> (8 * (32 - tip.length));
+        fork = _createForkAt(url, head);
+    }
+
+    /// @dev This unit forks each chain it selects once per run, so that a step's effects on a chain
+    ///      stay visible to the unit's next step. A probe ends in a revert, which would discard the
+    ///      unit's storage, so the fork id and its head live as a label: cheatcode state, which outlives
+    ///      a revert and lasts one forge process, or one test. The label sits on an address that
+    ///      only this unit's name and the chain derive, and reads `<fork id>:<head>`.
+    function _forkSlot(string memory chain) private view returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode("sprue fork", _unit(), chain)))));
+    }
+
+    function _forkLabel(address slot) private view returns (uint256 fork, uint256 head) {
+        string memory label = vm.getLabel(slot);
+        // `vm.getLabel` answers `unlabeled:<address>` for an address that has none.
+        if (vm.indexOf(label, ":0x") != type(uint256).max) return (0, 0);
+        string[] memory parts = vm.split(label, ":");
+        return (vm.parseUint(parts[0]), vm.parseUint(parts[1]));
     }
 
     /// @dev A load-balanced RPC can answer `eth_blockNumber` from a node that is ahead of the one
