@@ -254,9 +254,15 @@ contract ProbeTest is Test, Declares {
         unit.check(net);
         assertEq(g.plan(net, "toy.check"), "# done toy.deploy\n# done toy.check\n");
 
-        unit.setTag(2);
-        string memory plan = g.plan(net, "toy.check");
-        assertTrue(vm.contains(plan, "# cannot reach toy."), plan);
-        assertFalse(vm.contains(plan, "# done toy.check"), plan);
+        unit.setCheckTag(2);
+        assertEq(
+            g.plan(net, "toy.check"),
+            string.concat(
+                "# done toy.deploy\n# cannot reach toy.check: ",
+                "the payload's tag differs from the input",
+                "\n",
+                _command(net, "check")
+            )
+        );
     }
 }

@@ -80,6 +80,13 @@ contract ToyUnit is ToyJournal {
         tag = tag_;
     }
 
+    /// @dev What `check` asserts the toy was made with, when it is not the deploy's `tag`.
+    uint256 public checkTag;
+
+    function setCheckTag(uint256 tag_) external {
+        checkTag = tag_;
+    }
+
     bool public refuseReuse;
 
     function setRefuseReuse(bool refuse) external {
@@ -124,7 +131,7 @@ contract ToyUnit is ToyJournal {
     function check(string calldata network) external returns (string memory) {
         string memory m = _use(network);
         address addr = _requireRecordedCode(m, "toy");
-        _authenticate(addr, abi.encode(tag));
+        _authenticate(addr, abi.encode(checkTag != 0 ? checkTag : tag));
         _requireReceipt(m, "toy", addr, false);
         return _done(false);
     }
