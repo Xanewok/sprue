@@ -708,6 +708,23 @@ contract StepBuildersTest is Test, Declares {
         assertTrue(vm.contains(g.plan("anvil", "fixture.check"), "# not before 100"));
     }
 
+    /// @dev A done check stays done after the date: neither a view's date nor an input date moved past
+    ///      the finished step stops the plan.
+    function test_aDoneStepPrintsNoFutureDate() public {
+        TwoClocks clocks = new TwoClocks();
+        vm.warp(50);
+        clocks.pre("");
+        Step[] memory s = new Step[](2);
+        s[0] = _step("fixture.notify.0", "notify", TwoClocks.notify.selector)
+            .withArg(0)
+            .due(TwoClocks.notifyDue.selector)
+            .gateView("windowEnd", TwoClocks.windowEnd.selector);
+        s[1] = _step("fixture.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector).notBefore("fixture.openAt");
+        ClockGraph g = new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
+        assertEq(g.plan("anvil", "fixture.notify.0"), "# done fixture.notify.0\n");
+        assertEq(g.plan("anvil", "fixture.pre"), "# done fixture.pre\n");
+    }
+
     function test_rehearse_doesNotWarpAnotherChainToAnInputDate() public {
         TwoClocks clocks = new TwoClocks();
         clocks.fork(1);

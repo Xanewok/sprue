@@ -154,8 +154,9 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     their time. Operations that are not one-time deploys stay plain scripts.
 19. **`plan` and `rehearse` judge in list order.** `plan` prints a target's closure, each node `# done`,
     `# not before`, `# cannot reach` or a command, and ends with `# then plan again <node>` where a node
-    cannot be judged until a dependency lands (an input date not yet reached, or a view or predicate whose
-    dependency is not done). `rehearse` simulates the closure in that order on a staged copy of the
+    cannot be judged until a dependency lands (an input date not yet reached by a step that is not done, or a
+    view or predicate whose dependency is not done). A done node has no date line: its done check holds after
+    the date too. `rehearse` simulates the closure in that order on a staged copy of the
     network, warping to each date (`FOUNDRY_BROADCAST=<d>/broadcast FOUNDRY_CACHE_PATH=<d>/cache forge script
     <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url <rpc> --sender <deployer>
     --disable-block-gas-limit`, where `<d>` is

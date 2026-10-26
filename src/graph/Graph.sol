@@ -114,7 +114,7 @@ abstract contract Graph is Script {
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
     ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
     ///           has not been reached on that chain (without `on`, the default chain). The command
-    ///           after it is valid only once the date is reached.
+    ///           after it is valid only once the date is reached. A done node has no date line.
     ///         - `# cannot reach <id>: <reason>`: the node's step would refuse now, and its command
     ///           follows; or, for a predicate node, its condition is not met, and no command follows.
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
@@ -253,10 +253,12 @@ abstract contract Graph is Script {
                     if (block.timestamp >= visit.notBefore) visit.notBefore = 0;
                     _fork(back);
                 }
-                // The date is fixed and not yet reached, so the step's `Due` view would be read on a
-                // chain still before it. Leave the step unjudged for the plan made after the date.
-                if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
-                else (visit.status, visit.reason) = _status(network, n, passed[i]);
+                (visit.status, visit.reason) = _status(network, n, passed[i]);
+                // A done check stays done after the date, so only a step still to send waits for it. A fixed
+                // date not yet reached leaves any other judgment for the plan made after it: the step's
+                // `Due` view was read on a chain still before the date.
+                if (visit.status == Status.Done && !alone) visit.notBefore = 0;
+                else if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
             }
             if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
                 visit.status = Status.Due;
