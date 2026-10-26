@@ -19,6 +19,10 @@ interface VmRpcJson {
 ///      forge versions ordered `transactions[].hash` by the order the sends returned. The receipts
 ///      name the right one.
 abstract contract ForgeBroadcasts is Journal {
+    /// @dev The unit's script: a refusal's recovery command names it, and forge keeps the records of its runs
+    ///      under `<records>/<its file name>/`.
+    function _deployScript() internal view virtual returns (string memory);
+
     function _txInput(Create memory c) internal pure returns (bytes memory) {
         return vm.parseJsonBytes(c.record, string.concat(c.key, ".transaction.input"));
     }
@@ -190,8 +194,10 @@ abstract contract ForgeBroadcasts is Journal {
     /// @dev The transaction that created `deployed`, the block it landed in (zero if none is found) and
     ///      the broadcast record that holds it (empty if only the chain does). Only `receipts[]` names
     ///      the right hash: older forge versions wrote a batch's hashes into `transactions[]` in the
-    ///      order the sends returned. With no record, as after a killed forge, a CREATE is searched for
-    ///      on the chain by the journal's deployer and nonce.
+    ///      order the sends returned. Only the unit's own script's records are read: the others grow with
+    ///      every unit and run, and a probe reads them under the block gas limit. With no record, as after a
+    ///      killed forge or for a role another script created, a CREATE is searched for on the chain by the
+    ///      journal's deployer and nonce.
     function _findReceipt(string memory journal, string memory role, address deployed, bool create2)
         internal
         returns (bytes32 hash, uint256 landed, string memory record)
@@ -203,8 +209,10 @@ abstract contract ForgeBroadcasts is Journal {
             : string.concat(
                 "$..receipts[?(@.contractAddress == '", vm.toLowercase(vm.toString(deployed)), "')].transactionHash"
             );
-        if (vm.exists(_records())) {
-            try vm.readDir(_records(), 3) returns (VmSafe.DirEntry[] memory files) {
+        string[] memory script = vm.split(_deployScript(), "/");
+        string memory own = string.concat(_records(), "/", script[script.length - 1]);
+        if (vm.exists(own)) {
+            try vm.readDir(own, 2) returns (VmSafe.DirEntry[] memory files) {
                 for (uint256 i; i < files.length; ++i) {
                     if (files[i].isDir || !_endsWith(files[i].path, ".json")) continue;
                     record = vm.readFile(files[i].path);

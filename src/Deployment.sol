@@ -24,10 +24,6 @@ import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 ///      Relies on: forge's `broadcast/` records, and the chain's nonces and code. It reads them and
 ///      cannot prove that they are complete.
 abstract contract Deployment is ForgeBroadcasts {
-    /// @dev The script that a refusal's recovery command names. It must hold the unit's
-    ///      `recover(string)` step. Called only when `_hasRecoverStep()`.
-    function _deployScript() internal view virtual returns (string memory);
-
     /// @dev Whether `_requireNoUnjournaled` applies. True on a chain where every CREATE from a
     ///      deployer key belongs to this project, so unjournaled code at such an address is a lost
     ///      deployment.
@@ -343,6 +339,13 @@ abstract contract Deployment is ForgeBroadcasts {
         address addr = _addr(journal, key);
         (hash,,) = _findReceipt(journal, role, addr, false);
         if (hash == 0) (hash,,) = _findReceipt(journal, role, addr, true);
+    }
+
+    /// @dev `_creationTx` of a CREATE role, which no CREATE2 factory call made.
+    function _createTx(string memory journal, string memory role) private returns (bytes32 hash) {
+        string memory key = string.concat(".", role, "Tx");
+        if (_has(journal, key)) return vm.parseJsonBytes32(journal, key);
+        (hash,,) = _findReceipt(journal, role, _addr(journal, string.concat(".", role)), false);
     }
 
     function _inputOf(string memory journal, string memory role, bytes32 hash) private returns (bytes memory input) {
@@ -1294,7 +1297,7 @@ abstract contract Deployment is ForgeBroadcasts {
         );
         if (_createdThisRun[_deployment(addr)].initcodeHash != 0) return;
         require(
-            _creationTx(journal, role) != 0 || _testCreationsTrusted,
+            _createTx(journal, role) != 0 || _testCreationsTrusted,
             string.concat(
                 "neither ",
                 _unit(),

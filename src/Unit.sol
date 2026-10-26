@@ -22,7 +22,7 @@ abstract contract Unit is Roles, Declares {
     /// @dev The script that a refusal's recovery command names: the one `Deploy*.s.sol` in the
     ///      unit's directory. A broadcast record may come from any script that sent the CREATE, so
     ///      the command cannot take the script from the record.
-    function _deployScript() internal view override returns (string memory script) {
+    function _deployScript() internal view virtual override returns (string memory script) {
         string memory dir = string.concat(unitsDir(), "/", _unit(), "/");
         VmSafe.DirEntry[] memory files = vm.readDir(dir);
         uint256 found;

@@ -216,13 +216,13 @@ contract Create2CodeTest is Test {
         string memory net = "create2-receipt";
         string memory dir = string.concat(DIR, net);
         if (vm.exists(dir)) vm.removeDir(dir, true);
-        vm.createDir(string.concat(dir, "/broadcast/S.s.sol/1"), true);
+        vm.createDir(string.concat(dir, "/broadcast/ToyUnit.sol/1"), true);
         vm.writeFile(string.concat(dir, "/network.json"), '{"chains": {"main": {"id": 31337}}}');
         vm.chainId(31337);
         bytes32 toFactory = keccak256("to the factory");
         bytes32 toOther = keccak256("to another contract");
         vm.writeFile(
-            string.concat(dir, "/broadcast/S.s.sol/1/run-latest.json"),
+            string.concat(dir, "/broadcast/ToyUnit.sol/1/run-latest.json"),
             string.concat(
                 '{"receipts": [{"to": "',
                 vm.toLowercase(vm.toString(FACTORY)),
