@@ -246,7 +246,7 @@ abstract contract Graph is Script {
                     if (block.timestamp >= visit.notBefore) visit.notBefore = 0;
                     _fork(back);
                 }
-                (visit.status, visit.reason) = _status(network, n, passed[i]);
+                (visit.status, visit.reason) = _status(network, n);
                 // A step's done check is relied on to stay done after the date, so only a step still to send
                 // waits for it. A predicate holds only now, so before its date it is not judged, whichever
                 // its answer. A fixed date not yet reached leaves any other judgment for the plan made after
@@ -336,11 +336,7 @@ abstract contract Graph is Script {
         return true;
     }
 
-    function _status(string memory network, Node storage n, bool passed)
-        internal
-        returns (Status status, string memory reason)
-    {
-        if (passed) return (Status.Done, "");
+    function _status(string memory network, Node storage n) internal returns (Status status, string memory reason) {
         if (bytes(n.until).length != 0) {
             (bool ok, bytes memory ret) = n.unit.call(_calldata(n, n.until, network));
             if (!ok) return (Status.Waiting, _reason(n.id, ret));
