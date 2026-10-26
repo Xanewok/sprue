@@ -35,6 +35,35 @@ Why sprue is shaped this way, from effect kinds to build-system theory: [MODEL.m
 - Keep a stable API or journal format: any 0.x release may change them. [ROADMAP.md](ROADMAP.md) says
   what is planned.
 
+## What sprue guarantees
+
+Three layers own different kinds of correctness.
+
+- **Your contracts** own protocol correctness. What must hold for funds, bindings between contracts or
+  irreversible steps belongs in their constructors and functions: only code inside a transaction is checked
+  atomically when the transaction lands.
+- **sprue** owns the deploy process, and its guarantees are exact within the limits stated here:
+  - A step is done only when its own check says so at the chain's head: its body would send nothing, or
+    its `Due` view says it has no work. A unit's certificate is the exception: it marks its `check` steps
+    done until the unit's input changes.
+  - A role, a named contract of the deployment, is deployed once on a live chain whose `network.json` pins
+    the deployer, even after its journal is lost. [SECURITY.md](SECURITY.md#limits) names where this does
+    not hold.
+  - A role that `_deploy`, `_at` or `_checked` returns is proven against the chain. A CREATE role must
+    be its recorded deployer's CREATE at its recorded nonce, and its creation transaction must have sent
+    the declared constructor arguments. A CREATE2 role must be the factory's address for its journaled salt
+    and initcode hash. An extern role must have its pinned code hash. Two gaps remain: a CREATE2 role's
+    arguments are compared with its journal only, and another unit's role is proven by its identity and
+    code, not its arguments. An address that a step uses without a role is not checked.
+  - A second run of a finished deployment sends nothing, unless the chain or its inputs changed in between.
+- **Preflight checks** are everything else sprue checks: a role's `.ensure` check of a deployed contract's
+  state and the assertions a unit's steps make about the protocol. They refuse early with a clear message,
+  but they are approximate: they run on a simulation at one block, and the chain can change before the
+  transaction lands.
+
+[SECURITY.md](SECURITY.md) lists what each guard checks; [DESIGN.md](DESIGN.md#invariants) names the tests
+that prove the invariants.
+
 ## Declaring steps
 
 The example's vault unit declares its steps like this:
