@@ -2,6 +2,7 @@
 
 What sprue assumes, what it guarantees, and the decisions behind it. [GUIDE.md](GUIDE.md) says how to use it; the
 [ROADMAP](ROADMAP.md) says what is planned. Decision numbers are stable: cite them, never renumber.
+[MODEL.md](MODEL.md) holds the model these decisions follow.
 
 ## Why it has this shape
 
