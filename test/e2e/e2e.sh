@@ -277,7 +277,9 @@ scenario_rerun() {
   grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
   out=$(G plan rerun vault.check 2>&1) || true
   local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
+  local all; all=$(G plan --verbose rerun vault.check 2>&1) || true
   mv "$W.vault-src" "$vault"
+  grep -q "^# warning vault.json's vault " <<<"$all" || die "rerun: plan --verbose did not warn: $all"
   grep -q "^# warning vault.json's vault runs code that this build of Vault no longer makes; it stays deployed, and no step replaces it$" <<<"$out" \
     || die "rerun: the plan did not warn of older code: $out"
   [ "$rc" != 2 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \

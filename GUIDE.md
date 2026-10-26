@@ -150,6 +150,7 @@ unless the unit's input changed since the certificate (its parsed JSON: a format
 then the `check` and the nodes it certifies run again.
 A probed step is judged on the chain every time.
 `plan` prints `# warning` for a role whose journaled creation code this build no longer makes, as after a
-source edit: the role keeps its deployment, and the warning says it runs older code.
+source edit: the role keeps its deployment, and the warning says it runs older code. It shows while one of
+the unit's nodes in the plan is not done; `plan --verbose` shows it for done units too.
 After resetting a development chain, delete the network's journals and that chain's records under
 `broadcast/`, or a rehearsal network's whole directory.
