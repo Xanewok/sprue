@@ -1,112 +1,142 @@
 # The model behind sprue
 
 Status: the model that sprue's design follows. Where sprue does not do something yet, the text says
-"target". [DESIGN.md](DESIGN.md) holds the decisions; this file holds the reasons they take the shape they
+"(target)". [DESIGN.md](DESIGN.md) holds the decisions; this file holds the reasons they take the shape they
 do.
 
 ## Why it has this shape
 
-- **Why does each send say what kind of effect it is (target)?** The kind decides when the send is done, what a
-  rerun does after someone else changed the chain, and whether its order can be derived. Without a kind, a
-  tool must either re-send (and pay a premint twice) or never re-send (and miss a changed fee).
+- **Why does each send say how it is done (target)?** Its done check decides whether a rerun sends again,
+  and what happens after someone else changes the chain. Without one, a tool either re-sends (and pays a
+  premint twice) or never re-sends (and misses a changed fee).
 - **Why is the chain, not a file, the record of done?** The chain is a store that other people change. A
-  recorded "done" stays true only for facts that cannot become false.
-- **Why is the graph static?** So that a person can read the whole plan before anything is sent.
+  recorded "done" stays true only for a check that cannot turn false.
+- **Why is the graph fixed before anything is sent?** So that a person can read the whole plan first.
 
-## 1. Trigger kinds are monotonicity classes
+## 1. What makes a rerun safe: stable done checks
 
-The CALM theorem (Hellerstein and Alvaro, "Keeping CALM", CACM 2020): a program whose facts only grow gives the same result
-in any order and after any number of reruns, with no coordination. A program that can retract a fact needs
-coordination. Each kind of send is a small lattice:
+A step is safe to run again when two things hold:
 
-| Kind | Lattice | Monotone | Done means | After an outside change | Example |
-|---|---|---|---|---|---|
-| Create (CREATE, CREATE2) | written once, by identity: the address commits to it | yes | the role is proven at its address | nothing to do | deploy a vault |
-| Time gate | the clock, `false < true` | yes | the time or the contract's own view is reached | stays done | sale opens at a date |
-| Edge (exactly once) | a flag, `false < true` | yes, while the contract keeps the flag | a durable fact: the contract's flag, or (target) a record tied to a transaction | stays done, sends nothing | premint, seed, launch |
-| Set once (bind) | `unset < v`; another value is a conflict | yes | the value is unset or the wanted one | refused, never re-pointed | bind a vault to its source |
-| Level (setter) | last writer wins | no | the live value equals the input now | due again; the plan prints `change X -> Y` (target) | a fee, a curve |
-| Top-up | a balance that others can drain | no | the balance is at the target | due again; sends the shortfall | a test faucet |
+1. once its done check holds, the step sends nothing;
+2. the done check is **stable**: once true, it stays true under every change that other people may make
+   to the chain. This is a stable property in the sense of Chandy and Lamport ("Distributed snapshots",
+   1985).
 
-The rule that follows comes from the theory, not from taste:
+A stable check can be trusted from any earlier read. An unstable one must be read again at the chain's head
+before each decision, and it needs a policy for when it turns false. Stability is not idempotence
+(`x := x + 1` grows and is not idempotent), and it gives no order: two CREATEs by one key swap addresses
+if their order changes, and a contract may require one bind before another. Order comes from `needs`.
 
-- Monotone nodes may be re-run freely, and their order may be derived.
-- Non-monotone nodes need an explicit order, a printed diff and a person's approval.
+So each send has a done check plus a few independent properties (target):
 
-Exactly-once is a property of state, not of a script. It lives in one of two places: a contract's monotone
-state (a flag, a renounced owner, an executed Merkle leaf) or a record of the transaction that made it
-(a journal). Only the first survives a lost journal, so a contract flag is the preferred done rule for an
-edge. An edge's key comes from the inputs, never from the block, so a rerun finds the same effect.
+- what happens when the check turns false: refuse, apply again, or nothing because the step is retired;
+- which transitions it may make, such as only from zero to the wanted value;
+- when it retires: after a phase (a launch, a settlement), the step is done whatever the chain holds;
+- what value it may move: which asset, from whom, to whom, how much;
+- its execution state: due, pending, prepared for another sender, done, or failed.
+
+The familiar kinds are presets of these properties:
+
+| Preset | Done check | Stable? | When it turns false | Example |
+|---|---|---|---|---|
+| Create | the role is proven at its address | yes, once landed | cannot | deploy a vault |
+| Edge | a flag the contract keeps | yes, while the contract keeps it | cannot | premint, seed, launch |
+| Set once | the wanted value; unset is due; another value is a conflict | yes, if the contract forbids a change | refused | bind a vault to its source |
+| Guarded replace | the wanted value; the contract allows a change, the tool refuses one | no | refused | rebinding before a launch |
+| Level | the live value equals the input | no | applied again, with `change X -> Y` in the plan (target) | a fee, a curve |
+| Top-up | the balance is at or above the target | no | sends the shortfall, until it retires | a faucet; funding until launch |
+| Drain | the surplus is zero | no | sends the surplus | a sweep after a launch |
+| Progress | the contract says complete; each send must advance it | yes at the end | cannot | a bounded walk |
+| Pending edge | a fact on another chain | yes, once observed | cannot; pending between send and fact | a cross-chain notice |
+
+A time gate is a guard, not a send: `block.timestamp >= t` stays true along one chain; a contract's own
+view stays true only if the contract keeps it so. Exactly-once needs the effect and its marker to change in
+one transaction, so a contract flag is the preferred done check for an edge. A record of the transaction
+(a journal) gives at most once, and only while the journal survives. An edge's key comes from the inputs,
+never from the block it is sent in, so a rerun finds the same effect.
+
+A person's approval is a chain policy (a public chain asks for a typed `yes`), not a property of a kind.
 
 ## 2. What a record may cache
 
-A cache of a fact is sound only when the fact is monotone: a monotone fact cannot become false later. A
-cached non-monotone predicate is the thing that goes stale.
+A record of a stable check may be cached. A record of an unstable check is sound only if it also records
+everything the check read and the tool validates each of those reads again, which is the same as running
+the check again.
 
-"Build Systems à la Carte" (Mokhov, Mitchell, Peyton Jones, 2018) says the same in build terms. A recorded
-"this was checked with these inputs" is a verifying trace. A verifying trace stays valid only while nobody
-else changes the store, and the chain is a store that others change. So the journal caches identity, which
-is written once, and does not cache "done": done is the step's own check, read at the chain's head. Today's
+In "Build Systems à la Carte" (Mokhov, Mitchell, Peyton Jones, 2018) terms, a recorded "this was checked
+with these inputs" is a verifying trace. It is sound when it records and validates every dependency. A
+`check` reads the live chain, and its record holds the facts it certifies and the hash of its input file,
+not every chain read, so it cannot be validated cheaply. So the journal caches identity, which is stable
+once landed, and does not cache "done": done is the step's own check, read at the chain's head. Today's
 exception is the unit's certificate: it marks done a `check` step, the `.doneByCheck()` steps that the
 `check` reaches, and every step of a unit that cannot be probed, until the unit's input changes (DESIGN.md
-decision 6). The model's target drops it.
+decision 6). The model's target drops it, or keeps a record only of stable checks.
 
 The same paper separates applicative dependencies, known before anything runs, from monadic ones,
 discovered while running. A step's `needs` are applicative, so `plan` can print every node and its order
-before the first send. A step body may branch on what it reads; the graph may not.
+before the first send. This holds only if `needs` cover every dependency a step body uses. The number,
+targets and data of a step's transactions can still depend on what it reads.
 
-## 3. Modes are effect handlers
+## 3. Modes as handlers of one step
 
-In languages with algebraic effects (Koka, Eff, OCaml 5), a program requests effects and a handler decides
-what each request does. A step body requests a small set: create, call with a kind (target), read, wait until. Each
-mode of sprue is a handler of the same body:
+A step body is written once and each mode of sprue interprets it differently. This is the design of
+effect handlers (Koka, Eff, OCaml 5) used as an analogy: Solidity calls are not algebraic effects, and a
+mode that prints or prepares a send must still give later code the values it needs.
 
-| Handler | What it does with a step's effects |
+| Mode | What it does with a step's sends |
 |---|---|
-| probe | simulates, collects, sends nothing |
+| probe | simulates up to its first `_startBroadcast()` or journal write, and reports due |
 | plan | prints |
 | run | broadcasts |
-| prepared (target) | writes the sends for another sender, such as a Safe, and stops |
+| prepared (target) | writes the sends for another sender, such as a Safe, and reports pending |
 | test fixture (target) | pranks the senders and warps the dates |
-| replay (target) | runs the step again on its simulated result and refuses if it would send again |
+| replay (target) | simulates the whole step, then checks that its done check holds and a second run sends nothing |
 
-That is why one step can be a deployment, a runbook and a test fixture. Solidity cannot check effects
-statically, so the probe checks them at run time (target): it records each send's logs and value, and
-refuses a send that moves ETH or emits an ERC-20 `Transfer` unless its kind allows it. A mint or deposit
-that emits neither still relies on its author.
+The replay is the strongest check that needs no declaration: it catches a wrong done check before the send.
+A value check needs the whole simulation too (target): record the state changes of the step's sends and
+compare them with the step's declared value budget. Logs are not enough evidence: an ERC-721 transfer has
+the ERC-20 `Transfer` signature, a contract can emit any log, and an allowance or an accounting credit can
+change with no log. The protocol's own assertions stay the authority.
 
-## 4. A small declarative layer and an escape hatch
+## 4. A fixed declarative layer and an escape hatch
 
-The declarations are finite and static: roles, kinds (target), gates, `needs` edges and senders. They are not a
-programming language. The step body, in Solidity, is the escape hatch for anything they cannot say. This
-follows Bazel's Starlark (no recursion, no unbounded loops) with `genrule` as its escape, and total
-configuration languages such as Dhall and CUE.
+`steps()` is Solidity, but its result is a finite graph, fixed before any send: steps, their `needs`,
+senders, gates, chains and (target) done properties. This is staging, like Bazel's split between loading the
+build graph and executing it. The step body, in Solidity, is the escape hatch for anything the
+declarations cannot say.
 
-The common case is a declaration that gets its plan line, its effect check (target), its order and its tests for
-free (target: one generated property per kind). A declaration is worth adding only for what it derives:
-in Solidity a declaration costs about as many lines as the code it replaces.
+The common case is a declaration that gets its plan line, its order and (target) its value check and its
+tests for free: one generated property per preset, such as "a drained top-up is due again until it
+retires" or "a conflicting bind is refused". A generated test proves the declaration is honoured, not that
+the author chose the right one. A declaration is worth adding only for what it derives: in Solidity a
+declaration costs about as many lines as the code it replaces.
 
 ## 5. Prior art
 
-- Kubernetes controllers are level-triggered by design and use status conditions and finalizers for edges.
-- Terraform keeps drift in check per resource with `lifecycle { ignore_changes, prevent_destroy }`.
-- Ansible's `creates:` makes a command edge-triggered on a fact, and `changed_when` is a custom done rule.
-- Durable execution (Temporal and similar) gives exactly-once activities through idempotency keys, and
-  durable timers.
-- CFEngine's promise theory is built on convergent operators.
-- On chain: Hardhat Ignition records each call in a journal and never sends it again, without reading the
-  chain, and refuses a completed step whose arguments changed. Sphinx takes done from the chain (executed
-  Merkle leaves). hardhat-deploy skips a recorded deployment without a chain read; its successor adds an
-  optional guard for calls (rocketh). None of them types its effects.
+- Kubernetes controllers are level-triggered; finalizers coordinate cleanup before deletion.
+- Terraform's `ignore_changes` stops selected drift from being reconciled, and `prevent_destroy` blocks
+  destruction.
+- Ansible's `creates:` skips a command when a file exists, a done check by fact; `changed_when` changes
+  only what the task reports.
+- In durable execution (Temporal and similar), an activity may run more than once; exactly-once comes from
+  an idempotent receiver.
+- On chain: Hardhat Ignition records each call in a journal, does not send it again, and refuses a
+  completed step whose arguments changed. Sphinx takes done from the chain (executed Merkle leaves).
+  hardhat-deploy skips a recorded deployment, in some paths without a chain read; rocketh adds an optional
+  guard for calls. None of the tools we read declares how each send is done.
 
-## 6. Cases the kinds do not cover yet
+## 6. Cases still open
 
-- **Recurring actions,** such as funding each epoch or posting a root per period. A periodic gate is not
-  monotone. It needs a kind keyed by the period: set once per epoch.
-- **Timelocks.** OpenZeppelin's `TimelockController` exposes a monotone state machine (unset, pending,
-  ready, done). Schedule and execute are two edges with a time gate between them.
-- **Cross-chain sends:** an edge whose completion is a fact on another chain, with a pending state between.
-- **Removal:** revoking a role needs enumeration to state exact membership; renouncing is an irreversible
-  edge.
+- **Recurring actions,** such as funding each epoch. An edge keyed by the period fits, but sprue has no
+  scheduler (DESIGN decision 18): a finite set of periods is planned, or the action stays outside sprue.
+- **Timelocks.** OpenZeppelin's `TimelockController` moves an operation from unset to pending to ready to
+  done, and a cancel returns it to unset. Schedule and execute are two edges with a time gate between them;
+  the operation's key must include the wanted calls, and a cancel makes the schedule due again.
+- **Composite transactions,** such as a launch that approves, seeds and locks liquidity in one call. They
+  stay one step: splitting them changes what a failure leaves behind.
+- **Mixed steps.** One step may hold sends of different presets, so the properties belong to each send,
+  not to the step.
+- **Removal:** revoking one role needs a read of that membership; stating the exact set needs enumeration.
+  Renouncing is permanent only if the contract has no other admin or upgrade path.
 - **Emergency runbooks,** such as pause and unpause: level setters that must bypass the drift policy, by a
   named escape hatch.
