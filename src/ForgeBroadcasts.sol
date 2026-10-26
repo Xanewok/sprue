@@ -194,10 +194,10 @@ abstract contract ForgeBroadcasts is Journal {
     /// @dev The transaction that created `deployed`, the block it landed in (zero if none is found) and
     ///      the broadcast record that holds it (empty if only the chain does). Only `receipts[]` names
     ///      the right hash: older forge versions wrote a batch's hashes into `transactions[]` in the
-    ///      order the sends returned. Only the unit's own script's records are read: the others grow with
-    ///      every unit and run, and a probe reads them under the block gas limit. With no record, as after a
-    ///      killed forge or for a role another script created, a CREATE is searched for on the chain by the
-    ///      journal's deployer and nonce.
+    ///      order the sends returned. Only the unit's own script's records are read, its runs on this chain
+    ///      and its multi-chain runs: the others grow with every unit and run, and a probe reads them under
+    ///      the block gas limit. With no record, as after a killed forge or for a role another script created, a CREATE
+    ///      is searched for on the chain by the journal's deployer and nonce.
     function _findReceipt(string memory journal, string memory role, address deployed, bool create2)
         internal
         returns (bytes32 hash, uint256 landed, string memory record)
@@ -210,21 +210,16 @@ abstract contract ForgeBroadcasts is Journal {
                 "$..receipts[?(@.contractAddress == '", vm.toLowercase(vm.toString(deployed)), "')].transactionHash"
             );
         string[] memory script = vm.split(_deployScript(), "/");
-        string memory own = string.concat(_records(), "/", script[script.length - 1]);
-        if (vm.exists(own)) {
-            try vm.readDir(own, 2) returns (VmSafe.DirEntry[] memory files) {
-                for (uint256 i; i < files.length; ++i) {
-                    if (files[i].isDir || !_endsWith(files[i].path, ".json")) continue;
-                    record = vm.readFile(files[i].path);
-                    // A multi-chain run can create the same address on two chains.
-                    bytes32[] memory sent = _matches(record, candidates);
-                    for (uint256 j; j < sent.length; ++j) {
-                        landed = _createdIn(sent[j], deployed, create2);
-                        if (landed != 0) return (sent[j], landed, record);
-                    }
-                }
-            } catch {}
-        }
+        string memory name = script[script.length - 1];
+        (hash, landed, record) = _receiptIn(
+            string.concat(_records(), "/", name, "/", vm.toString(block.chainid)), 1, "", candidates, deployed, create2
+        );
+        if (landed != 0) return (hash, landed, record);
+        // A multi-chain run's records: `multi/<script>-latest/` and `multi/<script>-<timestamp>/`.
+        (hash, landed, record) = _receiptIn(
+            string.concat(_records(), "/multi"), 2, string.concat("/", name, "-"), candidates, deployed, create2
+        );
+        if (landed != 0) return (hash, landed, record);
         string memory key = string.concat(".", role);
         // An adopted role, which this project did not create, has no nonce.
         if (create2 || !_has(journal, string.concat(key, "Deployer")) || !_has(journal, string.concat(key, "Nonce"))) {
@@ -233,6 +228,34 @@ abstract contract ForgeBroadcasts is Journal {
         hash = _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
         landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
         record = "";
+    }
+
+    /// @dev The first receipt in the records `depth` levels under `dir`, in a path that contains `under`, whose
+    ///      hash `candidates` selects and that this chain confirms created `deployed`.
+    function _receiptIn(
+        string memory dir,
+        uint64 depth,
+        string memory under,
+        string memory candidates,
+        address deployed,
+        bool create2
+    ) private returns (bytes32, uint256, string memory) {
+        if (!vm.exists(dir)) return (0, 0, "");
+        try vm.readDir(dir, depth) returns (VmSafe.DirEntry[] memory files) {
+            for (uint256 i; i < files.length; ++i) {
+                string memory path = slashed(files[i].path);
+                if (files[i].isDir || files[i].depth != depth || !_endsWith(path, ".json")) continue;
+                if (bytes(under).length != 0 && !vm.contains(path, under)) continue;
+                string memory record = vm.readFile(path);
+                // A multi-chain run can create the same address on two chains.
+                bytes32[] memory sent = _matches(record, candidates);
+                for (uint256 j; j < sent.length; ++j) {
+                    uint256 landed = _createdIn(sent[j], deployed, create2);
+                    if (landed != 0) return (sent[j], landed, record);
+                }
+            }
+        } catch {}
+        return (0, 0, "");
     }
 
     /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
