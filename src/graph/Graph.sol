@@ -10,7 +10,9 @@ import {IProbe, Registration, IUnitSteps, Step, StepKind} from "./Step.sol";
 interface IFixtureHost {
     /// @dev Makes the predicate node `id` true, or returns false if the test has no way to.
     function meet(string calldata id) external returns (bool);
-    /// @dev Called after each step of the run, so that the test can record what the step sent.
+    /// @dev Called before each step's call, and `stepped` after it, so that the test records what the step
+    ///      sends and nothing the graph itself calls.
+    function stepping(string calldata id) external;
     function stepped(string calldata id) external;
 }
 
@@ -752,6 +754,7 @@ abstract contract Graph is Script {
             return _callStep(n.unit, _calldata(n, n.step, network));
         }
         _call(n.unit, abi.encodeWithSignature("setTestSender(address)", _fixtureSender(network, n)));
+        IFixtureHost(_fixture).stepping(n.id);
         sent = _callStep(n.unit, _calldata(n, n.step, network));
         IFixtureHost(_fixture).stepped(n.id);
     }

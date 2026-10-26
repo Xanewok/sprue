@@ -29,6 +29,18 @@ contract FoundryFactsCallee {
     }
 }
 
+contract FoundryFactsHost {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function start() external {
+        vm.startStateDiffRecording();
+    }
+
+    function stop() external returns (VmSafe.AccountAccess[] memory) {
+        return vm.stopAndReturnStateDiff();
+    }
+}
+
 contract FoundryFactsTest is Test {
     address private sender = makeAddr("sender");
     FoundryFactsTarget private a = new FoundryFactsTarget();
@@ -164,5 +176,26 @@ contract FoundryFactsTest is Test {
         for (uint256 i; i < rest.length; ++i) {
             rest[i] = data[i + 4];
         }
+    }
+
+    /// @dev A fixture that starts recording in a callback and drains it in a later one relies on the recording
+    ///      surviving the first callback's return, holding what happens between them in order.
+    function test_stateDiff_startedInACallbackSurvivesItsReturn() public {
+        FoundryFactsHost host = new FoundryFactsHost();
+        host.start();
+        vm.broadcast(sender);
+        a.touch();
+        vm.broadcast(sender);
+        b.touch();
+        VmSafe.AccountAccess[] memory accesses = host.stop();
+        uint256 sends;
+        address[2] memory order;
+        for (uint256 i; i < accesses.length; ++i) {
+            if (accesses[i].kind != VmSafe.AccountAccessKind.Call || accesses[i].accessor != sender) continue;
+            order[sends++] = accesses[i].account;
+        }
+        assertEq(sends, 2);
+        assertEq(order[0], address(a));
+        assertEq(order[1], address(b));
     }
 }

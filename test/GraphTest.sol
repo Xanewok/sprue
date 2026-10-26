@@ -8,7 +8,6 @@ import {deploymentsDir, rehearsalPrefix} from "../src/Chains.sol";
 import {Deployment} from "../src/Deployment.sol";
 import {stageInputs} from "../src/Journal.sol";
 import {Graph, IFixtureHost} from "../src/graph/Graph.sol";
-import {IProbe} from "../src/graph/Step.sol";
 
 /// @notice Runs a project's real graph in process, under `forge test`, as the graph's commands would
 ///         run it: each step is sent by its own account and every send is counted from the state diff.
@@ -33,8 +32,6 @@ abstract contract GraphTest is Test, IFixtureHost {
     string private _net;
     address[] private _units;
     Sent[] private _sent;
-    /// @dev The depth of the graph's own calls, from the `fixtureRun` call in the diff.
-    uint256 private _floor;
 
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
@@ -98,10 +95,14 @@ abstract contract GraphTest is Test, IFixtureHost {
         return _meet(id);
     }
 
+    function stepping(string calldata) external {
+        require(msg.sender == address(_graph), "only the graph reports");
+        vm.startStateDiffRecording();
+    }
+
     function stepped(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
         _absorb();
-        vm.startStateDiffRecording();
     }
 
     function _run(string memory id, bool alone) private returns (Sent[] memory sent) {
@@ -111,9 +112,7 @@ abstract contract GraphTest is Test, IFixtureHost {
             before[i] = vm.getNonce(who[i]);
         }
         delete _sent;
-        vm.startStateDiffRecording();
         bool reached = _graph.fixtureRun(_net, id, alone);
-        _absorb();
         require(reached, string.concat("the fixture cannot reach ", id));
         sent = _sent;
         for (uint256 i; i < who.length; ++i) {
@@ -138,28 +137,13 @@ abstract contract GraphTest is Test, IFixtureHost {
         }
     }
 
-    /// @dev Appends the sends in the state diff recorded so far and vouches for each CREATE to every unit,
-    ///      so that a unit reads a role another unit created. The graph's own calls (depth `_floor` and
-    ///      above) are not sends; of those, a probe and a callback to this test are skipped with their
-    ///      subtrees, by who calls and who is called, never by calldata: a probe's self-call reverts.
+    /// @dev Appends the sends in the state diff recorded since `stepping` and vouches for each CREATE to
+    ///      every unit, so that a unit reads a role another unit created.
     function _absorb() private {
         VmSafe.AccountAccess[] memory log = vm.stopAndReturnStateDiff();
-        uint256 inside = type(uint256).max;
         for (uint256 i; i < log.length; ++i) {
             VmSafe.AccountAccess memory a = log[i];
-            if (a.depth > inside) continue;
-            inside = type(uint256).max;
             bool call = a.kind == VmSafe.AccountAccessKind.Call;
-            if (call && a.accessor == address(this) && a.account == address(_graph)) {
-                _floor = a.depth + 1;
-                continue;
-            }
-            if (a.depth <= _floor) {
-                if (call && (a.account == address(this) || (_isUnit(a.account) && _isProbe(a.data)))) {
-                    inside = a.depth;
-                }
-                continue;
-            }
             if (!call && a.kind != VmSafe.AccountAccessKind.Create) continue;
             if (a.accessor.code.length != 0) continue;
             _sent.push(Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data));
@@ -168,17 +152,6 @@ abstract contract GraphTest is Test, IFixtureHost {
                 Deployment(_units[u]).trustTestCreationAt(a.account, a.data);
             }
         }
-    }
-
-    function _isUnit(address account) private view returns (bool) {
-        for (uint256 i; i < _units.length; ++i) {
-            if (_units[i] == account) return true;
-        }
-        return false;
-    }
-
-    function _isProbe(bytes memory data) private pure returns (bool) {
-        return data.length >= 4 && bytes4(data) == IProbe.probe.selector;
     }
 
     function _senders() private view returns (address[] memory who) {

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {GraphTest} from "./GraphTest.sol";
+import {FIXTURE_SENDER} from "../src/graph/Graph.sol";
 import {RawGraph, RawUnit} from "./RawGraph.sol";
 
 /// @dev Steps that send on a rerun in ways the fixture must see.
@@ -31,5 +32,20 @@ contract GraphMutantsTest is GraphTest {
     function test_quiet_failsOnARawSendWhoseCalldataStartsLikeAProbe() public {
         vm.expectRevert("raw.stray sends on a rerun");
         this.again("raw.stray");
+    }
+
+    function test_runNode_failsOnASendOutsideTheStepsCall() public {
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    vm.toString(FIXTURE_SENDER), " sent a different number of transactions than the transcript holds"
+                )
+            )
+        );
+        this.once("raw.hidden");
+    }
+
+    function once(string memory node) external {
+        runNode(node);
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {FIXTURE_SENDER} from "../src/graph/Graph.sol";
 import {FileGraph} from "../src/FileGraph.sol";
 import {Role} from "../src/Roles.sol";
 import {IProbe, Step} from "../src/graph/Step.sol";
@@ -13,10 +14,11 @@ contract RawUnit is FixtureUnit {
     FixtureToken public sink = new FixtureToken(0);
 
     function steps() external view returns (Step[] memory s) {
-        s = new Step[](3);
+        s = new Step[](4);
         s[0] = _step("raw.silent", "silent", this.silent.selector).due(this.silentDue.selector);
         s[1] = _step("raw.raw", "raw", this.raw.selector).due(this.rawDue.selector);
         s[2] = _step("raw.stray", "stray", this.stray.selector).due(this.strayDue.selector);
+        s[3] = _step("raw.hidden", "hidden", this.hidden.selector).due(this.hiddenDue.selector);
     }
 
     function silent(string calldata network) external step(network) {
@@ -32,6 +34,15 @@ contract RawUnit is FixtureUnit {
     function stray(string calldata network) external step(network) {
         vm.broadcast(STRAY);
         address(sink).call(abi.encodePacked(IProbe.probe.selector));
+    }
+
+    function hidden(string calldata network) external step(network) {}
+
+    /// @dev Sends while the planner judges the step, outside the step's call.
+    function hiddenDue(string calldata) external returns (bool) {
+        vm.broadcast(FIXTURE_SENDER);
+        address(sink).call(_transfer());
+        return true;
     }
 
     function silentDue(string calldata) external pure returns (bool) {
