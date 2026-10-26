@@ -110,8 +110,7 @@ abstract contract Graph is Script {
     ///         - `# chain <chain> <chain id> <kind>`: a chain of `network.json`. These lines come
     ///           before everything else.
     ///         - `# warning <text>`: for the person running the plan; it changes nothing, and a reader of
-    ///           the plan ignores it. These lines follow the `# chain` lines, and repeat in every plan while
-    ///           what they report holds.
+    ///           the plan ignores it. These lines follow the `# chain` lines.
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
     ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
     ///           has not been reached on that chain (without `on`, the default chain). The command
@@ -121,14 +120,23 @@ abstract contract Graph is Script {
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
-    function plan(string calldata network, string calldata target) external returns (string memory out) {
+    function plan(string calldata network, string calldata target) external returns (string memory) {
+        return _plan(network, target, false);
+    }
+
+    /// @notice `plan`; `allUnits` also prints the `# warning` lines of units whose nodes are all done.
+    function plan(string calldata network, string calldata target, bool allUnits) external returns (string memory) {
+        return _plan(network, target, allUnits);
+    }
+
+    function _plan(string memory network, string memory target, bool allUnits) private returns (string memory out) {
         string[] memory header = _chainLines(network);
         _home = _fork(type(uint256).max);
         (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length), false);
         for (uint256 i; i < header.length; ++i) {
             out = _line(out, header[i]);
         }
-        out = _warnings(out, network, visits, count);
+        out = _warnings(out, network, visits, count, allUnits);
         for (uint256 i; i < count; ++i) {
             Visit memory visit = visits[i];
             Node storage n = _nodes[visit.node];
@@ -706,14 +714,19 @@ abstract contract Graph is Script {
         return new string[](0);
     }
 
-    function _warnings(string memory out, string memory network, Visit[] memory visits, uint256 count)
+    function _warnings(string memory out, string memory network, Visit[] memory visits, uint256 count, bool allUnits)
         private
         view
         returns (string memory)
     {
         string[] memory units = new string[](count);
+        uint256 n;
         for (uint256 i; i < count; ++i) {
-            units[i] = vm.split(_nodes[visits[i].node].id, ".")[0];
+            if (allUnits || visits[i].status != Status.Done) units[n++] = vm.split(_nodes[visits[i].node].id, ".")[0];
+        }
+        // SAFETY: `n <= count`, so the shortened array lies within its allocation.
+        assembly ("memory-safe") {
+            mstore(units, n)
         }
         string[] memory warnings = _warningLines(network, units);
         for (uint256 i; i < warnings.length; ++i) {

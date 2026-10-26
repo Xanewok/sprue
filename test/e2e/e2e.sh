@@ -170,6 +170,8 @@ scenario_refuses() {
   # Only a rehearsal copy names a URL: its forks'.
   echo "{\"chains\":{\"l2\":{\"id\":31337,\"rpc\":\"$RPC\"}}}" >$n; refused "rpc is not a plain alias" G run refuse vault.check
   echo '{"chains":{"l2":{"id":1,"rpc":"local"}}}' >$n; refused "local is chain 31337, network.json says 1" G run refuse vault.check
+  refused "refusing --verbose: only plan takes it" G run --verbose refuse vault.check
+  refused "refusing --verbose: only plan takes it" G rehearse refuse vault.check --verbose
   # forge and cast take these over the line's flags.
   network refuse 31337
   local n0; n0=$(nonce)
@@ -270,15 +272,17 @@ scenario_rerun() {
   before=$(fp); out=$(G run rerun vault.check 2>>log)
   [ "$(fp)" = "$before" ] || die "a finished rerun changed state"
   all_done rerun "$out"
-  # A source edit after the deploy: the plan warns that the vault runs older code.
+  # A source edit after the deploy: the plan warns that the vault runs code this build does not make.
   local vault=script/deploy/units/vault/Vault.sol
   cp "$vault" "$W.vault-src"
   sed -i.bak 's/^    constructor(address token) {/    function unused() external pure {}\n\n    constructor(address token) {/' "$vault" && rm -f "$vault.bak"
   grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
   out=$(G plan rerun vault.check 2>&1) || true
   local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
+  local all; all=$(G plan --verbose rerun vault.check 2>&1) || true
   mv "$W.vault-src" "$vault"
-  grep -q "^# warning vault.json's vault runs code that this build of Vault no longer makes; it stays deployed, and no step replaces it$" <<<"$out" \
+  grep -q "^# warning vault.json's vault " <<<"$all" || die "rerun: plan --verbose did not warn: $all"
+  grep -q "^# warning vault.json's vault runs code that this build of Vault does not make; it stays deployed, and no step replaces it$" <<<"$out" \
     || die "rerun: the plan did not warn of older code: $out"
   [ "$rc" != 2 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
     || die "rerun: run did not print the warning once and go on (exit $rc): $ran"

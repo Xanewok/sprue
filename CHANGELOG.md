@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-`plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> no longer makes; it
+`plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> does not make; it
 stays deployed, and no step replaces it` for each role of the target's units whose journaled creation code
-differs from this build, after the `# chain` lines; `run` prints each warning once and goes on. The line
-repeats in every plan while the role runs older code: a tool that reads plan lines must ignore `# warning`.
+differs from this build, after the `# chain` lines, while one of the unit's nodes in the plan is not done;
+`plan --verbose` also prints them for done units. `run` prints each warning once and goes on.
+A tool that reads plan lines must ignore `# warning`.
 
 Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
