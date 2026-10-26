@@ -839,6 +839,14 @@ contract CoreUnitTest is Test {
         vm.expectRevert(refusal);
         unit.deploy(network);
         vm.stopBroadcast();
+
+        // An older journal's certificate is evidence of landing, never completion.
+        vm.writeFile(path, journal);
+        vm.writeJson(string.concat('{"toy":"', vm.toString(toy), '"}'), path, ".checked");
+        vm.setNonceUnsafe(ops, nonce + 1);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
+        vm.stopBroadcast();
     }
 
     function test_inputFile_namesTheUnitWhoseInputIsRead() public {

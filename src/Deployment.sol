@@ -310,11 +310,12 @@ abstract contract Deployment is ForgeBroadcasts {
         if (addr != address(0)) _requireLandedCode(journal, role, false);
     }
 
-    /// @dev A receipt of `role` says it landed. With no code at its address, the RPC lags or the chain was
+    /// @dev A receipt of `role` says it landed, and so does an older journal's `checked` entry for it: only as
+    ///      evidence of landing, never as completion. With no code at its address, the RPC lags or the chain was
     ///      reset, and a resend or a replacement would double the deployment.
     function _requireNoLandedRecord(string memory journal, string memory role) internal view {
         require(
-            !_has(journal, string.concat(".", role, "Tx")),
+            !_has(journal, string.concat(".", role, "Tx")) && !_has(journal, string.concat(".checked.", role)),
             string.concat(
                 _unit(),
                 ".json records ",
