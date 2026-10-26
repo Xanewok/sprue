@@ -62,6 +62,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | `recover` journals only one unambiguous, current deployment and writes nothing before every check passes. | `CoreUnit.t.sol` `test_recover_refuses*`, `test_recover_ofACompleteJournal_sendsAndWritesNothing`; e2e `scenario_recover` |
 | Node order is the lowest ready node by unit, then declaration; a cycle is refused with its ids. | `GraphOrder.t.sol` `testFuzz_order_*`, `testFuzz_cycleNamesARealLoop` |
 | Every step has a done rule; a target that excludes the certifying `check` of a node it needs is refused, unless the node is done. | `StepBuilders.t.sol` `test_check*`, `test_dueCheckCannotCertifyAncestors`; `Guards.t.sol` `test_plan_refusesATargetThatExcludesTheCertifierOfANodeItNeeds_unlessTheNodeIsDone` |
+| A probe sends nothing, writes no journal or build record, and keeps no EVM state; a step is due at its first send or write, and a direct broadcast is refused. | `Probe.t.sol` `test_plan_*` |
 | A production node never depends on a test-only node. | `StepBuilders.t.sol` `test_productionNeverNeedsATestNode` |
 | A pinned deployer sends every CREATE, unless opted out; a malformed pin is refused before any send. | `CoreUnit.t.sol` `test_pin_*` |
 | An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
@@ -90,11 +91,21 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    build metadata. Git is the history. Stamped with the chain id the step last selected.
 5. **A deploy step converges.** `_deployRole` authenticates what it reuses, by the unit's `authenticate` or
    by its creation (`_requireCreatedFrom`), and sends only a missing role;
-   `_done` ends a step by printing what it sent, the files to commit and the next `plan` command.
-6. **Done has three forms, and a step needs one.** A `<fn>Due` view (true while work remains), the
-   certificate of a same-unit `check` that reaches it through `needs`, or, for a node with no step, a
+   `_done` ends a step by printing what it sent, the files to commit and the next `plan` command;
+   `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
+   broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.
+6. **Done has four forms, and a step needs one.** A probe: the step itself, run and reverted, is due at
+   its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). The
+   certificate of a same-unit `check`, for the `check` and the steps marked `.doneByCheck()` that it
+   reaches through `needs`, and for every step of a unit that cannot be probed. For a node with no step, a
    predicate (`until`) that anyone may satisfy. Construction refuses a step with none (`MissingDoneRule`).
    A `check` after another `check` of one journal needs a view, since the first `checked` would mark it done.
+   The probe runs under a prank, because forge refuses its broadcast cheatcodes under one: forge keeps the
+   transactions of a reverted call in the dry run, which `--resume` would send. It pranks as the step's
+   sender, `.by` or the plan's own. A receipt still to journal is not work, since forge writes the record
+   after the run. A graph asks a unit whether it answers the probe with a static call, so asking runs
+   nothing. Rejected: certifying every unmarked step that
+   a `check` follows (it hides drift after the certificate, and prints a step before its needs land).
 7. **`check` certifies once.** It writes `checked` only if the journal lacks it or its identity differs; the
    block keys `evmBlock`, `l1Block` and `l2Block` are not identity, so they record where the role was first
    certified and a rerun leaves the journal unchanged. Rejected: rewriting on every run (noisy diffs, no

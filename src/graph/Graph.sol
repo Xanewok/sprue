@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {Script, console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {Registration, IUnitSteps, Step, StepKind} from "./Step.sol";
+import {IProbe, Registration, IUnitSteps, Step, StepKind} from "./Step.sol";
 
 /// @notice A fixed graph of deploy steps (nodes). `plan` prints the commands that reach a target;
 ///         `rehearse` simulates them.
@@ -51,6 +51,9 @@ abstract contract Graph is Script {
         bool certified;
         /// @dev The `check` nodes whose certificate makes this node done. Empty unless `certified`.
         string[] certifiedBy;
+        /// @dev A step of a unit that answers `IProbe.probe`, with no `Due` view, not certified: once its
+        ///      needs are done, the plan judges it by running it there.
+        bool probed;
         /// @dev Makes this a predicate node, which sends nothing. It names a view on the unit that
         ///      returns true once the chain meets a condition, called with the step's arguments.
         ///      Something outside the graph, such as a person's transaction, makes it true.
@@ -217,7 +220,7 @@ abstract contract Graph is Script {
             // Alone, a certified step is still sent, so its date is judged too.
             if (passed[i] || (!alone && n.certified && _journalChecked(network, vm.split(n.id, ".")[0]))) {
                 visit.status = Status.Done;
-            } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || bytes(n.until).length != 0)) {
+            } else if (!alone && !_dependenciesDone(i, statuses) && (n.due || n.probed || bytes(n.until).length != 0)) {
                 visit.status = Status.NotJudged;
                 _requireCertificateAhead(target, i, statuses, visits, count);
             } else {
@@ -388,7 +391,35 @@ abstract contract Graph is Script {
             if (!ok) return (Status.Waiting, _reason(n.id, ret));
             return (abi.decode(ret, (bool)) ? Status.Due : Status.Done, "");
         }
+        if (n.probed) return _probe(network, n);
         return (Status.Due, "");
+    }
+
+    function _probe(string memory network, Node storage n) private returns (Status, string memory) {
+        address sender = bytes(n.sender).length == 0 ? msg.sender : _senderAddress(network, n.sender);
+        (, bytes memory ret) = n.unit.call(abi.encodeCall(IProbe.probe, (_calldata(n, n.step, network), sender)));
+        require(bytes4(ret) == IProbe.Probed.selector, string.concat(n.id, ": its unit's probe did not answer"));
+        (bool returned, bytes memory result) = abi.decode(_strip(ret), (bool, bytes));
+        if (returned) return (Status.Done, "");
+        if (bytes4(result) == IProbe.StepDue.selector) return (Status.Due, "");
+        if (!_isBroadcastUnderPrank(result)) return (Status.Waiting, _reason(n.id, result));
+        return (
+            Status.Waiting,
+            "it calls vm.startBroadcast or vm.broadcast, which a probe cannot judge: call _startBroadcast(), give it a Due view, or mark it doneByCheck"
+        );
+    }
+
+    function _isBroadcastUnderPrank(bytes memory result) private pure returns (bool) {
+        if (result.length < 68 || bytes4(result) != bytes4(keccak256("CheatcodeError(string)"))) return false;
+        return vm.indexOf(abi.decode(_strip(result), (string)), "you have an active prank") != type(uint256).max;
+    }
+
+    /// @dev `data` without its selector, as a copy.
+    function _strip(bytes memory data) private pure returns (bytes memory rest) {
+        rest = new bytes(data.length - 4);
+        for (uint256 i; i < rest.length; ++i) {
+            rest[i] = data[i + 4];
+        }
     }
 
     function _add(address target, string memory script) internal {
@@ -399,6 +430,7 @@ abstract contract Graph is Script {
     function _add(Registration memory unit, Step[] memory steps) internal {
         // Keeps the unit's contract alive when a step later selects another fork.
         vm.makePersistent(unit.target);
+        bool probes = _answersProbe(unit.target);
         _requirePlain(unit.script, "-:./");
         _requireScript(unit.script);
         for (uint256 i; i < steps.length; ++i) {
@@ -436,8 +468,14 @@ abstract contract Graph is Script {
             n.testOnly = s.testOnly;
             if (s.hasArg) n.arg = vm.toString(s.arg);
             n.due = s.dueSelector != 0;
+            n.probed = probes && s.kind == StepKind.Call && !n.due && !s.byCheck;
             n.ownForks = s.ownForks;
         }
+    }
+
+    function _answersProbe(address unit) private view returns (bool) {
+        (bool ok, bytes memory ret) = unit.staticcall(abi.encodeCall(IProbe.probes, ()));
+        return ok && ret.length == 32 && bytes4(ret) == IProbe.probe.selector;
     }
 
     /// @dev The script is `<path>` or `<path>:<Contract>`: a non-empty path that does not start with
@@ -493,8 +531,9 @@ abstract contract Graph is Script {
 
     /// @dev Call after the last `_add`. Reverts unless every dependency exists, no production node
     ///      depends on a test-only node, every node's unit is registered and the graph has no cycle,
-    ///      and every step has a done rule: a `Due` view, or a `check` step of its unit that reaches
-    ///      it through `needs`. Sorts the nodes (`_order`).
+    ///      and every step has a done rule: a `Due` view, a probe, or a `check` step of its unit that
+    ///      reaches it through `needs`. A `check` certifies itself, and of its ancestors only those
+    ///      that no probe judges. Sorts the nodes (`_order`).
     function _validateGraph() internal {
         for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
@@ -514,20 +553,21 @@ abstract contract Graph is Script {
             for (uint256 j; j <= i; ++j) {
                 Node storage n = _nodes[j];
                 if (
-                    ancestors[j] && n.unit == check.unit && !n.due && bytes(n.step).length != 0
+                    ancestors[j] && n.unit == check.unit && !n.due && (j == i || !n.probed) && bytes(n.step).length != 0
                         && keccak256(bytes(vm.split(n.id, ".")[0])) == journal
                 ) {
                     // An earlier `check` among the ancestors is refused: it would write `checked` first,
                     // and that would mark this `check` done without running it.
                     require(j == i || keccak256(bytes(n.step)) != keccak256("check"), MissingDoneRule(check.id));
                     n.certified = true;
+                    n.probed = false;
                     n.certifiedBy.push(check.id);
                 }
             }
         }
         for (uint256 i; i < _nodes.length; ++i) {
             Node storage n = _nodes[i];
-            require(bytes(n.step).length == 0 || n.due || n.certified, MissingDoneRule(n.id));
+            require(bytes(n.step).length == 0 || n.due || n.certified || n.probed, MissingDoneRule(n.id));
         }
     }
 
@@ -832,12 +872,15 @@ abstract contract Graph is Script {
         string memory signature;
         if (n.certified) {
             kind = "certificate";
+        } else if (n.probed) {
+            kind = "probe";
+            signature = _signature(n, n.step);
         } else if (bytes(n.until).length != 0) {
             kind = "predicate";
             signature = _signature(n, n.until);
         } else {
-            // `_validateGraph` refused any step without a done rule, so this is a step with a `Due`
-            // view.
+            // `_validateGraph` refused any other step without a done rule, so this is a step with a
+            // `Due` view.
             kind = "view";
             signature = _signature(n, string.concat(n.step, "Due"));
         }

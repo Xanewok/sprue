@@ -6,6 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, chainKind, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
 import {cheats} from "./DeployChecks.sol";
+import {IProbe} from "./graph/Step.sol";
 
 /// @dev The unit's own parameters, `<root>/<network>/<unit>.input.json`.
 function inputPath(string memory root, string memory network, string memory unit) pure returns (string memory) {
@@ -57,10 +58,75 @@ function stageInputs(string memory from, string memory to) {
     }
 }
 
+/// @dev An input file's JSON and the unit it belongs to, which a refusal names.
+struct Input {
+    string json;
+    string unit;
+}
+
+/// @dev A certificate a `check` step builds: `Deployment._certificate` starts it for its role, each
+///      `with...` adds a key, and `Deployment._certify` writes it.
+struct Certificate {
+    string obj;
+    string role;
+    address addr;
+}
+
+using {withAddress, withCode, withUint, withBytes32, withString} for Certificate global;
+
+function withAddress(Certificate memory c, string memory key, address value) returns (Certificate memory) {
+    cheats.serializeAddress(c.obj, key, value);
+    return c;
+}
+
+/// @dev `key` and `<key>CodeHash`, which `Journal._checked` compares for the address it returns.
+function withCode(Certificate memory c, string memory key, address value) returns (Certificate memory) {
+    cheats.serializeAddress(c.obj, key, value);
+    cheats.serializeBytes32(c.obj, string.concat(key, "CodeHash"), value.codehash);
+    return c;
+}
+
+function withUint(Certificate memory c, string memory key, uint256 value) returns (Certificate memory) {
+    cheats.serializeUint(c.obj, key, value);
+    return c;
+}
+
+function withBytes32(Certificate memory c, string memory key, bytes32 value) returns (Certificate memory) {
+    cheats.serializeBytes32(c.obj, key, value);
+    return c;
+}
+
+function withString(Certificate memory c, string memory key, string memory value) returns (Certificate memory) {
+    cheats.serializeString(c.obj, key, value);
+    return c;
+}
+
 /// @dev A unit's journal `<unit>.json` records what the unit deployed and certified. The unit's
 ///      inputs, `<unit>.input.json`, and the network's `network.json` sit beside it.
-abstract contract Journal is Script {
+abstract contract Journal is Script, IProbe {
     string internal _usedNetwork;
+    /// @dev Set only inside `probe`, whose revert clears it.
+    bool private _probing;
+
+    /// @dev The step's first broadcast (`_startBroadcast`) or journal write (`_put`, `_certify`) reverts
+    ///      with `StepDue`. While the prank is active forge refuses `vm.startBroadcast` and
+    ///      `vm.broadcast`, so a step that calls them directly cannot queue a transaction: forge keeps
+    ///      the transactions of a reverted call in the dry run, which `--resume` would send.
+    function probe(bytes calldata step, address sender) external {
+        _probing = true;
+        vm.startPrank(sender, sender);
+        (bool returned, bytes memory result) = address(this).call(step);
+        vm.stopPrank();
+        revert Probed(returned, result);
+    }
+
+    function probes() external pure returns (bytes4) {
+        return IProbe.probe.selector;
+    }
+
+    function _inProbe() internal view returns (bool) {
+        return _probing;
+    }
 
     /// @dev The journal's name without `.json`; also the prefix of the unit's input file.
     function _unit() internal pure virtual returns (string memory);
@@ -95,8 +161,12 @@ abstract contract Journal is Script {
         _usedNetwork = network;
         // Here and not in `_use`: a step that selects its own forks never calls `_use`. A dry run too, the
         // graph's plan and rehearse included: `--resume` sends a saved dry run when no broadcast was
-        // saved, and no caller tells a probe from a step that broadcasts.
-        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun)) {
+        // saved, and no caller tells a `Due` view from a step that broadcasts. A probe queues no
+        // transaction, and the runner checks the step's own command.
+        if (
+            !_probing
+                && (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun))
+        ) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
             if (_rehearsal()) {
                 _requireOutput("resume data", "FOUNDRY_CACHE_PATH", "cache", string.concat(_dir(), "/cache"));
@@ -178,6 +248,8 @@ abstract contract Journal is Script {
     ///         next, which it returns. The graph owns the order, so a step never names its
     ///         successor.
     function _done(bool sends) internal returns (string memory command) {
+        _stepEnded();
+        if (_probing) return "";
         if (!sends) console.log("nothing to send");
         else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
         else console.log("simulated: rerun with --broadcast to send");
@@ -194,6 +266,9 @@ abstract contract Journal is Script {
         console.log(string.concat("next: ", command));
     }
 
+    /// @dev Called by `_done`, so that the next step of a run starts afresh.
+    function _stepEnded() internal virtual {}
+
     // ==== Files ====
 
     function _networkJson() internal view returns (string memory) {
@@ -205,31 +280,52 @@ abstract contract Journal is Script {
         return vm.readFile(inputPath(_deployments(), _networkName(), _unit()));
     }
 
+    /// @dev `unit`'s input file on this network, for the readers below, whose refusals then name it.
+    function _inputFile(string memory unit) internal view returns (Input memory) {
+        return Input(vm.readFile(inputPath(_deployments(), _networkName(), unit)), unit);
+    }
+
     /// @dev Reads a string field of `json`. Reverts if it is empty or a placeholder, a value that
     ///      starts with `<` in an input file waiting to be filled in.
-    function _decided(string memory json, string memory key) internal pure returns (string memory v) {
-        v = vm.parseJsonString(json, string.concat(".", key));
+    function _decided(string memory json, string memory key) internal pure returns (string memory) {
+        return _decided(Input(json, _unit()), key);
+    }
+
+    function _decided(Input memory input, string memory key) internal pure returns (string memory v) {
+        v = vm.parseJsonString(input.json, string.concat(".", key));
         require(
             bytes(v).length != 0 && bytes(v)[0] != "<",
-            string.concat(_unit(), ".input.json's ", key, " is a placeholder: fill it in and commit it")
+            string.concat(input.unit, ".input.json's ", key, " is a placeholder: fill it in and commit it")
         );
     }
 
     function _inputUint(string memory json, string memory key, uint256 min, uint256 max)
         internal
         pure
+        returns (uint256)
+    {
+        return _inputUint(Input(json, _unit()), key, min, max);
+    }
+
+    function _inputUint(Input memory input, string memory key, uint256 min, uint256 max)
+        internal
+        pure
         returns (uint256 v)
     {
-        v = vm.parseUint(_decided(json, key));
-        require(v >= min && v <= max, string.concat(_unit(), ".input.json's ", key, " is out of range"));
+        v = vm.parseUint(_decided(input, key));
+        require(v >= min && v <= max, string.concat(input.unit, ".input.json's ", key, " is out of range"));
     }
 
     /// @dev `key` may be a path such as `creators[0]`. The zero address is never a valid input.
-    function _requiredAddress(string memory json, string memory key) internal pure returns (address a) {
-        a = vm.parseAddress(_decided(json, key));
+    function _requiredAddress(string memory json, string memory key) internal pure returns (address) {
+        return _requiredAddress(Input(json, _unit()), key);
+    }
+
+    function _requiredAddress(Input memory input, string memory key) internal pure returns (address a) {
+        a = vm.parseAddress(_decided(input, key));
         require(
             a != address(0),
-            string.concat(_unit(), ".input.json's ", key, " is the zero placeholder: supply the required address")
+            string.concat(input.unit, ".input.json's ", key, " is the zero placeholder: supply the required address")
         );
     }
 
@@ -258,6 +354,7 @@ abstract contract Journal is Script {
     }
 
     function _put(string memory key, string memory value) internal virtual {
+        if (_probing) revert StepDue();
         string memory p = _path();
         if (!vm.exists(p)) {
             vm.createDir(_dir(), true);
@@ -282,10 +379,11 @@ abstract contract Journal is Script {
     function _rehearsal() internal view virtual returns (bool);
 
     /// @dev Whether this run records deployments in the journal: a broadcast, a resumed broadcast,
-    ///      or any run on a rehearsal network. `_certify` consults it.
+    ///      or any run on a rehearsal network. `_certify` consults it. True in a probe, which judges the
+    ///      step as its send would run, and refuses the write itself.
     function _writing() internal view virtual returns (bool) {
-        return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume)
-            || _rehearsal();
+        return _probing || vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+            || vm.isContext(VmSafe.ForgeContext.ScriptResume) || _rehearsal();
     }
 
     /// @dev The address of `unit`'s `role`, as that unit's `check` step certified it. Reverts unless
@@ -300,6 +398,34 @@ abstract contract Journal is Script {
         require(
             addr.codehash == vm.parseJsonBytes32(record, string.concat(".checked.", role, "CodeHash")),
             string.concat(role, "'s code differs from ", unit, ".json's check")
+        );
+    }
+
+    /// @dev The address `unit`'s journal records for `role`, before that unit's `check`: on the chain the
+    ///      journal is stamped with, with the code hash it records. Unlike `_checked`, nothing vouches for
+    ///      the role's configuration, so read through it only what the role's code fixes.
+    function _recorded(string memory unit, string memory role) internal view returns (address addr) {
+        string memory record = _journalOf(unit);
+        string memory key = string.concat(".", role);
+        require(_has(record, key), string.concat(unit, ".json records no ", role));
+        addr = _addr(record, key);
+        _requireCode(addr, role);
+        require(
+            _has(record, string.concat(key, "CodeHash"))
+                && addr.codehash == vm.parseJsonBytes32(record, string.concat(key, "CodeHash")),
+            string.concat(role, "'s code differs from ", unit, ".json")
+        );
+    }
+
+    /// @dev `unit`'s journal on this network, refused unless it is stamped with this chain.
+    function _journalOf(string memory unit) internal view returns (string memory record) {
+        string memory path = string.concat(_dir(), "/", unit, ".json");
+        require(vm.exists(path), string.concat(unit, ".json is missing"));
+        record = vm.readFile(path);
+        string memory stamp = _stampKey(_networkJson());
+        require(
+            _has(record, stamp) && _uint(record, stamp) == block.chainid,
+            string.concat(unit, ".json is not this chain's")
         );
     }
 
@@ -361,6 +487,7 @@ abstract contract Journal is Script {
         if (!_writing()) return;
         string memory journal = _journal();
         if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
+        if (_probing) revert StepDue();
         vm.writeJson(checked, _path(), ".checked");
     }
 

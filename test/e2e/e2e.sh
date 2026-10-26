@@ -240,8 +240,9 @@ scenario_failure() {
   [ "$(jq -r .tokenDeployer deployments/pinned/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
     || die "failure: --unsafe-unexpected-deployer did not send the pin's steps as the signer"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
-  # what forge resolves: the inherited environment or foundry.toml.
-  network elsewhere 31337; local n0; n0=$(nonce)
+  # what forge resolves: the inherited environment or foundry.toml. From a fresh chain, where the plan's probe
+  # of the step finds nothing else to refuse.
+  fresh "$RPC"; network elsewhere 31337; local n0; n0=$(nonce)
   refused 'forge would keep this run.s records in elsewhere, not broadcast' env FOUNDRY_BROADCAST=elsewhere G run elsewhere token.check
   mv foundry.toml foundry.toml.ok; { echo '[profile.default]'; echo 'broadcast = "elsewhere"'; tail -n +2 foundry.toml.ok; } >foundry.toml
   refused 'forge would keep this run.s records in elsewhere, not broadcast' G run elsewhere token.check
@@ -288,6 +289,11 @@ scenario_recover() {
   G run local vault.check >/dev/null 2>>log || die "recover: the rerun failed"
   all_done recover "$(G plan local vault.check 2>>log)"
   [ -n "$(jq -r '.token // empty' deployments/local/token.json)" ] || die "recover: the journal lacks the token"
+  # The vault is created from its initcode, not a typed new: forge's record still names it, so its lost
+  # journal is refused too.
+  rm deployments/local/vault.json
+  if out=$(G run local vault.check 2>&1); then die "recover: a run went on without the vault's journal"; fi
+  grep -q "holds a CREATE of Vault" <<<"$out" || die "recover: the vault's record went unseen: ${out: -400}"
   echo "ok  a lost journal is refused with its recover command, which rebuilds it, and the rerun is done"
 }
 

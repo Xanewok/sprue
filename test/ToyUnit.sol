@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {defaultChainIn} from "../src/Chains.sol";
 import {Deployment} from "../src/Deployment.sol";
+import {Certificate} from "../src/Journal.sol";
 import {Declares} from "../src/graph/Step.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 
@@ -80,6 +81,12 @@ contract ToyUnit is ToyJournal {
         tag = tag_;
     }
 
+    bool public refuseReuse;
+
+    function setRefuseReuse(bool refuse) external {
+        refuseReuse = refuse;
+    }
+
     function confirm(bytes32 hash) external {
         confirmed[hash] = true;
     }
@@ -95,6 +102,66 @@ contract ToyUnit is ToyJournal {
 
     function requireCreatedFrom(string calldata network) external {
         _requireCreatedFrom(_use(network), "toy", "ToyPayload", abi.encode(tag));
+    }
+
+    function requireCreatedWith(string calldata network) external {
+        _requireCreatedWith(_use(network), "toy", abi.encode(tag));
+    }
+
+    function recordedOf(string calldata network, string calldata unit, string calldata role)
+        external
+        returns (address)
+    {
+        _use(network);
+        return _recorded(unit, role);
+    }
+
+    function requireJournaledCreate(string calldata network) external {
+        _requireJournaledCreate(_use(network), "toy", abi.encode(tag));
+    }
+
+    function requireJournaledCreateOf(string calldata network, string calldata unit) external {
+        _use(network);
+        _requireJournaledCreate(unit, _journalOf(unit), "toy", abi.encode(tag));
+    }
+
+    function deployJournaled(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.Journaled, _refusable);
+        return _done(sent);
+    }
+
+    function deploy2(string calldata network, bytes32 salt, address at) external returns (bool) {
+        return _deployRoleCreate2(_use(network), "toy", "ToyPayload", abi.encode(tag), salt, at, _refusable);
+    }
+
+    function otherInputUint(string calldata network, string calldata unit, string calldata key)
+        external
+        returns (uint256)
+    {
+        _use(network);
+        return _inputUint(_inputFile(unit), key, 1, 10);
+    }
+
+    function reuse(string calldata network) external returns (address) {
+        return _reuse(_use(network), "toy", abi.encode(tag));
+    }
+
+    function reuseJournaled(string calldata network) external returns (address) {
+        return _reuseJournaled(_use(network), "toy", abi.encode(tag));
+    }
+
+    function requireCreatedWithArgs(string calldata network, bytes calldata args) external {
+        _requireCreatedWith(_use(network), "toy", args);
+    }
+
+    function deployFromInitcode(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), Proof.WithArgs);
+        return _done(sent);
+    }
+
+    function deployWithArgs(string calldata network) external returns (string memory) {
+        (, bool sent) = _deployRole(_use(network), "toy", "ToyPayload", abi.encode(tag), _create, Proof.WithArgs);
+        return _done(sent);
     }
 
     function deployByCreation(string calldata network) external returns (string memory) {
@@ -114,6 +181,17 @@ contract ToyUnit is ToyJournal {
         _authenticate(addr, abi.encode(tag));
         _recordReceipt(m, "toy", addr);
         return _certifyRole(_beginChecked("toy", addr), "toy", addr);
+    }
+
+    /// @dev `check` through the builder, with a second role's address and code.
+    function checkBuilt(string calldata network, address spare) external returns (string memory) {
+        string memory m = _use(network);
+        address addr = _requireRecordedCode(m, "toy");
+        _authenticate(addr, abi.encode(tag));
+        Certificate memory c = spare == address(1) ? _certificate("toy", addr) : _certificate(m, "toy", addr);
+        if (spare == address(1)) spare = address(0);
+        if (spare != address(0)) c = c.withCode("spare", spare).withUint("tag", tag);
+        return _certify(c);
     }
 
     /// @dev `_recover` with the test sender, which `_recovering` cannot take: it asks forge for
@@ -206,6 +284,10 @@ contract ToyUnit is ToyJournal {
 
     function _create(bytes memory args) private returns (address) {
         return address(new ToyPayload(abi.decode(args, (uint256))));
+    }
+
+    function _refusable(address, bytes memory) private view {
+        require(!refuseReuse, "the check refused the reuse");
     }
 
     function _authenticate(address addr, bytes memory args) private view {

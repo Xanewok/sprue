@@ -11,7 +11,7 @@ contract DeployReceiver is Unit {
     function steps() external view returns (Step[] memory s) {
         s = new Step[](3);
         for (uint8 i; i < 3; ++i) {
-            s[i] = _step(string.concat("receiver.notify.", vm.toString(i)), "notify", this.notify, this.notifyDue, i)
+            s[i] = _step(string.concat("receiver.notify.", vm.toString(i)), "notify", this.notify, i)
                 .gateView("windowStart", DeployReceiver.windowStart.selector)
                 .on("receiver")
                 .reads("source")
@@ -26,15 +26,8 @@ contract DeployReceiver is Unit {
         _selectChain("source");
         address source = _checked("source", "source");
         Receiver receiver = _receiver();
-        _startBroadcast();
-        receiver.open(window, source);
-        vm.stopBroadcast();
-        return _done(true);
-    }
-
-    function notifyDue(string calldata network, uint8 window) external returns (bool) {
-        _adopt(network);
-        return _receiver().opened(window) == address(0);
+        _want(receiver.opened(window) != address(0), address(receiver), abi.encodeCall(Receiver.open, (window, source)));
+        return _done();
     }
 
     /// @dev A gate view must leave the gate's chain (here the receiver's) selected: the graph compares

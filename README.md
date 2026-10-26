@@ -41,16 +41,16 @@ The example's vault unit declares its steps like this:
 ```solidity
 function steps() external view returns (Step[] memory s) {
     s = new Step[](3);
-    s[0] = _step("vault.deploy", this.deploy, this.deployDue).needs("token.check");
-    s[1] = _step("vault.fund", this.fund, this.fundDue).needs("vault.deploy").notBefore("vault.openAt");
+    s[0] = _step("vault.deploy", this.deploy).needs("token.check");
+    s[1] = _step("vault.fund", this.fund).needs("vault.deploy").notBefore("vault.openAt");
     s[2] = _step("vault.check", this.check).needs("vault.fund");
 }
 ```
 
 The vault waits for the token unit's check, sends `fund` only after the `openAt` date in its input file
-`vault.input.json`, and checks itself last. `deployDue` and `fundDue` return true while their step
-still has work. `check` has none: it is done once it writes the certificate, the record of the unit's
-addresses that other units read.
+`vault.input.json`, and checks itself last. `plan` judges `deploy` and `fund` by running them in a
+probe: a step is due while it would still send. `check` is done once it writes the certificate, the
+record of the unit's addresses that other units read.
 [GUIDE.md](GUIDE.md) explains the concepts and how to set up your own project, rehearse, configure and
 recover.
 

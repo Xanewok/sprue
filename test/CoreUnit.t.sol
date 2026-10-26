@@ -423,7 +423,7 @@ contract CoreUnitTest is Test {
 
     /// @dev Only a unit that asks for the proof gets it: the `_deployRole` without `authenticate`, or a
     ///      call. This run's record of a role it created decides, even in a test; a test's role with no
-    ///      record and no known transaction passes, as forge's test commands keep no transaction history.
+    ///      record and no known transaction is refused unless the test trusts creations.
     ///      A refusal comes before any journal write.
     function test_requireCreatedFrom_refusesAnotherCreationInput_onlyWhereAUnitAsks() public {
         _network("created-from", FREE, "");
@@ -438,6 +438,13 @@ contract CoreUnitTest is Test {
         unit.setTag(1);
         ToyUnit later = new ToyUnit();
         later.setTestSender(ops);
+        vm.expectRevert(
+            bytes(
+                "neither toy.json, a broadcast record nor the chain shows the transaction that created toy: journal it as toyTx"
+            )
+        );
+        later.requireCreatedFrom(network);
+        later.trustTestCreations();
         later.requireCreatedFrom(network);
 
         bytes32 hash = keccak256("the payload's creation");
@@ -478,6 +485,68 @@ contract CoreUnitTest is Test {
         unit.send(_initcode(2));
         vm.expectRevert(bytes(refusal));
         unit.requireCreatedFrom(network);
+    }
+
+    /// @dev The arguments are the chain's, after the code the journal records, so a source changed after
+    ///      the deployment passes where `_requireCreatedFrom` refuses it.
+    function test_requireCreatedWith_provesTheArgumentsAfterTheJournaledCode() public {
+        _network("created-with", FREE, "");
+        unit.deployByCreation(network);
+        string memory path = string.concat(dir, "/toy.json");
+        assertEq(
+            vm.parseJsonBytes32(vm.readFile(path), ".toyCreationCodeHash"),
+            keccak256(vm.getCode("ToyPayload.sol:ToyPayload"))
+        );
+        string memory refusal = "toy was not created with the step's arguments from the code toy.json records";
+        unit.requireCreatedWith(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        unit.requireCreatedWith(network);
+
+        // Another instance has no record of this run: the chain's input decides.
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', _journalOf("toy", ".toy"), hash, hash);
+        later.confirm(hash);
+        bytes memory edited = bytes.concat(hex"6080", vm.getCode("ToyPayload.sol:ToyPayload"));
+        later.send(bytes.concat(edited, abi.encode(uint256(1))));
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+        vm.writeJson(vm.toString(keccak256(edited)), path, ".toyCreationCodeHash");
+        later.requireCreatedWith(network);
+        vm.expectRevert(
+            bytes(
+                "toy was not created from this build's ToyPayload with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
+            )
+        );
+        later.requireCreatedFrom(network);
+        later.setTag(2);
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+        later.setTag(1);
+        later.send(hex"00");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
+
+        // A journal without the key: the whole input against the initcode hash.
+        vm.writeFile(
+            path,
+            vm.replace(
+                vm.readFile(path), string.concat('"toyCreationCodeHash": "', vm.toString(keccak256(edited)), '",'), ""
+            )
+        );
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyCreationCodeHash"), "the key is still there");
+        later.send(_initcode(1));
+        later.requireCreatedWith(network);
+        // A suffix of the arguments is not the arguments.
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWithArgs(network, "");
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWithArgs(network, hex"01");
+        later.send(bytes.concat(edited, abi.encode(uint256(1))));
+        vm.expectRevert(bytes(refusal));
+        later.requireCreatedWith(network);
     }
 
     /// @dev forge writes `null` for a run outside git, and a commit already journaled is not replaced.
@@ -789,19 +858,20 @@ contract CoreUnitTest is Test {
         unit.recover(network);
         assertFalse(vm.exists(string.concat(dir, "/toy.json")), "recover adopted a CREATE2");
 
-        vm.expectRevert(
-            bytes(
-                string.concat(
-                    "toy.json lacks toy, yet ",
-                    _recordPath(),
-                    " holds a CREATE2 of ToyPayload at ",
-                    vm.toString(addr),
-                    " that landed or may land: restore the journal"
-                )
+        bytes memory stray = bytes(
+            string.concat(
+                "toy.json lacks toy, yet ",
+                _recordPath(),
+                " holds a CREATE2 of ToyPayload at ",
+                vm.toString(addr),
+                " that landed or may land: restore the journal"
             )
         );
+        vm.expectRevert(stray);
         unit.deploy(network);
         vm.stopBroadcast();
+        vm.expectRevert(stray);
+        unit.deploy2(network, bytes32(0), address(0xC2));
     }
 
     /// @dev A second landed `ToyPayload` in the records would refuse any recovery of a role the
@@ -964,6 +1034,215 @@ contract CoreUnitTest is Test {
         unit.check(network);
         (bool present,) = unit.checkedOptional(network, "toy");
         assertTrue(present, "the certificate kept toyAbsent");
+    }
+
+    function test_deployRole_fromInitcode_createsTheArtifactWithTheArguments() public {
+        _network("from-initcode", FREE, "");
+        unit.deployFromInitcode(network);
+        address toy = _journalOf("toy", ".toy");
+        assertEq(ToyPayload(toy).tag(), 1);
+        uint256 nonce = vm.getNonce(ops);
+        unit.deployFromInitcode(network);
+        assertEq(vm.getNonce(ops), nonce, "a reuse sent");
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        unit.deployFromInitcode(network);
+    }
+
+    /// @dev The proof runs before anything is journaled.
+    function test_deployRole_withArgs_provesAReuseByItsArguments() public {
+        _network("deploy-with-args", FREE, "");
+        unit.deployWithArgs(network);
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        unit.deployWithArgs(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        unit.deployWithArgs(network);
+        vm.stopBroadcast();
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+    }
+
+    function test_requireJournaledCreate_holdsTheRecordToItsArgumentsPinAndNonce() public {
+        _network("journaled-create", FREE, vm.toString(ops));
+        unit.deploy(network);
+        unit.requireJournaledCreate(network);
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from toy.json"));
+        unit.requireJournaledCreate(network);
+        unit.setTag(1);
+        string memory path = string.concat(dir, "/toy.json");
+        vm.writeJson("7", path, ".toyNonce");
+        vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
+        unit.requireJournaledCreate(network);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat(
+                '{"chains":{"main":{"rpc":"main","id":',
+                vm.toString(FREE),
+                '}},"deployer":"',
+                vm.toString(makeAddr("pin")),
+                '"}'
+            )
+        );
+        vm.expectRevert(bytes("toy's recorded deployer is not network.json's deployer"));
+        unit.requireJournaledCreate(network);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":', vm.toString(FREE), "}}}")
+        );
+        vm.expectRevert(bytes("network.json pins no deployer, so toy.json alone cannot prove toy's creation"));
+        unit.requireJournaledCreate(network);
+    }
+
+    function test_requireJournaledCreate_namesTheJournalItReads() public {
+        _network("journaled-create-of", FREE, vm.toString(ops));
+        unit.deploy(network);
+        vm.writeFile(string.concat(dir, "/other.json"), vm.readFile(string.concat(dir, "/toy.json")));
+        unit.requireJournaledCreateOf(network, "other");
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from other.json"));
+        unit.requireJournaledCreateOf(network, "other");
+        vm.expectRevert(bytes("absent.json is missing"));
+        unit.requireJournaledCreateOf(network, "absent");
+    }
+
+    /// @dev The journaled proof runs first, then the check, both before anything is journaled.
+    function test_deployRole_journaled_provesAReuseByTheRecordThenTheCheck() public {
+        _network("deploy-journaled", FREE, vm.toString(ops));
+        unit.deployJournaled(network);
+        uint256 nonce = vm.getNonce(ops);
+        unit.deployJournaled(network);
+        assertEq(vm.getNonce(ops), nonce, "a reuse sent");
+        string memory path = string.concat(dir, "/toy.json");
+        string memory recorded = vm.toString(vm.parseJsonUint(vm.readFile(path), ".toyNonce"));
+        vm.writeJson("7", path, ".toyNonce");
+        string memory journal = vm.readFile(path);
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
+        unit.deployJournaled(network);
+        vm.stopBroadcast();
+        assertEq(vm.readFile(path), journal, "a refused reuse was journaled");
+        vm.writeJson(recorded, path, ".toyNonce");
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deployJournaled(network);
+        vm.stopBroadcast();
+    }
+
+    function test_trustTestCreationOf_trustsTheJournaledIntentOfOneRoleOnly() public {
+        _network("trust-creation-of", FREE, "");
+        unit.deploy(network);
+        ToyUnit later = new ToyUnit();
+        later.setTestSender(ops);
+        later.trustTestCreationOf(vm.readFile(string.concat(dir, "/toy.json")), "toy");
+        later.requireCreatedFrom(network);
+        later.requireCreatedWith(network);
+        later.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        later.requireCreatedWith(network);
+    }
+
+    /// @dev A reset chain shows no code where the journal records a landed role. The same nonce would
+    ///      resend the pending intent, and a used one would deploy afresh: either would let the stale
+    ///      `checked` vouch for an unchecked contract with the same code.
+    function test_deployRole_refusesARoleRecordedAsLanded_whoseAddressHasNoCode() public {
+        _network("reset", FREE, "");
+        unit.deploy(network);
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        address toy = vm.parseJsonAddress(journal, ".toy");
+        uint64 nonce = uint64(vm.parseJsonUint(journal, ".toyNonce"));
+        bytes memory refusal = bytes(
+            "toy.json records toy as landed, but the RPC shows no code at its address: the RPC lags or the chain was reset; a person must resolve it"
+        );
+        vm.etch(toy, "");
+
+        vm.writeJson(vm.toString(keccak256("the creation")), path, ".toyTx");
+        vm.setNonceUnsafe(ops, nonce);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
+        vm.stopBroadcast();
+
+        vm.writeFile(path, journal);
+        vm.writeJson(string.concat('{"toy":"', vm.toString(toy), '"}'), path, ".checked");
+        vm.setNonceUnsafe(ops, nonce + 1);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
+        vm.stopBroadcast();
+    }
+
+    function test_inputFile_namesTheUnitWhoseInputIsRead() public {
+        _network("input-file", FREE, "");
+        vm.writeFile(string.concat(dir, "/other.input.json"), '{"n":"3","big":"11","later":"<fill>"}');
+        assertEq(unit.otherInputUint(network, "other", "n"), 3);
+        vm.expectRevert(bytes("other.input.json's big is out of range"));
+        unit.otherInputUint(network, "other", "big");
+        vm.expectRevert(bytes("other.input.json's later is a placeholder: fill it in and commit it"));
+        unit.otherInputUint(network, "other", "later");
+    }
+
+    function test_recorded_readsAnotherUnitsRoleOnlyWithItsChainAndCode() public {
+        _network("recorded", FREE, "");
+        unit.deploy(network);
+        ToyUnit reader = new ToyUnit();
+        assertEq(reader.recordedOf(network, "toy", "toy"), _journalOf("toy", ".toy"));
+        vm.expectRevert(bytes("toy.json records no spare"));
+        reader.recordedOf(network, "toy", "spare");
+        string memory path = string.concat(dir, "/toy.json");
+        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        reader.recordedOf(network, "toy", "toy");
+        string memory other = string.concat(dir, "/other.json");
+        vm.writeFile(other, vm.readFile(path));
+        vm.writeJson("5", other, ".mainChainId");
+        vm.expectRevert(bytes("other.json is not this chain's"));
+        reader.recordedOf(network, "other", "toy");
+    }
+
+    function test_reuse_returnsTheRoleOnlyWithTheJournalsCodeAndTheStepsArguments() public {
+        _network("reuse", FREE, "");
+        unit.deploy(network);
+        assertEq(unit.reuse(network), _journalOf("toy", ".toy"));
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy was not created with the step's arguments from the code toy.json records"));
+        unit.reuse(network);
+        unit.setTag(1);
+        vm.writeJson(vm.toString(bytes32(uint256(1))), string.concat(dir, "/toy.json"), ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.reuse(network);
+    }
+
+    function test_reuseJournaled_returnsTheRoleOnlyWithTheJournalsCodeAndPinnedRecord() public {
+        _network("reuse-journaled", FREE, vm.toString(ops));
+        unit.deploy(network);
+        assertEq(unit.reuseJournaled(network), _journalOf("toy", ".toy"));
+        unit.setTag(2);
+        vm.expectRevert(bytes("toy's constructor arguments differ from toy.json"));
+        unit.reuseJournaled(network);
+        unit.setTag(1);
+        vm.writeJson(vm.toString(bytes32(uint256(1))), string.concat(dir, "/toy.json"), ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.reuseJournaled(network);
+    }
+
+    /// @dev An equal identity leaves the journal byte for byte, so the builder writes what
+    ///      `_certifyRole` wrote; its keys are the ones `_checked` reads.
+    function test_certificate_certifiesAsCertifyRole_andAddsKeysThatCheckedReads() public {
+        _deployChecked("certificate");
+        string memory path = string.concat(dir, "/toy.json");
+        string memory journal = vm.readFile(path);
+        unit.checkBuilt(network, address(0));
+        assertEq(vm.readFile(path), journal);
+        // Without the receipt step: the certificate is the same.
+        unit.checkBuilt(network, address(1));
+        assertEq(vm.readFile(path), journal);
+
+        address spare = address(new ToyPayload(7));
+        unit.checkBuilt(network, spare);
+        (bool present, address addr) = unit.checkedOptional(network, "spare");
+        assertTrue(present);
+        assertEq(addr, spare);
+        assertEq(vm.parseJsonUint(vm.readFile(path), ".checked.tag"), 1);
     }
 
     function test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity() public {

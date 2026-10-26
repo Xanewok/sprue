@@ -40,8 +40,10 @@ end-to-end scenario for each invariant.
   a step that repeats a send from one that does not.
 - `_authenticate` must check the constructor arguments and state of a contract the journal reuses. The
   library checks its code, not its state. `_requireCreatedFrom` checks the constructor arguments, as
-  the creation transaction on the chain shows them; the state that later transactions change stays
-  with the unit.
+  the creation transaction on the chain shows them, and that the code is this build's;
+  `_requireCreatedWith` checks the arguments after the code the journal records, so its code's
+  identity rests on the journal and the certified code hash. The state that later transactions change
+  stays with the unit.
 - `Due` views must report whether the step still has work.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
@@ -52,7 +54,7 @@ end-to-end scenario for each invariant.
   the same transaction.
 - `_requireCreatedFrom` finds a CREATE2 role's transaction only in its broadcast records or the
   journal's `<role>Tx`, and a CREATE's on the chain only through an RPC that serves the deployer's
-  nonce at past blocks. Where it finds none, it refuses, except under forge's test commands. A
+  nonce at past blocks. Where it finds none, it refuses, in a test too unless the test calls `trustTestCreations()`. A
   contract that the same unit's `_deployRole` created in this run is judged by that unit's record of
   the chain, address and initcode, since a simulation's deployment has no transaction; another unit
   proving it is refused.

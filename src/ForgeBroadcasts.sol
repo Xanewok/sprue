@@ -169,6 +169,9 @@ abstract contract ForgeBroadcasts is Journal {
     }
 
     function _recordReceipt(string memory journal, string memory role, address deployed, bool create2) private {
+        // forge writes a send's record after the run, so a probe would find its receipt and plan the step
+        // again after every send. The step's next run, or `check`, journals it.
+        if (_inProbe()) return;
         // A recorded receipt is final. A rerun must not replace the transaction or block the journal
         // names.
         if (_has(journal, string.concat(".", role, "Tx")) && _has(journal, string.concat(".", role, "Block"))) {

@@ -7,7 +7,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {chainId, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
-import {isRehearsalNetwork, outputsEnv} from "./Journal.sol";
+import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
 ///      from deploying it twice.
@@ -34,10 +34,39 @@ abstract contract Deployment is ForgeBroadcasts {
     function _fenced() internal view virtual returns (bool);
 
     address private _testSender;
-    /// @dev The initcode hash of each contract this unit's `_deployRole` created in this run, by chain
-    ///      and address. A role that a simulation created has no transaction for `_requireCreatedFrom`
-    ///      to read.
-    mapping(bytes32 deployment => bytes32) private _createdThisRun;
+    bool private _testCreationsTrusted;
+    /// @dev The broadcaster of the step's first broadcast, and its nonce then. `_done` clears it.
+    address private _stepSender;
+    uint256 private _stepNonce;
+    /// @dev The initcode and argument hashes of each contract this unit's `_deployRole` created in this
+    ///      run, by chain and address. A role that a simulation created has no transaction for
+    ///      `_requireCreatedFrom` or `_requireCreatedWith` to read.
+    mapping(bytes32 deployment => Created) private _createdThisRun;
+
+    struct Created {
+        bytes32 initcodeHash;
+        bytes32 argsHash;
+    }
+
+    /// @dev Lets a test pass the creation proofs of roles whose creation no transaction shows, as forge's
+    ///      test commands keep none. Without it, a test refuses them as a script does, so a test that
+    ///      tampers with a role's creation proves something. Reverts outside forge's test commands.
+    function trustTestCreations() external {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
+        _testCreationsTrusted = true;
+    }
+
+    /// @dev `trustTestCreations` for one role only: the creation proofs take `journal`'s intent for
+    ///      `role` as its creation in this run, so a test still refuses a tampered intent and every other
+    ///      role. Reverts outside forge's test commands.
+    function trustTestCreationOf(string calldata journal, string calldata role) external {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
+        string memory key = string.concat(".", role);
+        _createdThisRun[_deployment(_addr(journal, key))] = Created(
+            vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash")),
+            keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args")))
+        );
+    }
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
     ///      so a script's broadcast sends as forge's own sender (`--sender`, `--account`).
@@ -46,9 +75,64 @@ abstract contract Deployment is ForgeBroadcasts {
         _testSender = sender;
     }
 
+    /// @dev Opens the step's broadcast unless it is open. `_done()` closes it. A broadcast the step did not
+    ///      open here, its caller's or a direct `vm.startBroadcast`, is not reused: forge refuses to open
+    ///      a second one.
     function _startBroadcast() internal {
+        if (_inProbe()) revert StepDue();
+        if (_ownBroadcastOpen()) return;
         if (_testSender == address(0)) vm.startBroadcast();
         else vm.startBroadcast(_testSender);
+        if (_stepSender != address(0)) return;
+        (, _stepSender,) = vm.readCallers();
+        _stepNonce = vm.getNonce(_stepSender);
+    }
+
+    /// @dev `_done(_sentThisStep())`, after it closes the step's broadcast.
+    function _done() internal returns (string memory) {
+        if (_ownBroadcastOpen()) vm.stopBroadcast();
+        return _done(_sentThisStep());
+    }
+
+    function _ownBroadcastOpen() private returns (bool) {
+        (VmSafe.CallerMode mode,,) = vm.readCallers();
+        return _stepSender != address(0) && mode == VmSafe.CallerMode.RecurrentBroadcast;
+    }
+
+    /// @dev Whether this step created a transaction: forge counts each one, simulated or sent, in the
+    ///      broadcaster's nonce. Only on the chain where the step first opened its broadcast, which is
+    ///      enough for `_done`'s log.
+    function _sentThisStep() internal view returns (bool) {
+        return _stepSender != address(0) && vm.getNonce(_stepSender) != _stepNonce;
+    }
+
+    function _stepEnded() internal override {
+        _stepSender = address(0);
+    }
+
+    /// @dev Sends `call` to `target` unless `holds`, in the step's broadcast. Wants run in order, so a
+    ///      later one sees the earlier ones' effects. Only a revert fails it: a contract that reports
+    ///      failure by its return value needs the step's own check.
+    function _want(bool holds, address target, bytes memory call) internal {
+        _want(holds, target, 0, call);
+    }
+
+    /// @dev `_want` that sends `value` wei with `call`; with an empty `call`, a plain transfer.
+    function _want(bool holds, address target, uint256 value, bytes memory call) internal {
+        if (holds) return;
+        // As a typed call would: a call to an address without code succeeds and does nothing. Only a
+        // plain transfer of value means something there.
+        require(
+            target.code.length != 0 || (call.length == 0 && value != 0),
+            string.concat(vm.toString(target), " has no code")
+        );
+        _startBroadcast();
+        (bool ok, bytes memory ret) = target.call{value: value}(call);
+        if (!ok) {
+            assembly ("memory-safe") {
+                revert(add(ret, 0x20), mload(ret))
+            }
+        }
     }
 
     /// @dev The deployer that `network.json` pins with `deployer`, or zero when it pins none. Reverts
@@ -76,6 +160,7 @@ abstract contract Deployment is ForgeBroadcasts {
         existing = _addr(journal, key);
         require(existing != address(0), string.concat("journal ", role, " is the zero address"));
         if (existing.code.length != 0) return existing;
+        _requireNoLandedRecord(journal, role);
 
         require(
             _has(journal, string.concat(key, "Deployer")),
@@ -119,16 +204,16 @@ abstract contract Deployment is ForgeBroadcasts {
 
     /// @dev `role` was created from this build's `artifact` with `args`: by this unit's `_deployRole`
     ///      in this run, whose record decides, or by the transaction `_findCreationInput` reads. A role
-    ///      with neither passes under forge's test commands, which keep no transaction history. For a
-    ///      role created otherwise, compare `_findCreationInput` with what it was created from.
+    ///      with neither passes only in a test that called `trustTestCreations`. For a role created
+    ///      otherwise, compare `_findCreationInput` with what it was created from.
     function _requireCreatedFrom(string memory journal, string memory role, string memory artifact, bytes memory args)
         internal
     {
         bytes32 expected = _initcodeHash(artifact, args);
-        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))];
+        bytes32 created = _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))].initcodeHash;
         if (created == 0) {
             bytes32 hash = _creationTx(journal, role);
-            if (hash == 0 && vm.isContext(VmSafe.ForgeContext.TestGroup)) return;
+            if (hash == 0 && _testCreationsTrusted) return;
             created = keccak256(_inputOf(journal, role, hash));
         }
         require(
@@ -140,6 +225,105 @@ abstract contract Deployment is ForgeBroadcasts {
                 " with the step's arguments: if they changed after its creation, or its source after its deployment, compare _findCreationInput with what it was created from"
             )
         );
+    }
+
+    /// @dev `role` was created with `args` from the code its journal records: by this unit's
+    ///      `_deployRole` in this run, or by the transaction `_findCreationInput` reads, whose input must
+    ///      be code that hashes to `<role>CreationCodeHash` followed by `args`. Unlike
+    ///      `_requireCreatedFrom`, a role whose source changed after its deployment passes; the code's
+    ///      identity rests on the journal. A journal without that key, written by an older sprue, has the
+    ///      whole input proven against `<role>InitcodeHash` and `args` against `<role>Args`, which the
+    ///      same write recorded. A role with neither passes only in a test that called
+    ///      `trustTestCreations`.
+    function _requireCreatedWith(string memory journal, string memory role, bytes memory args) internal {
+        string memory key = string.concat(".", role);
+        Created memory run = _createdThisRun[_deployment(_addr(journal, key))];
+        bool created;
+        if (run.initcodeHash != 0) {
+            created = run.argsHash == keccak256(args);
+        } else {
+            bytes32 hash = _creationTx(journal, role);
+            if (hash == 0 && _testCreationsTrusted) return;
+            bytes memory input = _inputOf(journal, role, hash);
+            if (input.length >= args.length) {
+                (bytes32 code, bytes32 tail) = _hashSplit(input, args.length);
+                created = tail == keccak256(args)
+                    && (_has(journal, string.concat(key, "CreationCodeHash"))
+                            ? code == vm.parseJsonBytes32(journal, string.concat(key, "CreationCodeHash"))
+                            : keccak256(input) == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))
+                            && keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args));
+            }
+        }
+        require(
+            created,
+            string.concat(role, " was not created with the step's arguments from the code ", _unit(), ".json records")
+        );
+    }
+
+    /// @dev The journal's record of `role` is consistent with a CREATE of `args` by the deployer that
+    ///      `network.json` pins: the recorded arguments are `args`, and the recorded deployer and nonce give
+    ///      the address the journal records, which is the one a step reuses. Refused on a network that pins
+    ///      no deployer, where any key's record would pass. It proves what the journal says, not what the
+    ///      chain shows: `_requireCreatedWith` reads the creation itself, where the input is the code
+    ///      followed by `args` alone.
+    function _requireJournaledCreate(string memory journal, string memory role, bytes memory args) internal view {
+        _requireJournaledCreate(_unit(), journal, role, args);
+    }
+
+    /// @dev `_requireJournaledCreate` of `unit`'s journal `record`, as `_journalOf(unit)` reads it.
+    function _requireJournaledCreate(string memory unit, string memory record, string memory role, bytes memory args)
+        internal
+        view
+    {
+        address pinned = _pinnedDeployer();
+        require(
+            pinned != address(0),
+            string.concat("network.json pins no deployer, so ", unit, ".json alone cannot prove ", role, "'s creation")
+        );
+        string memory key = string.concat(".", role);
+        require(
+            keccak256(vm.parseJsonBytes(record, string.concat(key, "Args"))) == keccak256(args),
+            string.concat(role, "'s constructor arguments differ from ", unit, ".json")
+        );
+        require(
+            _addr(record, string.concat(key, "Deployer")) == pinned,
+            string.concat(role, "'s recorded deployer is not network.json's deployer")
+        );
+        require(
+            vm.computeCreateAddress(pinned, _uint(record, string.concat(key, "Nonce"))) == _addr(record, key),
+            string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
+        );
+    }
+
+    /// @dev The role's recorded address, for a step after the role's deploy step: its code must be the
+    ///      journal's (`_requireRecordedCode`) and its creation must have taken `args`
+    ///      (`_requireCreatedWith`).
+    function _reuse(string memory journal, string memory role, bytes memory args) internal returns (address addr) {
+        addr = _requireRecordedCode(journal, role);
+        _requireCreatedWith(journal, role, args);
+    }
+
+    /// @dev `_reuse` proven by the journal's own record (`_requireJournaledCreate`) instead of the
+    ///      chain's creation.
+    function _reuseJournaled(string memory journal, string memory role, bytes memory args)
+        internal
+        view
+        returns (address addr)
+    {
+        addr = _requireRecordedCode(journal, role);
+        _requireJournaledCreate(journal, role, args);
+    }
+
+    /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
+    function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
+        // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
+        // within `input`.
+        assembly ("memory-safe") {
+            let start := add(input, 32)
+            let cut := sub(mload(input), tail)
+            code := keccak256(start, cut)
+            rest := keccak256(add(start, cut), tail)
+        }
     }
 
     function _creationTx(string memory journal, string memory role) private returns (bytes32 hash) {
@@ -208,7 +392,10 @@ abstract contract Deployment is ForgeBroadcasts {
             _samePendingIntent(journal, role, artifact, args)
                 && _addr(journal, string.concat(key, "Deployer")) == sender
                 && _uint(journal, string.concat(key, "Nonce")) == next
-        ) return address(0);
+        ) {
+            _requireNoLandedRecord(journal, role);
+            return address(0);
+        }
         if (!_has(journal, key)) {
             _requireNoStray(journal, role, artifact);
             _requireNoUnjournaled(journal, role, sender);
@@ -233,10 +420,26 @@ abstract contract Deployment is ForgeBroadcasts {
         }
         addr = _addr(journal, string.concat(".", role));
         if (addr != address(0) && addr.code.length == 0 && _samePendingIntent(journal, role, artifact, args)) {
+            _requireNoLandedRecord(journal, role);
             return address(0);
         }
         addr = _reusableAddress(journal, role);
         if (addr != address(0)) _requireRecordedCode(journal, role);
+    }
+
+    /// @dev A receipt or a check of `role` says it landed. With no code at its address, the RPC lags or the
+    ///      chain was reset, and a resend or a replacement would let the stale `checked` vouch for an
+    ///      unchecked contract with the same code.
+    function _requireNoLandedRecord(string memory journal, string memory role) internal view {
+        require(
+            !_has(journal, string.concat(".", role, "Tx")) && !_has(journal, string.concat(".checked.", role)),
+            string.concat(
+                _unit(),
+                ".json records ",
+                role,
+                " as landed, but the RPC shows no code at its address: the RPC lags or the chain was reset; a person must resolve it"
+            )
+        );
     }
 
     /// @dev Whether the journal records `role` at an address with no code, and its recorded
@@ -549,6 +752,11 @@ abstract contract Deployment is ForgeBroadcasts {
         _recordSender(role, found.addr, found.from, found.nonce);
         _put(string.concat(".", role, "Args"), vm.toString(found.args));
         _put(string.concat(".", role, "InitcodeHash"), vm.toString(keccak256(input)));
+        require(
+            input.length >= found.args.length, string.concat("the recovered ", role, "'s arguments exceed its input")
+        );
+        (bytes32 code,) = _hashSplit(input, found.args.length);
+        _put(string.concat(".", role, "CreationCodeHash"), vm.toString(code));
         _recordBuild(role, found.addr, artifact);
         (bool hasCommit, string memory commit) = _commit(found);
         if (hasCommit) _put(string.concat(".", role, "Commit"), string.concat('"', commit, '"'));
@@ -700,6 +908,10 @@ abstract contract Deployment is ForgeBroadcasts {
     function _recordIntent(string memory role, string memory name, bytes memory args) internal {
         _put(string.concat(".", role, "Args"), vm.toString(args));
         _put(string.concat(".", role, "InitcodeHash"), vm.toString(_initcodeHash(name, args)));
+        _put(
+            string.concat(".", role, "CreationCodeHash"),
+            vm.toString(keccak256(vm.getCode(string.concat(name, ".sol:", name))))
+        );
     }
 
     function _initcodeHash(string memory name, bytes memory args) internal view returns (bytes32) {
@@ -740,6 +952,79 @@ abstract contract Deployment is ForgeBroadcasts {
                 vm.toString(initcodeHash)
             )
         );
+    }
+
+    /// @dev A unit's deploy step for a role that the factory creates at `at`, the input's address for
+    ///      `salt`. A role that landed and is journaled is proven by its recorded salt and code, then
+    ///      `authenticate`, so a later source edit does not orphan it. Otherwise this build's
+    ///      `artifact` with `args` must land at `at`: an unjournaled role with code there is adopted, and
+    ///      a pending send is resent, since it cannot land anywhere else. `_onDeployment` runs when the
+    ///      role is first journaled. `sent` is whether this run calls the factory.
+    function _deployRoleCreate2(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        bytes32 salt,
+        address at,
+        function(address, bytes memory) internal view authenticate
+    ) internal returns (bool sent) {
+        string memory key = string.concat(".", role);
+        bool journaled = _has(journal, key);
+        bool landed = at.code.length != 0;
+        if (journaled) {
+            require(
+                _addr(journal, key) == at,
+                string.concat(
+                    _unit(), ".json's ", role, " is not the input's create2.address: a person must resolve it"
+                )
+            );
+            require(
+                _has(journal, string.concat(key, "Salt"))
+                    && vm.parseJsonBytes32(journal, string.concat(key, "Salt")) == salt,
+                string.concat("the input's create2.salt differs from ", _unit(), ".json's")
+            );
+            if (!landed) _requireNoLandedRecord(journal, role);
+        } else {
+            _requireNoStray(journal, role, artifact, at);
+        }
+        if (journaled && landed) {
+            _requireRecordedCode(journal, role);
+        } else {
+            // A new salt for a landed role would deploy a second one.
+            require(
+                !landed || vm.computeCreate2Address(salt, _initcodeHash(artifact, args), CREATE2_FACTORY) == at,
+                string.concat(
+                    "the input's create2.address holds a ",
+                    role,
+                    " that another build or input made: restore the journal, and never mine a new salt"
+                )
+            );
+            _requireCreate2Address(salt, artifact, args, at);
+        }
+        // An adopted role is proven as a reused one: its initcode does not fix its runtime code or state.
+        if (landed) authenticate(at, args);
+
+        sent = !landed;
+        if (sent) {
+            _startBroadcast();
+            _requireDeployable();
+            (bool ok,) = CREATE2_FACTORY.call(bytes.concat(salt, _initcode(artifact, args)));
+            require(ok, "the CREATE2 factory call reverted");
+            vm.stopBroadcast();
+        }
+        if (!(journaled && landed)) _requireBuild(at, artifact);
+
+        if (!_writing()) return sent;
+        if (!journaled) {
+            _onDeployment(journal, role, args);
+            _put(string.concat(key, "Salt"), vm.toString(salt));
+            _recordIntent(role, artifact, args);
+            _recordBuild(role, at, artifact);
+            _put(key, vm.toString(at));
+        }
+        if (sent) _recordDirty(role);
+        else _recordCreate2Receipt(_journal(), role, at);
     }
 
     /// @dev Journals a deployment. If `recorded` is non-zero the role was reused, and only its
@@ -787,10 +1072,10 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev A unit's deploy step for one role. It reuses the journaled deployment, resends its
-    ///      pending intent as the same transaction, or sends a new one. `create` must contain the
-    ///      typed `new` expression, which is how forge names the broadcast's contract, and pass it
-    ///      `args`: the journaled intent, and `_requireCreatedFrom` within this run, take them as the
-    ///      constructor's.
+    ///      pending intent as the same transaction, or sends a new one. `create` must create
+    ///      `artifact` and pass it `args`: the journaled intent, and the creation proofs within this
+    ///      run, take them as the constructor's. forge names the broadcast's contract by its bytecode,
+    ///      a typed `new` or not.
     ///      `authenticate` runs on a reused address before anything is journaled. `journal` is the
     ///      journal that `_use` returned. `sent` is whether this run creates a transaction, which a
     ///      simulation counts.
@@ -802,7 +1087,18 @@ abstract contract Deployment is ForgeBroadcasts {
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, authenticate, false);
+        return _deployRole(journal, role, artifact, args, create, authenticate, Proof.Authenticate, false);
+    }
+
+    /// @dev How `_deployRole` proves a reused role, before anything is journaled: by the unit's
+    ///      `authenticate`, by `_requireCreatedFrom` (this build's code), by `_requireCreatedWith` (the
+    ///      code the journal records, so a later source edit does not orphan the role), or by
+    ///      `_requireJournaledCreate` (the journal's own record, with no read of the creation).
+    enum Proof {
+        Authenticate,
+        FromBuild,
+        WithArgs,
+        Journaled
     }
 
     /// @dev `_deployRole` for a role whose creation proves what a reuse needs, as when its state is the
@@ -814,10 +1110,64 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create
     ) internal returns (address addr, bool sent) {
-        return _deployRole(journal, role, artifact, args, create, _noState, true);
+        return _deployRole(journal, role, artifact, args, create, _noState, Proof.FromBuild, false);
+    }
+
+    /// @dev `_deployRole` with the creation proof named.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(bytes memory) internal returns (address) create,
+        Proof proof
+    ) internal returns (address addr, bool sent) {
+        require(proof != Proof.Authenticate, "pass the authenticate function instead");
+        return _deployRole(journal, role, artifact, args, create, _noState, proof, false);
+    }
+
+    /// @dev `_deployRole` that creates `artifact` from its initcode with `args`, with no `create`
+    ///      callback, and proves a reuse by `proof`. The unit's script then holds no copy of the
+    ///      contract's bytecode.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        Proof proof
+    ) internal returns (address addr, bool sent) {
+        require(proof != Proof.Authenticate, "pass the authenticate function instead");
+        return _deployRole(journal, role, artifact, args, _noCreate, _noState, proof, true);
+    }
+
+    /// @dev `_deployRole` from the initcode, whose reuse must also pass `check` after `proof`, for state
+    ///      that later transactions change. `Proof.Authenticate` leaves `check` the only proof.
+    function _deployRole(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        Proof proof,
+        function(address, bytes memory) internal view check
+    ) internal returns (address addr, bool sent) {
+        return _deployRole(journal, role, artifact, args, _noCreate, check, proof, true);
     }
 
     function _noState(address, bytes memory) private view {}
+
+    function _noCreate(bytes memory) private pure returns (address) {}
+
+    /// @dev CREATE of `initcode` in the caller's broadcast. Bubbles the constructor's revert.
+    function _createFrom(bytes memory initcode) private returns (address at) {
+        assembly ("memory-safe") {
+            at := create(0, add(initcode, 0x20), mload(initcode))
+            if iszero(at) {
+                let ptr := mload(0x40)
+                returndatacopy(ptr, 0, returndatasize())
+                revert(ptr, returndatasize())
+            }
+        }
+    }
 
     function _deployment(address addr) private view returns (bytes32) {
         return keccak256(abi.encode(block.chainid, addr));
@@ -830,21 +1180,24 @@ abstract contract Deployment is ForgeBroadcasts {
         bytes memory args,
         function(bytes memory) internal returns (address) create,
         function(address, bytes memory) internal view authenticate,
-        bool byCreation
+        Proof proof,
+        bool fromInitcode
     ) private returns (address addr, bool sent) {
+        if (_inProbe()) {
+            return (_reuseInProbe(journal, role, artifact, args, authenticate, proof), false);
+        }
         _startBroadcast();
         (address deployer, uint256 nonce) = _broadcaster();
         address recorded = _reuseForSend(journal, role, artifact, args, deployer, nonce);
         sent = recorded == address(0);
         if (sent) {
             _requireDeployable();
-            addr = create(args);
+            addr = fromInitcode ? _createFrom(_initcode(artifact, args)) : create(args);
             _requireBuild(addr, artifact);
-            _createdThisRun[_deployment(addr)] = _initcodeHash(artifact, args);
+            _createdThisRun[_deployment(addr)] = Created(_initcodeHash(artifact, args), keccak256(args));
         } else {
             addr = recorded;
-            if (byCreation) _requireCreatedFrom(journal, role, artifact, args);
-            else authenticate(addr, args);
+            _proveReuse(journal, role, artifact, args, addr, authenticate, proof);
         }
         vm.stopBroadcast();
 
@@ -857,6 +1210,60 @@ abstract contract Deployment is ForgeBroadcasts {
         }
     }
 
+    /// @dev A probe has no broadcaster, so it decides as a `Due` view does: a role that
+    ///      `_reuseForDue` cannot reuse is due, whether the step would resend its pending intent or
+    ///      send anew, and the step decides which.
+    function _reuseInProbe(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        function(address, bytes memory) internal view authenticate,
+        Proof proof
+    ) private returns (address addr) {
+        addr = _reuseForDue(journal, role, artifact, args);
+        if (addr == address(0)) revert StepDue();
+        _proveReuse(journal, role, artifact, args, addr, authenticate, proof);
+    }
+
+    function _proveReuse(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        address addr,
+        function(address, bytes memory) internal view authenticate,
+        Proof proof
+    ) private {
+        if (proof == Proof.FromBuild) _requireCreatedFrom(journal, role, artifact, args);
+        else if (proof == Proof.WithArgs) _requireCreatedWith(journal, role, args);
+        else if (proof == Proof.Journaled) _requireJournaledCreate(journal, role, args);
+        authenticate(addr, args);
+    }
+
+    /// @dev Starts the certificate of `role` at `addr`, after it journals the role's receipt.
+    function _certificate(string memory journal, string memory role, address addr)
+        internal
+        returns (Certificate memory)
+    {
+        _recordReceipt(journal, role, addr);
+        return Certificate(_beginChecked(role, addr), role, addr);
+    }
+
+    /// @dev `_certificate` without a receipt: for a contract the unit did not deploy, or a role whose
+    ///      receipt the unit journals itself (`_recordCreate2Receipt`).
+    function _certificate(string memory role, address addr) internal returns (Certificate memory) {
+        return Certificate(_beginChecked(role, addr), role, addr);
+    }
+
+    /// @dev Writes `c` on its role's code hash, prints it, and ends the step.
+    function _certify(Certificate memory c) internal returns (string memory) {
+        string memory checked = vm.serializeBytes32(c.obj, string.concat(c.role, "CodeHash"), c.addr.codehash);
+        console.log(string.concat("checked ", checked));
+        _certify(checked);
+        return _done(false);
+    }
+
     /// @dev The new contract's code must be the artifact's, with immutables read back from it. Override
     ///      only for a contract whose constructor returns its runtime code, which the artifact cannot
     ///      show, and have the unit's `check` step prove the code another way.
@@ -864,8 +1271,8 @@ abstract contract Deployment is ForgeBroadcasts {
         requireBuild(addr, artifact);
     }
 
-    /// @dev Called only when this run creates a new deployment transaction, simulated or broadcast,
-    ///      before the intent and the address are journaled. The default records the selected chain's
+    /// @dev Called only when this run creates a new deployment transaction, simulated or broadcast, or
+    ///      `_deployRoleCreate2` first journals a role, before the intent and the address are journaled. The default records the selected chain's
     ///      id stamp. An override owns the unit's other writes and their order, and calls `super`
     ///      where the unit should record the chain. It should also drop whatever the replaced
     ///      deployment vouched for.
@@ -879,6 +1286,7 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      `pending` until `_recordReceipt` reads the commit forge sent from. The metadata is copied
     ///      beside the journal because `out/` is usually git-ignored.
     function _recordBuild(string memory role, address deployed, string memory name) internal {
+        if (_inProbe()) revert StepDue();
         string memory metadataPath = string.concat(_dir(), "/", name, ".metadata.json");
         vm.writeFile(
             metadataPath,

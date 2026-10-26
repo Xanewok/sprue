@@ -22,6 +22,17 @@ contract Create2Unit is ToyUnit {
         _recordCreate2Receipt(_use(network), "toy", deployed);
     }
 
+    bool public refuseBuild;
+
+    function setRefuseBuild(bool refuse) external {
+        refuseBuild = refuse;
+    }
+
+    function _requireBuild(address addr, string memory artifact) internal view override {
+        require(!refuseBuild, "the build check refused");
+        super._requireBuild(addr, artifact);
+    }
+
     /// @dev Only a factory call creates here.
     function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
         return confirmed[hash] && create2 ? 5 : 0;
@@ -77,6 +88,127 @@ contract Create2CodeTest is Test {
         unit.requireAddress(bytes32(uint256(2)), args, expected);
         vm.expectRevert();
         unit.requireAddress(salt, abi.encode(uint256(4)), expected);
+    }
+
+    function test_deployRoleCreate2_sendsOnce_adoptsItsOwnLandedRole_andRefusesAnyOther() public {
+        Create2Unit unit = new Create2Unit();
+        address ops = makeAddr("ops");
+        unit.setTestSender(ops);
+        string memory net = "create2-deploy";
+        string memory dir = string.concat(DIR, net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains": {"main": {"id": 31337}}}');
+        vm.chainId(31337);
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(1));
+        address at = vm.computeCreate2Address(
+            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
+        );
+        string memory path = string.concat(dir, "/toy.json");
+
+        assertTrue(unit.deploy2(net, salt, at), "the first run did not send");
+        assertEq(ToyPayload(at).tag(), 1);
+        assertEq(vm.parseJsonAddress(vm.readFile(path), ".toy"), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toySalt"), salt);
+        assertFalse(unit.deploy2(net, salt, at), "a rerun sent");
+
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deploy2(net, salt, at);
+        unit.setRefuseReuse(false);
+        vm.expectRevert(bytes("the input's create2.salt differs from toy.json's"));
+        unit.deploy2(net, bytes32(uint256(2)), at);
+        vm.expectRevert(bytes("toy.json's toy is not the input's create2.address: a person must resolve it"));
+        unit.deploy2(net, salt, address(0xBEEF));
+
+        string memory journal = vm.readFile(path);
+        vm.removeFile(path);
+        unit.setTag(2);
+        vm.expectRevert(
+            bytes(
+                "the input's create2.address holds a toy that another build or input made: restore the journal, and never mine a new salt"
+            )
+        );
+        unit.deploy2(net, salt, at);
+        unit.setTag(1);
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deploy2(net, salt, at);
+        assertFalse(vm.exists(path), "a refused adoption was journaled");
+        unit.setRefuseReuse(false);
+        assertFalse(unit.deploy2(net, salt, at), "an adoption sent");
+        assertEq(vm.parseJsonAddress(vm.readFile(path), ".toy"), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), vm.parseJsonBytes32(journal, ".toyCodeHash"));
+    }
+
+    /// @dev The pin refuses before the factory call: forge keeps a reverted run's broadcasts in its dry run.
+    function test_deployRoleCreate2_refusesAnotherDeployerThanThePin_beforeTheFactoryCall() public {
+        Create2Unit unit = new Create2Unit();
+        address ops = makeAddr("ops");
+        address pin = makeAddr("pin");
+        unit.setTestSender(ops);
+        string memory net = "create2-checks";
+        string memory dir = string.concat(DIR, net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(dir, true);
+        string memory networkJson = string.concat(dir, "/network.json");
+        vm.writeFile(
+            networkJson, string.concat('{"chains": {"main": {"id": 31337}}, "deployer": "', vm.toString(pin), '"}')
+        );
+        vm.chainId(31337);
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(1));
+        address at = vm.computeCreate2Address(
+            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
+        );
+
+        vm.expectCall(FACTORY, "", 0);
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    vm.toString(ops),
+                    " is not ",
+                    dir,
+                    "/network.json's deployer ",
+                    vm.toString(pin),
+                    ": run with that key, or pass --unsafe-unexpected-deployer to sprue (UNSAFE_UNEXPECTED_DEPLOYER=1 for forge) to deploy with another"
+                )
+            )
+        );
+        unit.deploy2(net, salt, at);
+    }
+
+    function test_deployRoleCreate2_checksTheRecordedCode_andTheAdoptedBuild() public {
+        Create2Unit unit = new Create2Unit();
+        unit.setTestSender(makeAddr("ops"));
+        string memory net = "create2-proofs";
+        string memory dir = string.concat(DIR, net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains": {"main": {"id": 31337}}}');
+        vm.chainId(31337);
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(1));
+        address at = vm.computeCreate2Address(
+            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
+        );
+        string memory path = string.concat(dir, "/toy.json");
+
+        assertTrue(unit.deploy2(net, salt, at), "the first run did not send");
+        string memory journal = vm.readFile(path);
+        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".toyCodeHash");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.deploy2(net, salt, at);
+
+        vm.removeFile(path);
+        unit.setRefuseBuild(true);
+        vm.expectRevert(bytes("the build check refused"));
+        unit.deploy2(net, salt, at);
+        assertFalse(vm.exists(path), "an adoption journaled an unproven build");
+        unit.setRefuseBuild(false);
+        assertFalse(unit.deploy2(net, salt, at), "an adoption sent");
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), vm.parseJsonBytes32(journal, ".toyCodeHash"));
     }
 
     function test_recordCreate2Receipt_takesOnlyAReceiptOfACallToTheFactory() public {
