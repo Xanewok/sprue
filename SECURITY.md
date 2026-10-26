@@ -55,9 +55,10 @@ end-to-end scenario for each invariant.
   the same unit created in this run passes without one, since a simulation's deployment has no
   transaction; another unit proving it is refused.
 - Chains in `chains.local` and `chains.test`, and a chain that `chains.unrecordedDeploys` lists, have no
-  nonce fence. Losing a journal and its broadcast records there can deploy a role twice. The fence does
-  not read `network.json`'s `formerDeployers` either: after a key rotation, losing every journal that
-  names the old key, and its broadcast records, can deploy that key's roles again.
+  nonce fence. Losing a journal and its broadcast records there can deploy a role twice.
+- A change of the pin is not supported. A CREATE role is proven only as the pin's CREATE, so after a
+  new pin every role the old key created is refused, and `network.json` with `formerDeployers` is
+  refused by name.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
   reads the role through `_checked` re-reads its certified code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.

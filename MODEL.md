@@ -78,7 +78,7 @@ For a CREATE2 role whose inputs fix its address, the scope is that one address. 
 the CREATE addresses of the keys that may have made it: on a live chain, the fence scans the pin, the
 sender and every deployer a journal names, on every run. A key rotation is a one-time checkpoint (target,
 not built): scan the old key once, up to its nonce at the rotation, then trust it for provenance only.
-Today `formerDeployers` are trusted for provenance and not scanned ([SECURITY.md](SECURITY.md#limits)).
+Today a change of the pin is not supported ([SECURITY.md](SECURITY.md#limits)).
 
 A person's approval is a chain policy (a public chain asks for a typed `yes`), not a property of a kind.
 

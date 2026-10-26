@@ -15,8 +15,8 @@ Roles: a unit declares each contract once, by how its address is made, in an `in
 sends the role or proves its reuse, `_at(role)`, which proves it without a send, and `_certify()`, which
 certifies every role of `_roles()`, in its order, once the step proved them
 (`_certify(_certificate().with...(...))` adds facts); a role outside `_roles()` is refused. A role is proven
-by the identity its journal records: a CREATE by its recorded deployer and nonce (the pin or a key of
-`network.json`'s new `formerDeployers`, with a known creation transaction); a CREATE2 by the factory under its
+by the identity its journal records: a CREATE by its recorded deployer and nonce (the pin, with a known creation
+transaction); a CREATE2 by the factory under its
 recorded salt and initcode hash, not this build's; an extern by its pinned code hash. Its recorded arguments
 must be the declared ones and its `.ensure` must pass; another unit's role is proven by its identity and code,
 and `_checked(role)` also requires that unit's certificate of it. A source edit after a deployment orphans
