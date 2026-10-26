@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
+import {unitInputHash, unitInputPath} from "../src/Journal.sol";
 import {Unit} from "../src/Unit.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 import {DirtyToyUnit, ToyUnit} from "./ToyUnit.sol";
@@ -145,6 +146,26 @@ contract CoreUnitTest is Test {
             )
         );
         unit.landed(network, ops);
+    }
+
+    /// @dev Read where the graph reads it, `paths.deployments`, though the unit's own files are elsewhere.
+    function test_check_recordsTheGraphsHashOfTheUnitsInput_whenItHasOne() public {
+        _network("input-hash", FREE, "");
+        unit.deploy(network);
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash"));
+
+        string memory input = unitInputPath(network, "toy");
+        vm.createDir(string.concat("deployments/", network), true);
+        vm.writeFile(input, '{"n":1,"m":"x"}');
+        unit.check(network);
+        bytes32 recorded = vm.parseJsonBytes32(vm.readFile(string.concat(dir, "/toy.json")), ".checked.inputHash");
+        assertEq(recorded, unitInputHash(network, "toy"));
+        vm.writeFile(input, '{ "m": "x",\n  "n": 1 }\n');
+        assertEq(unitInputHash(network, "toy"), recorded, "a formatting edit changed the hash");
+        vm.writeFile(input, '{"n":2,"m":"x"}');
+        assertTrue(unitInputHash(network, "toy") != recorded);
+        vm.removeDir(string.concat("deployments/", network), true);
     }
 
     // ==== The deployer pin ====

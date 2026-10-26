@@ -6,6 +6,12 @@ Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").
 
+Fixed: a certificate of other inputs than the unit's current ones no longer keeps its nodes done. A
+certificate now records `inputHash`, the hash of the unit's parsed input file, and `plan` judges a `check`,
+and the steps it certifies, due again once that input changes. A `.doneByCheck()` step then runs again, so it
+must send only what the chain lacks. A certificate without the key, written before, is judged as before
+until its `check` runs again.
+
 `_deployRoleCreate2(journal, role, artifact, args, salt, at, authenticate)` is a deploy step for a role
 the CREATE2 factory creates at the input's `at` for `salt`. A journaled role that landed is proven by its
 recorded salt and code, then `authenticate`. Otherwise this build with `args` must land at `at`: a role

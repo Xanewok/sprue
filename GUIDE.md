@@ -45,7 +45,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    later want sees what an earlier one sent; end the step with `_done()`, which closes the broadcast and
    reports whether the step sent. A `<fn>Due` view, as in `_step(id, this.fn, this.fnDue)`, replaces the
    probe for a step whose decision is cheaper to state apart. `.doneByCheck()` hands a step that cannot
-   decide to the certificate of a later `check` of its unit. A plan that stops at a step behind such a
+   decide to the certificate of a later `check` of its unit. Such a step runs again when the unit's input
+   changes, so it must send only what the chain lacks. A plan that stops at a step behind such a
    step without sending that `check` first would repeat forever, so the plan refuses it.
 4. Register the units in a graph script whose contract is named like its file: its constructor calls
    `_add(address(new DeployToken()), "<path>:DeployToken")` for each unit, then `_validateGraph()`, as in
@@ -144,7 +145,9 @@ Each refusal names its remedy. These need a person:
 - A refusal that says "a person must resolve it" or "a person must choose" has no safe default. Do not
   delete records or switch keys to get past it.
 
-A node that a `check` certified stays done while the journal holds `checked`, whatever the chain holds.
+A node that a `check` certified stays done while the journal holds `checked`, whatever the chain holds,
+unless the unit's input changed since the certificate (its parsed JSON: a formatting edit does not count):
+then the `check` and the nodes it certifies run again.
 A probed step is judged on the chain every time.
 After resetting a development chain, delete the network's journals and that chain's records under
 `broadcast/`, or a rehearsal network's whole directory.
