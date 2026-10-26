@@ -123,7 +123,10 @@ then differ from the commit, the build is not the commit's, and an attended `run
    dev key if unset) on another node. On any other network a person runs it at a terminal, with no `CI`
    variable, from a clean git checkout, signing with exactly one of `--account <name>`, `--ledger` or
    `--trezor`. There a step that another account sends is refused, and each step is sent only after
-   `yes` is typed at its dry run.
+   `yes` is typed at its dry run. A step marked `.by(...).prepared("<reason>")` is not refused there: when the
+   run cannot sign as its sender, such as a multisig, it writes the dry run's transactions to
+   `deployments/<network>/prepared/<step id>.json` (Safe Transaction Builder's import format) and exits 4. Have the
+   sender execute the file, then run again: the step's own done rule sees the effect, and the run never sends it.
 8. Once the run stops, commit each step's journal, metadata and `broadcast/` records; each step prints
    its `git add`. An attended run refuses a commit made while it waits for `yes`. `recover` reads the
    records, so never git-ignore a public chain's.

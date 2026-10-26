@@ -82,7 +82,8 @@ skips every node already done, rehearse starts over from network's files:
       CI set, a development node, a signer other than the step's sender, a pending transaction, another run
       of the network
   3   a node it cannot reach yet (\`# cannot reach\`)
-  4   a date the chain has not reached; --wait waits for it instead
+  4   a date the chain has not reached; --wait waits for it instead. Or a prepared step: the file it
+      names holds transactions for an account this run cannot sign as; once they are executed, run again
   5   the target is not done: a plan is unchanged after its sends, or holds a step it just sent
   6   the person did not answer \`yes\`; the step was not sent
   128+n  signal n (130 SIGINT, 143 SIGTERM), once the forge it stopped has exited
@@ -810,9 +811,11 @@ async function main(argv) {
   };
 
   // Shows the line's dry run, and sends it only if the person at the terminal answers yes.
-  async function attend(line, cmd) {
+  async function attend(line, cmd, prepared) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
-    if (sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
+    // A prepared step whose sender is not the signer is written out, never sent.
+    const prepare = prepared && sender.toLowerCase() !== me.toLowerCase();
+    if (!prepare && sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
     const snap = nonces(sender);
     const sha = head();
     const seen = tree();
@@ -843,6 +846,23 @@ async function main(argv) {
     if (!records.length) {
       if (/^SIMULATION COMPLETE/m.test(dry.text)) fail(2, "refusing: the dry run has transactions but names no record to show");
       out("  no transactions in the dry run\n");
+    }
+    if (prepare) {
+      // Safe Transaction Builder's import format; the Safe is the sender. No checksum or createdAt is
+      // written, so that a rerun of an unexecuted step rewrites the same bytes.
+      const txs = records.flatMap((f) => readJson(f).transactions);
+      if (!txs.length) fail(1, `${prepared.id}'s dry run holds no transaction to prepare: ${line}`);
+      if (txs.some((t) => !t.transaction.to)) fail(2, `refusing: ${prepared.id} creates a contract, which a prepared file cannot hold: ${line}`);
+      const file = join(DEPLOYMENTS, network, "prepared", `${prepared.id}.json`);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, `${JSON.stringify({
+        version: "1.0",
+        chainId: String(Number(readJson(records[0]).chain)),
+        meta: { name: prepared.id, description: prepared.reason, createdFromSafeAddress: sender },
+        transactions: txs.map((t) => ({ to: t.transaction.to, value: String(BigInt(t.transaction.value ?? 0)), data: t.transaction.input ?? t.transaction.data ?? "0x" })),
+      }, null, 2)}\n`);
+      out(`prepared ${file}: ${prepared.reason}; ${sender} must execute it, then run again\n`);
+      throw new Exit(4);
     }
     if (ask(`${line}\nSend this as ${sender}? Type yes: `) !== "yes") fail(6, "not sent: the answer was not yes");
     if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
@@ -944,6 +964,7 @@ async function main(argv) {
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);
     for (const line of text.split("\n")) if (wave.has(line)) fail(5, `cannot reach ${target}: a step is due again after sending it: ${line}`);
     wave = new Set();
+    let prepared;
     for (const line of text.split("\n")) {
       if (line.startsWith("# not before ")) {
         const [at, ...r] = line.slice(13).split(" ");
@@ -965,6 +986,10 @@ async function main(argv) {
           // The rest of this plan was judged before the date, so plan again.
           continue outer;
         }
+      } else if (line.startsWith("# prepared ")) {
+        const m = /^# prepared ([A-Za-z0-9_.-]+): (.*)$/.exec(line);
+        if (!m) fail(2, `unknown plan line: ${line}`);
+        prepared = { id: m[1], reason: m[2] };
       } else if (line.startsWith("# then plan again ")) {
         sent = text;
         continue outer;
@@ -1007,7 +1032,9 @@ async function main(argv) {
         }
         sent = text;
         wave.add(line);
-        await (attended ? attend(line, cmd) : step(cmd));
+        const prep = prepared;
+        prepared = undefined;
+        await (attended ? attend(line, cmd, prep) : step(cmd));
       }
     }
     // Judge what the sends left: a plan with nothing to send, even an empty one, ends the run.

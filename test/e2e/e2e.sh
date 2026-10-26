@@ -48,9 +48,10 @@ receiver = \"http://127.0.0.1:$((PORT + 3))\"
 wide = \"http://127.0.0.1:$((PORT + 4))\"
 prod = \"http://127.0.0.1:$((PORT + 5))\"
 stage = \"http://127.0.0.1:$((PORT + 6))\"
-old = \"http://127.0.0.1:$((PORT + 8))\""
+old = \"http://127.0.0.1:$((PORT + 8))\"
+prep = \"http://127.0.0.1:$((PORT + 7))\""
 alias_of() {
-  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 1337) echo old ;; *) die "no alias for chain $1" ;; esac
+  case $1 in 31337) echo local ;; 1) echo live ;; 412346) echo geth ;; 4663) echo wide ;; 10) echo prod ;; 11155111) echo stage ;; 1337) echo old ;; 4242) echo prep ;; *) die "no alias for chain $1" ;; esac
 }
 endpoints() { # endpoints <foundry.toml>: its [rpc_endpoints] become the test ports'
   sed -i.bak '/^\[rpc_endpoints\]/,$d' "$1" && rm -f "$1.bak" && printf '[rpc_endpoints]\n%s\n' "$ENDPOINTS" >>"$1"
@@ -908,12 +909,71 @@ scenario_mermaid() {
   echo "ok  mermaid starts with flowchart TD and has one subgraph per unit"
 }
 
+
+# A step whose sender is a contract, which no key signs as, is written out for it to execute instead of
+# refused: the run exits 4 and names the file, and once the chain shows the effect a rerun finds it done
+# and sends nothing.
+scenario_prepared() {
+  command -v python3 >/dev/null || { echo "skip prepared: it needs python3"; return; }
+  local net=rehearsal-prep n=prep safe owned file before out rc=0 run
+  local fx=$ROOT/test/e2e/prepared u=script/deploy/units/owned
+  # The fixtures end in .txt so that the repository's own forge build does not compile them.
+  mkdir -p "$u"; cp "$fx/Owned.sol.txt" "$u/Owned.sol"; cp "$fx/DeployOwned.s.sol.txt" "$u/DeployOwned.s.sol"
+  cp "$fx/DeployGraph.s.sol.txt" script/deploy/DeployGraph.s.sol
+  start_anvil $((PORT + 7)) 4242
+  local P=http://127.0.0.1:$((PORT + 7)) snap
+  snap=$(cast rpc evm_snapshot --rpc-url "$P" | tr -d '"')
+  safe=$(forge create "$u/Owned.sol:MockSafe" --rpc-url "$P" --unlocked --from "$(cast rpc eth_accounts --rpc-url "$P" | jq -r ".[1]")" --broadcast --json | jq -r .deployedTo)
+  network "$net" 4242
+  echo "{\"safe\":\"$safe\"}" >"deployments/$net/owned.input.json"
+  git add -A; git commit -qm prepared; unset CI
+  run=(G run "$net" owned.check --account e2e)
+  # The sender that no run signs as: a step without .prepared is refused, as before.
+  rc=0; out=$(tty yes G run "$net" owned.setCap --account e2e 2>&1) || rc=$?
+  [ "$rc" = 2 ] && grep -aq "this step sends as $safe" <<<"$out" || die "prepared: a .by step without .prepared was not refused ($rc): ${out: -500}"
+  # The refused run sent owned.deploy as the signer; owned.setFee is prepared, so it asks nothing.
+  rc=0; out=$(tty yes "${run[@]}" 2>&1) || rc=$?
+  file=deployments/$net/prepared/owned.setFee.json
+  [ "$rc" = 4 ] || die "prepared: the run exited $rc, not 4: ${out: -600}"
+  grep -aq "prepared $file: the owner is a multisig" <<<"$out" || die "prepared: the run did not name the file: ${out: -600}"
+  ! grep -aq 'Type yes: ' <<<"$out" || die "prepared: the prepared step was asked"
+  owned=$(jq -r .owned "deployments/$net/owned.json")
+  [ "$(cast call "$owned" 'fee()(uint256)' --rpc-url "$P")" = 0 ] || die "prepared: the fee was set by the run"
+  jq -e --arg o "$owned" --arg s "$safe" --arg d "$(cast calldata 'setFee(uint256)' 30)" \
+    '.version == "1.0" and .chainId == "4242" and (.meta.createdFromSafeAddress | ascii_downcase) == ($s | ascii_downcase)
+     and (.transactions | length == 1) and (.transactions[0].to | ascii_downcase) == ($o | ascii_downcase) and .transactions[0].value == "0" and .transactions[0].data == $d' \
+    "$file" >/dev/null || die "prepared: the file is not the setFee transaction: $(cat "$file")"
+  # Rerunning before anyone executes it sends nothing and rewrites the same file.
+  before=$(cast nonce "$OPS" --rpc-url "$P"); cp "$file" "$W.prepared"
+  rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
+  [ "$rc" = 4 ] && cmp -s "$file" "$W.prepared" && [ "$(cast nonce "$OPS" --rpc-url "$P")" = "$before" ] \
+    || die "prepared: a rerun before execution exited $rc, changed the file or sent: ${out: -400}"
+  # The multisig executes it: impersonated, as a contract.
+  cast rpc anvil_impersonateAccount "$safe" --rpc-url "$P" >/dev/null
+  cast rpc anvil_setBalance "$safe" 0xde0b6b3a7640000 --rpc-url "$P" >/dev/null
+  cast send --unlocked --from "$safe" "$(jq -r '.transactions[0].to' "$file")" "$(jq -r '.transactions[0].data' "$file")" --rpc-url "$P" >/dev/null
+  [ "$(cast call "$owned" 'fee()(uint256)' --rpc-url "$P")" = 30 ] || die "prepared: the executed file did not set the fee"
+  before=$(cast nonce "$OPS" --rpc-url "$P")
+  out=$(G plan "$net" owned.setFee 2>&1)
+  grep -q '^# done owned.setFee' <<<"$out" && ! grep -q '^forge script' <<<"$out" || die "prepared: the plan does not see the step done: $out"
+  # The rerun is done: only the check is asked, and the run sends nothing else.
+  out=$(tty yes "${run[@]}" 2>&1) || die "prepared: the rerun after execution failed: ${out: -500}"
+  [ "$(grep -ac 'Type yes: ' <<<"$out")" = 1 ] && [ "$(cast nonce "$OPS" --rpc-url "$P")" = "$before" ] || die "prepared: the rerun sent or asked more than the check"
+  # A prepared step the signer can sign as is sent, as any step.
+  [ "$(cast rpc evm_revert "$snap" --rpc-url "$P")" = true ] || die "evm_revert"
+  network "$net" 4242; echo "{\"safe\":\"$OPS\"}" >"deployments/$net/owned.input.json"
+  tty yes,yes,yes "${run[@]}" >/dev/null 2>&1 || die "prepared: a step the signer sends was not sent"
+  [ "$(cast call "$(jq -r .owned "deployments/$net/owned.json")" 'fee()(uint256)' --rpc-url "$P")" = 30 ] || die "prepared: a step the signer sends did not run"
+  rm -f "$W.prepared"
+  echo "ok  prepared a step of a sender no run signs as is written out and exits 4, a rerun sends nothing and finds it done once executed; the signer's own steps send"
+}
+
 for s in ${E2E_ONLY:-}; do declare -F "scenario_$s" >/dev/null || die "E2E_ONLY: no scenario $s"; done
 setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag lag_wave two_chain rehearse attended tag; do
+for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag lag_wave two_chain rehearse attended tag prepared; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done

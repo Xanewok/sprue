@@ -36,7 +36,7 @@ enum StepKind {
 /// @dev A step as a unit declares it. A step with `fn` `check` and no `.due` is the certifier (see
 ///      `Graph._validateGraph`), so use that name for nothing else. A step with neither `.due` nor
 ///      `.doneByCheck`, of a unit that answers `IProbe.probe`, is judged by a probe. `onChain`, `readChains`, `isSlow`
-///      and `dueSelector` stand for `on`, `reads`, `slow` and `due`: solc rejects a member that shares
+///      and `dueSelector` stand for `on`, `reads`, `slow`, `prepared` and `due`: solc rejects a member that shares
 ///      a name with a library function attached to the struct.
 struct Step {
     StepKind kind;
@@ -56,6 +56,7 @@ struct Step {
     string[] readChains;
     bool ownForks;
     bool byCheck;
+    string preparedBy;
 }
 
 using StepLib for Step global;
@@ -75,6 +76,15 @@ library StepLib {
     /// @dev The account that must send the step, as an `<input file>.<key>` reference.
     function by(Step memory s, string memory inputRef) internal pure returns (Step memory) {
         s.sender = inputRef;
+        return s;
+    }
+
+    /// @dev The step's `.by` sender is an account no run signs as, such as a multisig: an attended run that
+    ///      cannot sign as it writes the step's transactions to `<network>/prepared/<id>.json`, for the
+    ///      sender to execute, and exits 4. `reason` is shown with the file. A run that can sign as the
+    ///      sender sends as for any step. Done is still the step's own rule, so a rerun sees the effect.
+    function prepared(Step memory s, string memory reason) internal pure returns (Step memory) {
+        s.preparedBy = reason;
         return s;
     }
 

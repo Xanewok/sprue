@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.27;
+
+import {Role, create} from "sprue/Roles.sol";
+import {Unit} from "sprue/Unit.sol";
+import {Step} from "sprue/graph/Step.sol";
+import {Owned} from "./Owned.sol";
+
+/// @dev A contract that `owned.input.json`'s `safe` owns: only it can set the fee and the cap.
+contract DeployOwned is Unit {
+    function steps() external view returns (Step[] memory s) {
+        s = new Step[](4);
+        s[0] = _step("owned.deploy", this.deploy);
+        s[1] = _step("owned.setFee", this.setFee).needs("owned.deploy").by("owned.safe").prepared("the owner is a multisig");
+        s[2] = _step("owned.setCap", this.setCap).needs("owned.deploy").by("owned.safe");
+        s[3] = _step("owned.check", this.check).needs("owned.setFee");
+    }
+
+    function deploy(string calldata network) external step(network) {
+        _deploy(owned());
+    }
+
+    function setFee(string calldata network) external step(network) {
+        Owned o = Owned(_at(owned()));
+        _want(o.fee() == 30, address(o), abi.encodeCall(Owned.setFee, (30)));
+    }
+
+    function setCap(string calldata network) external step(network) {
+        Owned o = Owned(_at(owned()));
+        _want(o.cap() == 7, address(o), abi.encodeCall(Owned.setCap, (7)));
+    }
+
+    function check(string calldata network) external step(network) {
+        require(Owned(_at(owned())).fee() == 30, "the fee is not set");
+        _certify();
+    }
+
+    function owned() internal pure returns (Role memory) {
+        return create("owned", "Owned").args(_ownedArgs);
+    }
+
+    function _ownedArgs() internal returns (bytes memory) {
+        return abi.encode(_requiredAddress(_unitInput(), "safe"));
+    }
+
+    function _roles() internal pure override returns (Role[] memory) {
+        return _list(owned());
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "owned";
+    }
+}

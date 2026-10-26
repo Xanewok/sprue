@@ -75,6 +75,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | `sprue rehearse` sends only to forks it started, as impersonated senders: the real chains mine nothing and the network's own files are unchanged; a signer flag, a keystore that `.env` names, or an `eth_rpc_url` that forge resolves is refused; its forks stop at the end, on Ctrl-C, or with `--keep` at the next `rehearse` of the network or `--stop`; it refuses an existing directory without its `.sprue/`. | e2e `scenario_rehearse`, `scenario_two_chain` |
 | An attended send needs a typed `yes`, stops on a change during the question, and asks for every step. | e2e `scenario_attended` |
 | One run of a network runs at a time, a rehearse of its copy and a plan of a copy included: a second refuses while the first, or a forge the first started, runs; a signal to the runner stops its forge before the lock is released. | e2e `scenario_concurrent` |
+| A prepared step that the run cannot sign as writes its dry run's transactions to a file and exits 4, sends nothing, and is done once the chain shows its effect; one the signer can sign as is sent. | `FileGraphChains.t.sol` `test_plan_aPreparedStep*`; e2e `scenario_prepared` |
 | Exit 4 before a date; `--wait` waits; Anvil's clock is set for a date, and a second chain's clock for its own dates. | e2e `scenario_wait`, `scenario_two_chain` |
 
 ## Decisions
@@ -169,6 +170,14 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     fork, as on the real chain. So a fork that lacks a certified role's code, as at a `--block` before its
     deployment, is refused. It shows only what Anvil reproduces: no bridge delivery between forks, and no
     L2's own rules.
+21. **A step may be prepared for a sender no run signs as.** `.by(ref).prepared(reason)` makes `plan` print
+    `# prepared <id>: <reason>` before the step's command. An attended run whose signer is not the
+    sender shows the dry run, writes its transactions to `<network>/prepared/<id>.json` and exits 4, without a
+    question and without a send; every other guard of the line stays. The file is Safe Transaction Builder's
+    import format, with no `createdAt` or checksum so that a rerun writes the same bytes. Done is the step's
+    own rule, so a rerun after the sender executed the file finds it done. The unit of preparing is the step,
+    as of sending: one forge script has one sender, and a probe judges the step as that sender. Rejected: a
+    sender per send (`ensure(done, from, to, data)`), which would make one step's plan depend on who runs it.
 
 ### Prior art
 

@@ -29,6 +29,8 @@ abstract contract Graph is Script {
         /// @dev Reference `<input file>.<key>` to the account that must send the step. Empty: any
         ///      sender.
         string sender;
+        /// @dev Why the sender may be an account no run signs as; see `StepLib.prepared`. Empty: not prepared.
+        string prepared;
         /// @dev The earliest time the step may run. With a dot, an input reference
         ///      `<input file>.<key>` holding a unix timestamp. Without a dot, the name of a view on
         ///      the unit that returns the timestamp, called with the step's arguments. Empty: no
@@ -169,6 +171,7 @@ abstract contract Graph is Script {
                 if (bytes(n.until).length != 0) continue;
             }
             if (bytes(n.step).length == 0) continue;
+            if (bytes(n.prepared).length != 0) out = _line(out, string.concat("# prepared ", n.id, ": ", n.prepared));
             out = _line(out, _command(network, n));
         }
     }
@@ -473,6 +476,11 @@ abstract contract Graph is Script {
             if (s.kind == StepKind.Until) n.until = s.fn;
             n.deps = s.deps;
             n.sender = s.sender;
+            require(
+                bytes(s.preparedBy).length == 0 || bytes(s.sender).length != 0,
+                string.concat(s.id, " is prepared but has no .by sender")
+            );
+            n.prepared = s.preparedBy;
             n.gate = s.gate;
             n.on = s.onChain;
             n.reads = s.readChains;

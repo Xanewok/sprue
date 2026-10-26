@@ -34,9 +34,9 @@ prototype exists) or **researched** (the problem is understood, the design is no
 
 ## Researched
 
-- **Multisig and timelock senders.** A step sent by a Safe or a timelock would print a Safe
-  transaction or a timelock batch instead of a command, and a rehearsal would impersonate the
-  sender. A protocol's owner is rarely a single key.
+- **Multisig and timelock senders.** `.prepared(reason)` writes a Safe Transaction Builder file for an
+  attended run that cannot sign as the step's sender; a rehearsal impersonates the sender. Open: a timelock
+  batch, a file per run instead of per step, and continuing past a prepared step to independent ones.
 - **Done, ours or theirs.** A permissionless step can be done by anyone. Planning would tell the
   three outcomes apart, and show the transaction that did it.
 - **A graph that varies by chain or input.** Some deployments add or drop nodes per chain, such as

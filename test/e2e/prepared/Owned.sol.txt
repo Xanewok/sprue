@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.27;
+
+contract Owned {
+    address public immutable OWNER;
+    uint256 public fee;
+    uint256 public cap;
+
+    constructor(address owner) {
+        OWNER = owner;
+    }
+
+    function setFee(uint256 v) external {
+        require(msg.sender == OWNER, "not the owner");
+        fee = v;
+    }
+
+    function setCap(uint256 v) external {
+        require(msg.sender == OWNER, "not the owner");
+        cap = v;
+    }
+}
+
+/// @dev Stands for a multisig: a contract, so no key signs as it.
+contract MockSafe {
+    function exec(address to, bytes calldata data) external {
+        (bool ok,) = to.call(data);
+        require(ok, "call failed");
+    }
+}

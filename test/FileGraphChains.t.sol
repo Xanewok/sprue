@@ -270,4 +270,27 @@ contract FileGraphProjectTest is Test, Declares {
         assertTrue(vm.contains(_plan(_fund().slow()), string.concat(" --sender $DEPLOYER --slow\n")));
         vm.removeDir(string.concat("deployments/", net), true);
     }
+
+    function test_plan_aPreparedStepNamesItsReasonBeforeItsCommand_andNeedsABySender() public {
+        _network("rehearsal-fgp-prepared", vm.toString(owner), "");
+        string memory plain = _plan(_fund().by("network.owner"));
+        string memory prepared = _plan(_fund().by("network.owner").prepared("the owner is a multisig"));
+        assertEq(
+            prepared,
+            string.concat(
+                vm.split(plain, "FOUNDRY_BROADCAST")[0],
+                "# prepared fixture.fund: the owner is a multisig\nFOUNDRY_BROADCAST",
+                vm.split(plain, "FOUNDRY_BROADCAST")[1]
+            ),
+            "the reason is the only difference"
+        );
+        assertFalse(vm.contains(plain, "# prepared"));
+
+        Step[] memory s = new Step[](1);
+        s[0] = _fund().prepared("no sender");
+        address unit = address(new StepFunctions());
+        vm.expectRevert("fixture.fund is prepared but has no .by sender");
+        new ProjectGraph(Registration(unit, "toy.s.sol:Toy"), s);
+        vm.removeDir(string.concat("deployments/", net), true);
+    }
 }
