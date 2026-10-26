@@ -11,12 +11,6 @@ import {Declares} from "./graph/Step.sol";
 /// @notice The base of a deploy unit. It reads the network's `network.json`, keeps the unit's journal
 ///         `<unit>.json` beside it, and records the build that the unit's `check` step authenticates.
 abstract contract Unit is Roles, Declares {
-    /// @dev The unit's `recover` step, from its `_roles()`. A unit whose journal holds more than its roles
-    ///      adds it in `_onRecover`; one that recovers another way overrides this.
-    function recover(string calldata network) external virtual returns (string memory) {
-        return _recoverRoles(network);
-    }
-
     function _deployments() internal view override returns (string memory) {
         return deploymentsDir();
     }
@@ -125,5 +119,14 @@ abstract contract Unit is Roles, Declares {
             }
         }
         return vm.createFork(url, blockNumber);
+    }
+}
+
+/// @notice A unit's `recover` step, which rebuilds a lost journal from its `_roles()`: `contract X is Unit,
+///         Recovers`. Opt-in, because the recovery code it compiles costs every unit that carries it.
+/// @dev A unit whose journal holds more than its roles adds it in `_onRecover`.
+abstract contract Recovers is Unit {
+    function recover(string calldata network) external returns (string memory) {
+        return _recoverRoles(network);
     }
 }
