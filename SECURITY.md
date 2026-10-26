@@ -73,7 +73,9 @@ end-to-end scenario for each invariant.
   transaction, on a live chain the nonce fence refuses to deploy a role again once another runner's
   CREATE by a known deployer has code, and a contract may refuse a second set-once value or a flag
   already set. A send computed from a read, such as a top-up amount from a balance, has no guard of its
-  own: two runners can both send it.
+  own when the runners send with different keys: both can send it. With one key, forge simulates and
+  sends at the latest nonce, not the pending one, so the two runs' sends take the same nonces and one
+  of each lands.
 - A failing RPC stops the runner. A receipt that cannot be read while a step journals its deployment
   is left out of the journal, and the step goes on.
 
