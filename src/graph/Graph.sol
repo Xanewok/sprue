@@ -255,11 +255,12 @@ abstract contract Graph is Script {
                 }
                 (visit.status, visit.reason) = _status(network, n, passed[i]);
                 // A step's done check is relied on to stay done after the date, so only a step still to send
-                // waits for it. A predicate holds only now, so it waits for its date even when it holds. A
-                // fixed date not yet reached leaves any other judgment for the plan made after it: the
-                // `Due` view or predicate was read on a chain still before the date.
-                if (visit.status == Status.Done && bytes(n.until).length == 0) visit.notBefore = 0;
-                else if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
+                // waits for it. A predicate holds only now, so before its date it is not judged, whichever
+                // its answer. A fixed date not yet reached leaves any other judgment for the plan made after
+                // it: the `Due` view was read on a chain still before the date.
+                bool predicate = bytes(n.until).length != 0;
+                if (visit.status == Status.Done && !predicate) visit.notBefore = 0;
+                else if (visit.notBefore != 0 && (predicate || vm.contains(n.gate, "."))) visit.status = Status.NotJudged;
             }
             if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
                 visit.status = Status.Due;
@@ -356,13 +357,11 @@ abstract contract Graph is Script {
                     break;
                 }
                 if (visit.status == Status.Waiting && bytes(n.until).length != 0) {
-                    // The predicate was judged before its date. Warp to the date and judge again. With no
-                    // date left, the driver has one try until the predicate is met: a driver that claims
-                    // progress it cannot make would otherwise loop forever.
-                    if (!_warpToDate(network, n)) {
-                        if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
-                        driven[visit.node] = true;
-                    }
+                    // The walk judges a predicate only once its date is reached. The driver has one try until
+                    // the predicate is met: a driver that claims progress it cannot make would otherwise loop
+                    // forever.
+                    if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
+                    driven[visit.node] = true;
                     advanced = true;
                     replan = true;
                     break;

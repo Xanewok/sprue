@@ -108,6 +108,10 @@ contract Counting {
     function fresh(string calldata) external view returns (bool) {
         return block.timestamp <= openUntil;
     }
+
+    function freshFrom(string calldata) external pure returns (uint256) {
+        return 100;
+    }
 }
 
 /// @dev Two chains' clocks on one EVM: selecting a chain parks the selected one's clock and loads
@@ -742,6 +746,28 @@ contract StepBuildersTest is Test, Declares {
         s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
         BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
         assertEq(g.plan("anvil", "fixture.deploy"), "# not before 100 fixture.fresh\n# then plan again fixture.fresh\n");
+    }
+
+    function _freshUntil60BehindAViewDateOf100() private returns (BuilderGraph) {
+        Counting counting = new Counting();
+        vm.warp(50);
+        counting.renew();
+        Step[] memory s = new Step[](2);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector).gateView("freshFrom", Counting.freshFrom.selector);
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
+        return new BuilderGraph(Registration(address(counting), unit.script), s);
+    }
+
+    function test_aPredicateThatHoldsBeforeItsViewDate_waitsForIt() public {
+        assertEq(
+            _freshUntil60BehindAViewDateOf100().plan("anvil", "fixture.deploy"),
+            "# not before 100 fixture.fresh, movable until reached\n# then plan again fixture.fresh\n"
+        );
+    }
+
+    function test_executeNode_readsAPredicateAtItsViewDate() public {
+        assertFalse(_freshUntil60BehindAViewDateOf100().executeNode("anvil", "fixture.fresh"));
+        assertEq(block.timestamp, 100);
     }
 
     function test_rehearse_doesNotWarpAnotherChainToAnInputDate() public {
