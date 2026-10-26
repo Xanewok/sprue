@@ -67,4 +67,9 @@ contract GraphMutantsTest is GraphTest {
         vm.expectRevert(bytes(string.concat(vm.toString(FIXTURE_SENDER), " sent outside a step's call")));
         this.again("raw.judge");
     }
+
+    function test_quiet_failsOnAnExplicitDueThatHidesACallerBranch() public {
+        vm.expectRevert("raw.explicit would send as its sender");
+        this.again("raw.explicit");
+    }
 }

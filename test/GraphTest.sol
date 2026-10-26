@@ -64,9 +64,10 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         return vm.parseJsonAddress(vm.readFile(path), key);
     }
 
-    /// @dev Reverts unless the planner calls every step `target` needs done and a rerun of its body sends
-    ///      nothing. Run it after `upTo(target)`. A body is entered from the graph, as the planner's probe is not:
-    ///      a body that branches on `msg.sender` shows as the planner and the body disagreeing.
+    /// @dev Reverts unless the planner calls every step `target` needs done, a rerun of its body sends nothing,
+    ///      and a probe of its body as its sender finds nothing due. Run it after `upTo(target)`. The rerun enters the
+    ///      body from the graph, the probe as the step's sender, so a body that branches on `msg.sender` fails the
+    ///      probe. The probe sees only what the body does before its first send.
     function quiet(string memory target) internal {
         bool[] memory needed = _closure(target);
         for (uint256 i; i < needed.length; ++i) {
@@ -74,6 +75,10 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
             if (!needed[i] || bytes(n.step).length == 0) continue;
             require(_judge(n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
             require(runNode(n.id).length == 0, string.concat(n.id, " sends on a rerun"));
+            require(
+                !_dueAs(n.unit, _graph.stepCalldata(_net, n.id), _graph.fixtureSender(_net, n.id)),
+                string.concat(n.id, " would send as its sender")
+            );
         }
     }
 
@@ -134,6 +139,21 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
             sent.length == 0,
             string.concat(vm.toString(sent.length == 0 ? address(0) : sent[0].from), " sent outside a step's call")
         );
+    }
+
+    /// @dev Whether `unit`'s probe of `step`, pranked as `sender`, finds the step due. Not `Probes.due`: a
+    ///      library call deploys the library from inside the recording.
+    function _dueAs(address unit, bytes memory step, address sender) private returns (bool) {
+        (, bytes memory ret) = unit.call(abi.encodeCall(IProbe.probe, (step, sender)));
+        require(bytes4(ret) == IProbe.Probed.selector, "the unit does not answer a probe");
+        bytes memory data = new bytes(ret.length - 4);
+        for (uint256 i; i < data.length; ++i) {
+            data[i] = ret[i + 4];
+        }
+        (bool returned, bytes memory result) = abi.decode(data, (bool, bytes));
+        if (returned) return false;
+        require(bytes4(result) == IProbe.StepDue.selector, "the step refuses as its sender");
+        return true;
     }
 
     function _isProbe(VmSafe.AccountAccess memory frame) internal view override returns (bool) {
