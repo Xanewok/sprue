@@ -14,12 +14,13 @@ contract RawUnit is FixtureUnit {
     FixtureToken public sink = new FixtureToken(0);
 
     function steps() external view returns (Step[] memory s) {
-        s = new Step[](6);
+        s = new Step[](7);
         s[0] = _step("raw.silent", "silent", this.silent.selector).due(this.silentDue.selector);
         s[1] = _step("raw.raw", "raw", this.raw.selector).due(this.rawDue.selector);
         s[2] = _step("raw.stray", "stray", this.stray.selector).due(this.strayDue.selector);
         s[4] = _step("raw.gated", "gated", this.gated.selector).by("raw.operator");
         s[5] = _step("raw.unnamed", "unnamed", this.unnamed.selector).due(this.unnamedDue.selector);
+        s[6] = _step("raw.judge", "judge", this.judge.selector).due(this.judgeDue.selector);
         s[3] = _step("raw.hidden", "hidden", this.hidden.selector).due(this.hiddenDue.selector);
     }
 
@@ -49,6 +50,24 @@ contract RawUnit is FixtureUnit {
     function unnamedDue(string calldata) external returns (bool) {
         vm.broadcast(STRAY);
         address(sink).call(_transfer());
+        return false;
+    }
+
+    bool private judged;
+    bool private rechecked;
+
+    function judge(string calldata network) external step(network) {
+        judged = true;
+    }
+
+    /// @dev Sends once, from a node's sender, at the first judgment after the step ran.
+    function judgeDue(string calldata) external returns (bool) {
+        if (!judged) return true;
+        if (!rechecked) {
+            rechecked = true;
+            vm.broadcast(FIXTURE_SENDER);
+            address(sink).call(_transfer());
+        }
         return false;
     }
 

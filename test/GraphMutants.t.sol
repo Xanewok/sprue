@@ -61,4 +61,10 @@ contract GraphMutantsTest is GraphTest {
         );
         this.again("raw.unnamed");
     }
+
+    function test_quiet_failsOnASendInTheFirstJudgment() public {
+        upTo("raw.judge");
+        vm.expectRevert(bytes(string.concat(vm.toString(FIXTURE_SENDER), " sent outside a step's call")));
+        this.again("raw.judge");
+    }
 }

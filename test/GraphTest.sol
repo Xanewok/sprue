@@ -72,7 +72,7 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         for (uint256 i; i < needed.length; ++i) {
             Graph.Node memory n = _graph.node(i);
             if (!needed[i] || bytes(n.step).length == 0) continue;
-            require(_graph.status(_net, n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
+            require(_judge(n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
             require(runNode(n.id).length == 0, string.concat(n.id, " sends on a rerun"));
         }
     }
@@ -117,6 +117,15 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
         _noSendOutside();
         return _transcriptEnd();
+    }
+
+    /// @dev The planner's verdict, with the senders' nonces and the recording watching the judgment.
+    function _judge(string memory id) private returns (Graph.Status verdict) {
+        _transcriptBegin(_senders());
+        _recordStart();
+        verdict = _graph.status(_net, id);
+        _noSendOutside();
+        _transcriptEnd();
     }
 
     function _noSendOutside() private {
