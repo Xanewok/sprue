@@ -212,10 +212,18 @@ contract Create2CodeTest is Test {
 
         assertTrue(unit.deploy2(net, salt, at), "the first run did not send");
         string memory journal = vm.readFile(path);
+        bytes memory simulated = at.code;
+        // forge simulates a send in an earlier block than it lands in, so a constructor that reads the block lands
+        // with other code. The address commits to the journaled initcode, so that code is the role's.
+        vm.etch(at, bytes.concat(simulated, hex"00")); // unreachable: the same behaviour, another code hash
+        assertFalse(unit.deploy2(net, salt, at), "a landed role was sent again");
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), at.codehash);
         vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".toyCodeHash");
+        vm.writeJson(vm.toString(bytes32(uint256(1))), path, ".toyInitcodeHash");
         vm.expectRevert(bytes("toy's code differs from toy.json"));
         unit.deploy2(net, salt, at);
 
+        vm.etch(at, simulated);
         vm.removeFile(path);
         unit.setRefuseBuild(true);
         vm.expectRevert(bytes("the build check refused"));

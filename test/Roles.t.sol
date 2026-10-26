@@ -394,6 +394,23 @@ contract RolesTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), addr.codehash);
     }
 
+    /// @dev As for a CREATE role, but a CREATE2 address commits to the journaled initcode: no transaction is read.
+    function test_at_aCreate2RoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsAddress() public {
+        _network("landed2", vm.toString(ops));
+        bytes32 salt = bytes32(uint256(6));
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
+        vm.writeFile(
+            string.concat(dir, "/kinds.input.json"),
+            string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
+        );
+        kinds.deployHook(network);
+        vm.etch(at, bytes.concat(at.code, hex"00")); // unreachable: the same behaviour, another code hash
+
+        assertEq(kinds.atHook(network), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(string.concat(dir, "/kinds.json")), ".hookCodeHash"), at.codehash);
+    }
+
     function test_at_outsideAStep_provesOnEveryCall() public {
         _network("outside", vm.toString(ops));
         unit.deploy(network);
