@@ -69,6 +69,13 @@ one fails there first.
 | A prank makes a call from the pranked account, so a probe's call to its own unit shows as a send from that account; its parent is the probe's frame | `test_prank_makesAProbesSelfCallACallFromThePrankedAccount` |
 | A prank is still active in the called frame, so the fixture cannot enter a step as its sender: `quiet` probes each body as the step's sender, so a body that branches on `msg.sender` is caught | `test_prank_blocksTheCalledFramesBroadcast` |
 
+### The steps the fixture judges
+
+`quiet` is sound for a step that does not catch sprue's own revert. A probe stops a step at its first send by
+reverting with `StepDue`, so a step body that catches that revert (a `try`/`catch` around `_send`, `_startBroadcast`
+or a journal write) looks done to the probe and is outside what `quiet` judges. A step that sends on a path only
+its own sender takes is judged by the probe as that sender, up to its first send.
+
 ## Invariants
 
 Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e.sh`).

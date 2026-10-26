@@ -77,7 +77,8 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     /// @dev Reverts unless the planner calls every step `target` needs done, a rerun of its body sends nothing,
     ///      and a probe of its body as its sender finds nothing due. Run it after `upTo(target)`. The rerun enters the
     ///      body from the graph, the probe as the step's sender, so a body that branches on `msg.sender` fails the
-    ///      probe. The probe sees only what the body does before its first send.
+    ///      probe. The probe sees only what the body does before its first send, and a body that catches the
+    ///      probe's `StepDue` revert is outside what it judges (DESIGN.md, "The steps the fixture judges").
     function quiet(string memory target) internal {
         bool[] memory needed = _closure(target);
         for (uint256 i; i < needed.length; ++i) {
