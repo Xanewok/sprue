@@ -792,7 +792,7 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      journal's `retired` list names. Only `sender`'s count: an address another sender created
     ///      is not this project's to adopt, so the stray guard keeps refusing it until a person
     ///      resolves it. Reverts if a CREATE has no code but its nonce is unused, or if two
-    ///      different ones landed.
+    ///      different ones landed and not exactly one of them with input `initcodeHash`.
     function _landedCreate(
         string memory journal,
         string memory role,
@@ -803,6 +803,8 @@ abstract contract Deployment is ForgeBroadcasts {
         Create[] memory creates = _creates(artifact);
         string memory landed;
         uint256 count;
+        uint256 matching;
+        Create memory match_;
         for (uint256 i; i < creates.length; ++i) {
             Create memory c = creates[i];
             if (c.from != sender || c.create2 || _isRetired(journal, c.addr)) continue;
@@ -846,11 +848,12 @@ abstract contract Deployment is ForgeBroadcasts {
             landed = count == 0 ? vm.toString(c.addr) : string.concat(landed, ", ", vm.toString(c.addr));
             found = c;
             ++count;
+            if (initcodeHash != 0 && keccak256(_txInput(c)) == initcodeHash) {
+                match_ = c;
+                ++matching;
+            }
         }
-        if (count > 1 && initcodeHash != 0) {
-            (uint256 matching, Create memory only) = _landedWith(journal, artifact, sender, initcodeHash);
-            if (matching == 1) return (true, only);
-        }
+        if (count > 1 && matching == 1) return (true, match_);
         require(
             count < 2,
             string.concat(
@@ -867,22 +870,6 @@ abstract contract Deployment is ForgeBroadcasts {
             )
         );
         return (count == 1, found);
-    }
-
-    /// @dev How many addresses `sender` created `artifact` at with code and input `initcodeHash`, and one.
-    function _landedWith(string memory journal, string memory artifact, address sender, bytes32 initcodeHash)
-        private
-        view
-        returns (uint256 count, Create memory found)
-    {
-        Create[] memory creates = _creates(artifact);
-        for (uint256 i; i < creates.length; ++i) {
-            Create memory c = creates[i];
-            if (c.from != sender || c.create2 || _isRetired(journal, c.addr) || c.addr.code.length == 0) continue;
-            if (keccak256(_txInput(c)) != initcodeHash || (count != 0 && c.addr == found.addr)) continue;
-            found = c;
-            ++count;
-        }
     }
 
     /// @dev A CREATE replaced at the same nonce outside forge lands other initcode at the same
@@ -1055,7 +1042,7 @@ abstract contract Deployment is ForgeBroadcasts {
         sent = !landed;
         if (sent) {
             _startBroadcast();
-            _requireDeployable();
+            _requireDeployable(false);
             (bool ok,) = CREATE2_FACTORY.call(bytes.concat(salt, _initcode(artifact, args)));
             require(ok, "the CREATE2 factory call reverted");
             vm.stopBroadcast();
@@ -1480,10 +1467,6 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      broadcaster is forge's default sender, except under `forge test`. With a pin, the
     ///      broadcaster must be the pinned deployer unless `UNSAFE_UNEXPECTED_DEPLOYER` is exactly
     ///      `1`, which logs a warning instead.
-    function _requireDeployable() internal {
-        _requireDeployable(false);
-    }
-
     /// @dev `_requireDeployable`, which with `strict` refuses a key other than the pin whatever the opt-in.
     function _requireDeployable(bool strict) internal {
         (address sender,) = _broadcaster();
