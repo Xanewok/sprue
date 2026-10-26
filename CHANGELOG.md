@@ -134,6 +134,9 @@ if it reverts. `Due` views stay as the explicit form. A step that calls `vm.star
 opens a broadcast only when forge has none open, and `_done()` closes it and reports whether the step
 created a transaction, from the broadcaster's nonce.
 
+A CREATE role's creation is proven once per forge run: a later proof of the same address and arguments on
+the same chain reads no transaction or receipt again.
+
 Fixed: a done step behind a date not yet reached printed `# not before`, from a gate view, or stopped the
 plan, from an input date, so `run` exited 4 or warped the clock for a step with nothing to send. A done
 step now has no date line; only a step still to send waits for its date.

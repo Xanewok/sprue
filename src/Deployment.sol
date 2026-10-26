@@ -1018,6 +1018,12 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
         );
         if (_createdThisRun[_deployment(addr)]) return;
+        // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
+        // revert and lasts one forge run, or one test. Only a success is kept. It rests on a mined
+        // transaction, which a run treats as final. The record check above made `addr` its deployer's CREATE
+        // at its nonce, which one transaction alone can make, so the key needs no transaction hash.
+        address proven = address(uint160(uint256(keccak256(abi.encode(block.chainid, addr, keccak256(args))))));
+        if (keccak256(bytes(vm.getLabel(proven))) == keccak256(bytes(PROVEN))) return;
         bytes32 hash = _createTx(journal, role);
         if (hash == 0) {
             require(
@@ -1034,11 +1040,6 @@ abstract contract Deployment is ForgeBroadcasts {
             );
             return;
         }
-        // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
-        // revert and lasts one forge run, or one test. Only a success is kept. It rests on a mined
-        // transaction, which a run treats as final.
-        address proven = address(uint160(uint256(keccak256(abi.encode(block.chainid, addr, hash, keccak256(args))))));
-        if (keccak256(bytes(vm.getLabel(proven))) == keccak256(bytes(PROVEN))) return;
         // The journal's arguments vouch for nothing: an edit can match them to the input while the contract
         // holds what its creation sent.
         require(
