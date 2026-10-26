@@ -3,6 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Deployment} from "./Deployment.sol";
 import {Certificate, Input} from "./Journal.sol";
+import {RecoverHelper} from "./RecoverHelper.sol";
 
 /// @dev How a role's address is made, which fixes how its reuse is proven.
 enum Kind {
@@ -273,7 +274,7 @@ abstract contract Roles is Deployment {
         revert(string.concat(r.name, " is not in ", _unit(), "'s _roles(): declare it there"));
     }
 
-    function _own(Role memory r) private pure returns (bool) {
+    function _own(Role memory r) private view returns (bool) {
         return bytes(r.owner).length == 0 || keccak256(bytes(r.owner)) == keccak256(bytes(_unit()));
     }
 
@@ -343,7 +344,8 @@ abstract contract Roles is Deployment {
     /// @dev Rebuilds a lost journal from forge's broadcast records: each CREATE role of `_roles()`, in order,
     ///      that the journal lacks and that the sender created from this build with its declared arguments.
     ///      A later role's `.args` read an earlier role's found address. A CREATE2 role needs no recovery: its
-    ///      deploy step adopts it. Read-only: run it with `--sender` the deployer.
+    ///      deploy step adopts it. Read-only: run it with `--sender` the deployer. The search and the journal
+    ///      write run in a `RecoverHelper` created here, outside any broadcast, so no unit carries them.
     function _recoverRoles(string calldata network) internal returns (string memory) {
         Role[] memory rs = _roles();
         require(
@@ -355,21 +357,32 @@ abstract contract Roles is Deployment {
         (address sender,) = _broadcaster();
         vm.stopBroadcast();
         require(sender != DEFAULT_SENDER, "pass --sender <deployer>: the sender of the lost deployments");
-        string[2][] memory names = new string[2][](rs.length);
-        Create[] memory found = new Create[](rs.length);
+        RecoverHelper helper = RecoverHelper(vm.deployCode("RecoverHelper.sol:RecoverHelper"));
+        // A role's `.args` may select another chain's fork, which would hide a helper that lives on one.
+        vm.makePersistent(address(helper));
+        helper.begin(
+            network,
+            RecoverHelper.Ctx(
+                _unit(),
+                _deployments(),
+                _deployScript(),
+                _defaultChain(_networkJson()),
+                _selectedChain(),
+                _fenced(),
+                _rehearsal()
+            ),
+            sender,
+            rs.length
+        );
         for (uint256 i; i < rs.length; ++i) {
             Role memory r = rs[i];
             if (r.kind != Kind.Create || !_own(r)) continue;
-            names[i] = [r.name, r.artifact];
             if (_has(journal, string.concat(".", r.name))) continue;
             // Before the search: several roles of one artifact are told apart by their arguments.
-            bytes memory a = _argsOf(r);
-            found[i] = _createToRecover(journal, r.name, r.artifact, sender, _initcodeHash(r.artifact, a));
-            if (found[i].addr == address(0)) continue;
-            _thisRun[_runKey(r.name)] = found[i].addr;
-            _requireCurrent(found[i], r.artifact, a);
+            address at = helper.find(i, r.name, r.artifact, _argsOf(r));
+            if (at != address(0)) _thisRun[_runKey(r.name)] = at;
         }
-        _journalRecovered(journal, names, found);
+        helper.commit();
         _onRecover(journal);
         return _done(false);
     }

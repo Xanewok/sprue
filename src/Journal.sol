@@ -136,9 +136,9 @@ abstract contract Journal is Script, IProbe {
     }
 
     /// @dev The journal's name without `.json`; also the prefix of the unit's input file.
-    function _unit() internal pure virtual returns (string memory);
+    function _unit() internal view virtual returns (string memory);
 
-    function unitName() external pure returns (string memory) {
+    function unitName() external view returns (string memory) {
         return _unit();
     }
 
@@ -294,7 +294,7 @@ abstract contract Journal is Script, IProbe {
 
     /// @dev Reads a string field of `json`. Reverts if it is empty or a placeholder, a value that
     ///      starts with `<` in an input file waiting to be filled in.
-    function _decided(string memory json, string memory key) internal pure returns (string memory) {
+    function _decided(string memory json, string memory key) internal view returns (string memory) {
         return _decided(Input(json, _unit()), key);
     }
 
@@ -308,7 +308,7 @@ abstract contract Journal is Script, IProbe {
 
     function _inputUint(string memory json, string memory key, uint256 min, uint256 max)
         internal
-        pure
+        view
         returns (uint256)
     {
         return _inputUint(Input(json, _unit()), key, min, max);
@@ -324,7 +324,7 @@ abstract contract Journal is Script, IProbe {
     }
 
     /// @dev `key` may be a path such as `creators[0]`. The zero address is never a valid input.
-    function _requiredAddress(string memory json, string memory key) internal pure returns (address) {
+    function _requiredAddress(string memory json, string memory key) internal view returns (address) {
         return _requiredAddress(Input(json, _unit()), key);
     }
 

@@ -223,19 +223,19 @@ contract ToyUnit is ToyJournal {
         return _reuseForDue(_use(network), "toy", "ToyPayload", abi.encode(tag));
     }
 
-    function decided(string calldata json, string calldata key) external pure returns (string memory) {
+    function decided(string calldata json, string calldata key) external view returns (string memory) {
         return _decided(json, key);
     }
 
     function inputUint(string calldata json, string calldata key, uint256 min, uint256 max)
         external
-        pure
+        view
         returns (uint256)
     {
         return _inputUint(json, key, min, max);
     }
 
-    function requiredAddress(string calldata json, string calldata key) external pure returns (address) {
+    function requiredAddress(string calldata json, string calldata key) external view returns (address) {
         return _requiredAddress(json, key);
     }
 
