@@ -395,6 +395,41 @@ contract CoreUnitTest is Test {
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
     }
 
+    /// @dev Only the unit's own script's records are read: its runs on this chain and its multi-chain runs.
+    function test_recordReceipt_readsOnlyTheScriptsOwnRecords_ofThisChainOrAMultiChainRun() public {
+        _network("receipt-own", FREE, "");
+        unit.deploy(network);
+        address addr = _journalOf("toy", ".toy");
+        string memory path = string.concat(dir, "/toy.json");
+        bytes32 hash = keccak256("the payload's creation");
+        unit.confirm(hash);
+        string memory run = string.concat(
+            '{"chain": ',
+            vm.toString(block.chainid),
+            ', "transactions": [], "receipts": [{"contractAddress": "',
+            vm.toLowercase(vm.toString(addr)),
+            '", "transactionHash": "',
+            vm.toString(hash),
+            '"}]}'
+        );
+        string[2] memory elsewhere = [
+            string.concat("/broadcast/DeployOther.s.sol/", vm.toString(block.chainid)),
+            string.concat("/broadcast/", SCRIPT, "/1")
+        ];
+        for (uint256 i; i < elsewhere.length; ++i) {
+            vm.createDir(string.concat(dir, elsewhere[i]), true);
+            vm.writeFile(string.concat(dir, elsewhere[i], "/deploy-latest.json"), run);
+        }
+        unit.check(network);
+        assertFalse(vm.keyExistsJson(vm.readFile(path), ".toyTx"), "another script's or chain's record was read");
+
+        string memory multi = string.concat(dir, "/broadcast/multi/", SCRIPT, "-latest");
+        vm.createDir(multi, true);
+        vm.writeFile(string.concat(multi, "/deploy.json"), string.concat('{"deployments": [', run, "]}"));
+        unit.check(network);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "the multi-chain run's receipt");
+    }
+
     /// @dev With no record, only the chain can show a creation, and only of a role the project
     ///      created: one with a nonce. `forge test` has no RPC.
     function test_recordReceipt_withNoRecord_findsNothingWithoutAnRpcOrTheRolesNonce() public {
@@ -619,7 +654,9 @@ contract CoreUnitTest is Test {
     function test_recover_rebuildsALostJournal_equalOnEveryKeyADeployWrites_thenEveryStepSendsNothing() public {
         string memory lost = _lose("recover");
         _writeRecord(_run(block.chainid, _sent(lost, ops)));
-        vm.writeFile(string.concat(dir, "/broadcast/", SCRIPT, "/records/0-latest.recovery.lock"), "");
+        vm.writeFile(
+            string.concat(dir, "/broadcast/", SCRIPT, "/", vm.toString(block.chainid), "/0-latest.recovery.lock"), ""
+        );
 
         unit.recover(network);
 
@@ -1442,13 +1479,13 @@ contract CoreUnitTest is Test {
         );
     }
 
-    /// @dev Under the network, in a directory named by no chain id: `_records` reads it under `forge test`.
+    /// @dev Under the network, where `_records` puts them under `forge test`.
     function _recordPath() private returns (string memory) {
         return string.concat(vm.projectRoot(), "/", _recordFile());
     }
 
     function _recordFile() private returns (string memory) {
-        string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/records");
+        string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/", vm.toString(block.chainid));
         vm.createDir(records, true);
         return string.concat(records, "/0-latest.json");
     }
@@ -1456,7 +1493,7 @@ contract CoreUnitTest is Test {
     function _writeReceipts(string memory file, string memory commit, address addr, bytes32 first, bytes32 second)
         private
     {
-        string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/records");
+        string memory records = string.concat(dir, "/broadcast/", SCRIPT, "/", vm.toString(block.chainid));
         vm.createDir(records, true);
         string memory receipt =
             string.concat('{"contractAddress": "', vm.toLowercase(vm.toString(addr)), '", "transactionHash": "');
