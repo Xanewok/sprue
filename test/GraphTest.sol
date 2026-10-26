@@ -97,9 +97,11 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         _recordStart();
     }
 
-    function stepping(string calldata) external {
+    /// @dev Sets the step's sender on its unit, then records the step's call.
+    function stepping(string calldata id) external {
         require(msg.sender == address(_graph), "only the graph reports");
         _noSendOutside();
+        Deployment(_graph.node(_indexOf(id)).unit).setTestSender(_graph.fixtureSender(_net, id));
         _recordStart();
     }
 

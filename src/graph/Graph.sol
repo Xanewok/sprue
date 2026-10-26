@@ -756,7 +756,6 @@ abstract contract Graph is Script {
             if (!_prepareSender(network, nodeIndex)) return false;
             return _callStep(n.unit, _calldata(n, n.step, network));
         }
-        _call(n.unit, abi.encodeWithSignature("setTestSender(address)", _fixtureSender(network, n)));
         IFixtureHost(_fixture).stepping(n.id);
         sent = _callStep(n.unit, _calldata(n, n.step, network));
         IFixtureHost(_fixture).stepped(n.id);
