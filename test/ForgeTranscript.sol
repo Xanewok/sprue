@@ -53,7 +53,7 @@ abstract contract ForgeTranscript is Test {
             VmSafe.AccountAccess memory a = log[i];
             bool call = a.kind == VmSafe.AccountAccessKind.Call;
             if (!call && a.kind != VmSafe.AccountAccessKind.Create) continue;
-            if (!_isSend(log, i)) continue;
+            if (a.accessor.code.length != 0 || _underProbe(log, i)) continue;
             sent[sends++] = Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data);
             if (!call && !a.reverted) created[landed++] = Created(a.account, a.data);
         }
@@ -68,23 +68,16 @@ abstract contract ForgeTranscript is Test {
     ///      call from that sender. Whether `frame` is the graph's probe of a unit.
     function _isProbe(VmSafe.AccountAccess memory frame) internal view virtual returns (bool);
 
-    /// @dev Whether the call or CREATE `log[i]` is a transaction. An account without code can only have
-    ///      broadcast it, unless it is the pranked caller of a probe's own call. An account with code made it
-    ///      from its own frame unless a broadcast did: then its parent frame belongs to another account (the
-    ///      script that called `vm.broadcast`). A frame without a parent in the log is the graph's.
-    function _isSend(VmSafe.AccountAccess[] memory log, uint256 i) private view returns (bool) {
-        VmSafe.AccountAccess memory a = log[i];
+    /// @dev Whether the call `log[i]` is made directly by a probe: its parent is one.
+    function _underProbe(VmSafe.AccountAccess[] memory log, uint256 i) private view returns (bool) {
         for (uint256 j = i; j > 0; --j) {
             VmSafe.AccountAccess memory parent = log[j - 1];
             if (parent.kind != VmSafe.AccountAccessKind.Call && parent.kind != VmSafe.AccountAccessKind.Create) {
                 continue;
             }
-            if (parent.depth >= a.depth) continue;
-            if (parent.depth + 1 != a.depth) break;
-            if (a.accessor.code.length == 0) return !_isProbe(parent);
-            return parent.account != a.accessor;
+            if (parent.depth < log[i].depth) return parent.depth + 1 == log[i].depth && _isProbe(parent);
         }
-        return a.accessor.code.length == 0;
+        return false;
     }
 
     function _transcriptAdd(Sent[] memory sent) internal {
