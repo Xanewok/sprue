@@ -59,12 +59,12 @@ one fails there first.
 | A broadcast call or CREATE is a state-diff access whose accessor is the broadcaster; a nested call names its caller | `test_broadcast_recordsSenderAsCallAndCreateAccessor`, `test_broadcast_onlyTopLevelCallHasSenderAsAccessor` |
 | The access carries the value, the calldata, the CREATE initcode with its arguments, and the chain id | `test_broadcast_recordsValueCalldataInitcodeAndChain` |
 | Each broadcast call and CREATE advances the sender's nonce, a static call does not, and a reverted top-level call still does | `test_broadcast_incrementsNonceForCallAndCreateButNotStaticCalls`, `test_broadcast_revertedCallIsRecordedAndStillAdvancesTheNonce` |
-| A reverted CREATE, and a call inside a reverted ancestor, are marked reverted | `test_broadcast_revertedCreateAndAncestorAreMarked` |
+| A reverted CREATE, and a CREATE or call inside a reverted ancestor, are marked reverted, and each reverted top-level transaction still advances the nonce | `test_broadcast_revertedCreateAndAncestorAreMarked` |
 | `readCallers` names the broadcaster before a CREATE, and the CREATE lands at its nonce | `test_readCallers_namesTheBroadcasterBeforeACreate` |
 | A broadcast CREATE2 is a call to the factory with `salt ++ initcode` | `test_broadcast_create2IsAFactoryCall` |
 | A bare `vm.broadcast()` sends from forge's default sender | `test_broadcast_withoutASenderIsTheDefaultSender` |
 | A test's sends leave no broadcast record | `test_broadcast_leavesNoRecordUnderATest` |
-| A recording started in one callback is drained in a later one, in order | `test_stateDiff_startedInACallbackSurvivesItsReturn` |
+| A recording started in one callback is drained in a later one, in order, and each restart holds only what ran since | `test_stateDiff_startedInACallbackSurvivesItsReturn`, `test_stateDiff_repeatedSegmentsEachHoldTheirOwnAccesses` |
 | A snapshot restores the clock and nonces but not files, and a replayed CREATE lands at its recorded address | `test_snapshot_restoresTimestampAndNonceButKeepsFileWrites`, `test_snapshot_replayedCreateLandsAtRecordedAddress` |
 | A prank makes a call from the pranked account, so a probe's call to its own unit shows as a send from that account; its parent is the probe's frame | `test_prank_makesAProbesSelfCallACallFromThePrankedAccount` |
 | A prank is still active in the called frame, so the fixture cannot enter a step as its sender: `quiet` probes each body as the step's sender, so a body that branches on `msg.sender` is caught | `test_prank_blocksTheCalledFramesBroadcast` |

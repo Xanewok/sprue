@@ -39,6 +39,11 @@ contract FoundryFactsPayload {
 }
 
 contract FoundryFactsRelay {
+    function createThenRevert() external {
+        new FoundryFactsPayload(1, false);
+        revert("undone");
+    }
+
     function callThenRevert(FoundryFactsTarget target) external {
         target.touch();
         revert("undone");
@@ -244,6 +249,7 @@ contract FoundryFactsTest is Test {
         assertEq(call.chainInfo.chainId, block.chainid);
         VmSafe.AccountAccess memory create = _access(accesses, VmSafe.AccountAccessKind.Create, made);
         assertEq(create.value, 2);
+        assertEq(create.chainInfo.chainId, block.chainid);
         assertEq(create.data, bytes.concat(type(FoundryFactsPayload).creationCode, abi.encode(uint256(7), false)));
     }
 
@@ -251,23 +257,29 @@ contract FoundryFactsTest is Test {
     ///      as reverted, and on a call inside a reverted ancestor being marked reverted too.
     function test_broadcast_revertedCreateAndAncestorAreMarked() public {
         FoundryFactsRelay relay = new FoundryFactsRelay();
+        uint256 nonce = vm.getNonce(sender);
         vm.startStateDiffRecording();
         vm.startBroadcast(sender);
         try new FoundryFactsPayload(1, true) {} catch {}
         (bool ok,) = address(relay).call(abi.encodeCall(FoundryFactsRelay.callThenRevert, (a)));
+        (bool created,) = address(relay).call(abi.encodeCall(FoundryFactsRelay.createThenRevert, ()));
         vm.stopBroadcast();
         VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
         assertFalse(ok);
-        bool createSeen;
+        assertFalse(created);
+        uint256 creates;
         for (uint256 i; i < accesses.length; ++i) {
             if (accesses[i].kind == VmSafe.AccountAccessKind.Create) {
-                createSeen = true;
+                ++creates;
                 assertTrue(accesses[i].reverted);
             }
         }
-        assertTrue(createSeen);
+        // The constructor that reverts, and the one inside a reverted ancestor.
+        assertEq(creates, 2);
         assertTrue(_access(accesses, VmSafe.AccountAccessKind.Call, address(a)).reverted);
         assertEq(a.value(), 0);
+        // Each reverted top-level transaction still advanced the nonce: the CREATE and the two calls.
+        assertEq(vm.getNonce(sender), nonce + 3);
     }
 
     /// @dev `_broadcaster` reads the broadcaster and its nonce before a CREATE, and the CREATE lands there.
@@ -304,10 +316,25 @@ contract FoundryFactsTest is Test {
     /// @dev Forge keeps no broadcast record of a test's sends, so a fixture's creations have no transaction
     ///      for a proof to find.
     function test_broadcast_leavesNoRecordUnderATest() public {
-        bool existed = vm.exists("broadcast");
+        bytes32 before = _records();
         vm.broadcast(sender);
         a.touch();
-        assertEq(vm.exists("broadcast"), existed);
+        assertEq(_records(), before);
+    }
+
+    /// @dev A digest of every path and content under `broadcast/`.
+    function _records() private view returns (bytes32 digest) {
+        if (!vm.exists("broadcast")) return bytes32(0);
+        VmSafe.DirEntry[] memory entries = vm.readDir("broadcast", 8);
+        for (uint256 i; i < entries.length; ++i) {
+            digest = keccak256(
+                abi.encode(
+                    digest,
+                    entries[i].path,
+                    entries[i].isDir ? bytes32(0) : keccak256(bytes(vm.readFile(entries[i].path)))
+                )
+            );
+        }
     }
 
     /// @dev A bare `vm.broadcast()` sends from forge's default sender, which a fixture always watches.
@@ -336,5 +363,22 @@ contract FoundryFactsTest is Test {
             assertEq(accesses[i].depth, probe.depth + 1);
         }
         assertEq(found, 1);
+    }
+
+    /// @dev A fixture drains and restarts the recording at every callback: each segment holds exactly what ran
+    ///      since the last restart.
+    function test_stateDiff_repeatedSegmentsEachHoldTheirOwnAccesses() public {
+        FoundryFactsHost host = new FoundryFactsHost();
+        for (uint256 round; round < 3; ++round) {
+            host.start();
+            vm.broadcast(sender);
+            a.touch();
+            VmSafe.AccountAccess[] memory accesses = host.stop();
+            uint256 sends;
+            for (uint256 i; i < accesses.length; ++i) {
+                if (accesses[i].kind == VmSafe.AccountAccessKind.Call && accesses[i].accessor == sender) ++sends;
+            }
+            assertEq(sends, 1);
+        }
     }
 }
