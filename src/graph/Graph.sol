@@ -6,6 +6,16 @@ import {VmSafe} from "forge-std/Vm.sol";
 
 import {IProbe, Registration, IUnitSteps, Step, StepKind} from "./Step.sol";
 
+/// @dev What a test that runs the graph in process (`fixtureRun`) answers to.
+interface IFixtureHost {
+    /// @dev Makes the predicate node `id` true, or returns false if the test has no way to.
+    function meet(string calldata id) external returns (bool);
+    /// @dev Called after each step of the run, so that the test can record what the step sent.
+    function stepped(string calldata id) external;
+}
+
+address constant FIXTURE_SENDER = address(uint160(uint256(keccak256("sprue fixture sender"))));
+
 /// @notice A fixed graph of deploy steps (nodes). `plan` prints the commands that reach a target;
 ///         `rehearse` simulates them.
 /// @dev Nodes are stored in the order `_order` derives: dependencies first, then unit registration
@@ -80,6 +90,8 @@ abstract contract Graph is Script {
     /// @dev Units in registration order. `_order` sorts nodes by their unit's index here, after
     ///      dependencies.
     address[] internal _units;
+    /// @dev The test inside `fixtureRun`; zero otherwise.
+    address private _fixture;
 
     /// @notice Simulates `target` and what it depends on, in list order.
     function rehearse(string calldata network, string calldata target) external {
@@ -267,6 +279,50 @@ abstract contract Graph is Script {
         }
     }
 
+    /// @notice For tests: `_interpret` in process, with every step sent as its own account. The caller
+    ///         answers `IFixtureHost`. Reverts outside forge's test commands.
+    function fixtureRun(string calldata network, string calldata id, bool alone) external returns (bool reached) {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test runs a fixture");
+        _fixture = msg.sender;
+        reached = _interpret(network, id, alone);
+        _fixture = address(0);
+    }
+
+    /// @notice The verdict `plan` reaches for `id` with its needs in the order, as `_walk` judges it.
+    ///         `NotJudged` when the plan stops before `id`.
+    function status(string calldata network, string calldata id) external returns (Status) {
+        _home = _fork(type(uint256).max);
+        (Visit[] memory visits, uint256 count) = _walk(network, id, new bool[](_nodes.length), false);
+        uint256 at = _index(id);
+        for (uint256 i; i < count; ++i) {
+            if (visits[i].node == at) return visits[i].status;
+        }
+        return Status.NotJudged;
+    }
+
+    /// @notice The calldata of the command `plan` prints for `id`.
+    function stepCalldata(string calldata network, string calldata id) external view returns (bytes memory) {
+        Node storage n = _nodes[_index(id)];
+        return _calldata(n, n.step, network);
+    }
+
+    /// @notice The account `fixtureRun` sends `id` as.
+    function fixtureSender(string calldata network, string calldata id) external view returns (address) {
+        return _fixtureSender(network, _nodes[_index(id)]);
+    }
+
+    /// @dev The step's `.by` account, else the network's pinned deployer, else a fixed test account.
+    function _fixtureSender(string memory network, Node storage n) private view returns (address sender) {
+        if (bytes(n.sender).length != 0) return _senderAddress(network, n.sender);
+        sender = _pinnedDeployer(network);
+        return sender == address(0) ? FIXTURE_SENDER : sender;
+    }
+
+    /// @dev The deployer that `network`'s files pin, or zero.
+    function _pinnedDeployer(string memory) internal view virtual returns (address) {
+        return address(0);
+    }
+
     function _executeTarget(string memory network, string memory target) internal returns (bool reached) {
         return _interpret(network, target, false);
     }
@@ -307,7 +363,7 @@ abstract contract Graph is Script {
                     // judge again. With no date left, the driver has one try until the predicate is met: a
                     // driver that claims progress it cannot make would otherwise loop forever.
                     if (!_warpToDate(network, n)) {
-                        if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
+                        if (driven[visit.node] || !_driveUnmet(visit.node)) return false;
                         driven[visit.node] = true;
                     }
                     advanced = true;
@@ -322,6 +378,11 @@ abstract contract Graph is Script {
             if (!replan) return true;
             require(advanced, _cannotReach(target, "the interpreter stalled"));
         }
+    }
+
+    function _driveUnmet(uint256 nodeIndex) private returns (bool) {
+        if (_fixture == address(0)) return _unmetPredicate(nodeIndex);
+        return IFixtureHost(_fixture).meet(_nodes[nodeIndex].id);
     }
 
     /// @dev Reads the date afresh instead of reusing the walk's value. A gate view may select a
@@ -352,7 +413,9 @@ abstract contract Graph is Script {
     }
 
     function _probe(string memory network, Node storage n) private returns (Status, string memory) {
-        address sender = bytes(n.sender).length == 0 ? msg.sender : _senderAddress(network, n.sender);
+        address sender = _fixture != address(0)
+            ? _fixtureSender(network, n)
+            : bytes(n.sender).length == 0 ? msg.sender : _senderAddress(network, n.sender);
         (, bytes memory ret) = n.unit.call(abi.encodeCall(IProbe.probe, (_calldata(n, n.step, network), sender)));
         require(bytes4(ret) == IProbe.Probed.selector, string.concat(n.id, ": its unit's probe did not answer"));
         (bool returned, bytes memory result) = abi.decode(_strip(ret), (bool, bytes));
@@ -682,10 +745,15 @@ abstract contract Graph is Script {
         return vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptResume);
     }
 
-    function _sendStep(string memory network, uint256 nodeIndex) internal returns (bool) {
-        if (!_prepareSender(network, nodeIndex)) return false;
+    function _sendStep(string memory network, uint256 nodeIndex) internal returns (bool sent) {
         Node storage n = _nodes[nodeIndex];
-        return _callStep(n.unit, _calldata(n, n.step, network));
+        if (_fixture == address(0)) {
+            if (!_prepareSender(network, nodeIndex)) return false;
+            return _callStep(n.unit, _calldata(n, n.step, network));
+        }
+        _call(n.unit, abi.encodeWithSignature("setTestSender(address)", _fixtureSender(network, n)));
+        sent = _callStep(n.unit, _calldata(n, n.step, network));
+        IFixtureHost(_fixture).stepped(n.id);
     }
 
     function _command(string memory network, Node storage n) private view returns (string memory) {

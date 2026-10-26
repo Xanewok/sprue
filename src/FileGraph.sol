@@ -215,6 +215,11 @@ abstract contract FileGraph is Graph {
         return false;
     }
 
+    function _pinnedDeployer(string memory net) internal view override returns (address) {
+        string memory file = _networkFile(net);
+        return vm.keyExistsJson(file, ".deployer") ? vm.parseJsonAddress(file, ".deployer") : address(0);
+    }
+
     function _unmetPredicate(uint256 nodeIndex) internal virtual override returns (bool) {
         console.log(_cannotReach(_nodes[nodeIndex].id, "its condition is not met"));
         return false;
