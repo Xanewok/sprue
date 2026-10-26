@@ -112,6 +112,24 @@ contract Counting {
     function freshFrom(string calldata) external pure returns (uint256) {
         return 100;
     }
+
+    uint256 private _ripeAt = 40;
+
+    function ripeAt(string calldata) external view returns (uint256) {
+        return _ripeAt;
+    }
+
+    function postpone(string calldata) external {
+        _ripeAt = 100;
+    }
+
+    function postponeDue(string calldata) external view returns (bool) {
+        return _ripeAt != 100;
+    }
+
+    function ripe(string calldata) external view returns (bool) {
+        return block.timestamp >= 100;
+    }
 }
 
 /// @dev Two chains' clocks on one EVM: selecting a chain parks the selected one's clock and loads
@@ -763,6 +781,22 @@ contract StepBuildersTest is Test, Declares {
             _freshUntil60BehindAViewDateOf100().plan("anvil", "fixture.deploy"),
             "# not before 100 fixture.fresh, movable until reached\n# then plan again fixture.fresh\n"
         );
+    }
+
+    /// @dev A step of the same walk moves a reached date into the future: the predicate is read at the new date.
+    function test_rehearse_readsAPredicateAtTheDateAnEarlierStepMoved() public {
+        Counting counting = new Counting();
+        vm.warp(50);
+        Step[] memory s = new Step[](3);
+        s[0] = _step("fixture.postpone", Counting.postpone.selector).due(Counting.postponeDue.selector);
+        s[1] = _until("fixture.ripe", "ripe", Counting.ripe.selector).gateView("ripeAt", Counting.ripeAt.selector);
+        s[2] = _step("fixture.deploy", Counting.deploy.selector)
+            .due(Counting.deployDue.selector)
+            .needs("fixture.postpone")
+            .needs("fixture.ripe");
+        new BuilderGraph(Registration(address(counting), unit.script), s).rehearse("anvil", "fixture.deploy");
+        assertEq(counting.deploys(), 1);
+        assertEq(block.timestamp, 100);
     }
 
     function test_executeNode_readsAPredicateAtItsViewDate() public {

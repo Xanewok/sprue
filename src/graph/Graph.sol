@@ -357,11 +357,13 @@ abstract contract Graph is Script {
                     break;
                 }
                 if (visit.status == Status.Waiting && bytes(n.until).length != 0) {
-                    // The walk judges a predicate only once its date is reached. The driver has one try until
-                    // the predicate is met: a driver that claims progress it cannot make would otherwise loop
-                    // forever.
-                    if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
-                    driven[visit.node] = true;
+                    // A step sent earlier in this walk may have moved the date past the clock: warp to it and
+                    // judge again. With no date left, the driver has one try until the predicate is met: a
+                    // driver that claims progress it cannot make would otherwise loop forever.
+                    if (!_warpToDate(network, n)) {
+                        if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
+                        driven[visit.node] = true;
+                    }
                     advanced = true;
                     replan = true;
                     break;
