@@ -10,7 +10,8 @@ do.
   and what happens after someone else changes the chain. Without one, a tool either re-sends (and pays a
   premint twice) or never re-sends (and misses a changed fee).
 - **Why is the chain, not a file, the record of done?** The chain is a store that other people change. A
-  recorded "done" stays true only for a check that cannot turn false.
+  recorded "done" stays true only for a check that cannot turn false. What sprue guarantees exactly, and
+  what it checks only before the send, is in [README.md](README.md#what-sprue-guarantees).
 - **Why is the graph fixed before anything is sent?** So that a person can read the whole plan first.
 
 ## 1. What makes a rerun safe: stable done checks
@@ -120,8 +121,11 @@ mode that prints or prepares a send must still give later code the values it nee
 | plan | prints the command of each due step |
 | run | simulates the whole step, then broadcasts the sends it collected |
 | prepared (target) | writes the sends for another sender, such as a Safe, and reports pending |
-| test fixture (target) | pranks the senders and warps the dates |
+| test fixture (target) | runs the real steps in `forge test` with the test sender, warping the dates |
 | replay (target) | stops the step after each send in turn, runs it again, and checks that it sends nothing more |
+
+A body must not branch on the mode: what it sends in a preview is what it sends after approval. A unit
+can call `_writing()` today, which breaks this (target: only sprue's own records consult it).
 
 forge broadcasts only after the step's body has run, so the body sees simulated results. Every fact a step
 records from a send is therefore a prediction until the send lands. sprue settles a role's commit at the
@@ -177,5 +181,9 @@ declaration costs about as many lines as the code it replaces.
   not to the step.
 - **Removal:** revoking one role needs a read of that membership; stating the exact set needs enumeration.
   Renouncing is permanent only if the contract has no other admin or upgrade path.
+- **A sound step subset.** A body in arbitrary Solidity cannot be proven sound (Rice's theorem). sprue can
+  refuse what it can see: a send outside its helpers (the sender's nonce against the sends it recorded), a
+  read outside `needs`, and a prefix of sends that satisfies the check (the replay). The author still
+  chooses the check.
 - **Emergency runbooks,** such as pause and unpause: level setters that must bypass the drift policy, by a
   named escape hatch.
