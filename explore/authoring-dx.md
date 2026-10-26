@@ -1,7 +1,7 @@
 # Authoring DX: less unit code, same guarantees
 
-Status: exploration on `explore/authoring-dx`. Nothing here is released. Each primitive lands on this branch
-as its own draft pull request, and an adopting project measures what it cuts before any of it moves to `main`.
+Status: the primitives built here are on `main` and unreleased. An adopting project measured what each
+cut before it moved there. The verdicts below record what was taken and what was rejected.
 
 ## Goal and rules
 

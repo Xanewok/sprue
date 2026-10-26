@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+`_deployRoleCreate2(journal, role, artifact, args, salt, at, authenticate)` is a deploy step for a role
+the CREATE2 factory creates at the input's `at` for `salt`. A journaled role that landed is proven by its
+recorded salt and code, then `authenticate`. Otherwise this build with `args` must land at `at`: a role
+with code there and no journal entry is adopted, and a pending send is resent. It refuses a journal whose
+address or salt differs from the input's, and code at `at` that another build or input made.
+
+Fixed: a role whose receipt or check is journaled but whose address shows no code is refused, as a
+lagging RPC or a reset chain, instead of resent or replaced. Before, the stale `checked` entry vouched for
+a resent contract with the same code.
+
+`Proof.Journaled` proves a reused role by its journal's pinned CREATE record
+(`_requireJournaledCreate`), with no creation transaction. `_deployRole(journal, role, artifact, args,
+proof, check)` runs `check` after any proof, and `Proof.Authenticate` needs that form.
+`_reuseJournaled(journal, role, args)` is `_reuse` with that proof. `_requireJournaledCreate` refuses when
+`network.json` pins no deployer. For tests, `unit.trustTestCreationOf(journal, role)` trusts one role's
+journaled intent as its creation in this run.
+
 `_inputFile(unit)` reads another unit's input file as an `Input`, and `_decided`, `_inputUint` and
 `_requiredAddress` take one, so that a refusal names the file read.
 
