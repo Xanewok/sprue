@@ -383,7 +383,7 @@ abstract contract Journal is Script, IProbe {
         string memory path = string.concat(_dir(), "/", unit, ".json");
         require(vm.exists(path), string.concat(unit, ".json is missing"));
         record = vm.readFile(path);
-        string memory stamp = _stampKey(_networkJson());
+        string memory stamp = _selectedStampKey();
         require(
             _has(record, stamp) && _uint(record, stamp) == block.chainid,
             string.concat(unit, ".json is not this chain's")

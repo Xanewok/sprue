@@ -18,6 +18,15 @@ contract MovedToyUnit is ToyJournal {
         _deployIdentified(m, "toy", "ToyPayload", abi.encode(uint256(1)), _authenticate);
     }
 
+    function recordedOn(string calldata network, uint256 chainId_, string calldata unit, string calldata role)
+        external
+        returns (address)
+    {
+        _use(network);
+        vm.chainId(chainId_);
+        return _recorded(unit, role);
+    }
+
     function _create(bytes memory args) private returns (address) {
         return address(new ToyPayload(abi.decode(args, (uint256))));
     }
@@ -151,6 +160,19 @@ contract GuardsTest is Test, Declares {
         string memory journal = vm.readFile(string.concat(DIR, net, "/toy.json"));
         assertEq(vm.parseJsonUint(journal, ".otherChainId"), 5);
         assertFalse(vm.keyExistsJson(journal, ".mainChainId"));
+    }
+
+    function test_recorded_readsARoleOnTheChainTheStepSelected() public {
+        SelectedChainToyUnit unit = new SelectedChainToyUnit();
+        string memory net = _network("guards-selected-read");
+        unit.deployOn(net, 5);
+        address toy = vm.parseJsonAddress(vm.readFile(string.concat(DIR, net, "/toy.json")), ".toy");
+        vm.chainId(31337);
+        assertEq(unit.recordedOn(net, 5, "toy", "toy"), toy);
+
+        vm.chainId(31337);
+        vm.expectRevert(bytes("toy.json is not this chain's"));
+        unit.recordedOn(net, 6, "toy", "toy");
     }
 
     function test_deploy_stampsTheDefaultChainByDefault() public {
