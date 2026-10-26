@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
-import {console} from "forge-std/Script.sol";
-
 import {Deployment} from "./Deployment.sol";
 import {Certificate, Input} from "./Journal.sol";
 
@@ -187,7 +185,6 @@ abstract contract Roles is Deployment {
         _requireDeclared(r);
         string memory journal = _journal();
         bytes memory a = _argsOf(r);
-        _warnIfOlder(journal, r);
         _enterCheck(r);
         if (r.kind == Kind.Create) {
             (addr,) = _deployIdentified(journal, r.name, r.artifact, a, r.auth);
@@ -222,7 +219,6 @@ abstract contract Roles is Deployment {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
             addr = _requireRecordedCode(journal, r.name);
-            _warnIfOlder(journal, r);
             if (r.kind == Kind.Create) _requireCreateIdentity(journal, r.name, a);
             else _requireCreate2Record(journal, r.name, a, true);
             _enterCheck(r);
@@ -293,17 +289,6 @@ abstract contract Roles is Deployment {
         Input memory input = _inputFile(_unit());
         salt = vm.parseBytes32(_decided(input, string.concat(r.key, ".salt")));
         at = _requiredAddress(input, string.concat(r.key, ".address"));
-    }
-
-    /// @dev A warning, not a refusal: a source edit after a deployment must not orphan the role.
-    function _warnIfOlder(string memory journal, Role memory r) private view {
-        string memory key = string.concat(".", r.name, "CreationCodeHash");
-        if (!_has(journal, key)) return;
-        if (vm.parseJsonBytes32(journal, key) == keccak256(vm.getCode(string.concat(r.artifact, ".sol:", r.artifact))))
-        {
-            return;
-        }
-        console.log(string.concat("WARNING: ", r.name, "'s deployed code is older than this build of ", r.artifact));
     }
 
     function _proven(Role memory r, address addr) private {
