@@ -959,17 +959,16 @@ abstract contract Deployment is ForgeBroadcasts {
                     _unit(), ".json's ", role, " is not the input's create2.address: a person must resolve it"
                 )
             );
-        } else {
-            _requireNoStray(journal, role, artifact, at);
-        }
-        if (journaled && landed) {
             require(
                 _has(journal, string.concat(key, "Salt"))
                     && vm.parseJsonBytes32(journal, string.concat(key, "Salt")) == salt,
                 string.concat("the input's create2.salt differs from ", _unit(), ".json's")
             );
+        } else {
+            _requireNoStray(journal, role, artifact, at);
+        }
+        if (journaled && landed) {
             _requireRecordedCode(journal, role);
-            authenticate(at, args);
         } else {
             // A new salt for a landed role would deploy a second one.
             require(
@@ -982,6 +981,8 @@ abstract contract Deployment is ForgeBroadcasts {
             );
             _requireCreate2Address(salt, artifact, args, at);
         }
+        // An adopted role is proven as a reused one: its initcode does not fix its runtime code or state.
+        if (landed) authenticate(at, args);
 
         sent = !landed;
         if (sent) {
@@ -990,8 +991,8 @@ abstract contract Deployment is ForgeBroadcasts {
             (bool ok,) = CREATE2_FACTORY.call(bytes.concat(salt, _initcode(artifact, args)));
             require(ok, "the CREATE2 factory call reverted");
             vm.stopBroadcast();
-            _requireBuild(at, artifact);
         }
+        if (!(journaled && landed)) _requireBuild(at, artifact);
 
         if (!_writing()) return sent;
         if (!journaled) {

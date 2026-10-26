@@ -121,6 +121,11 @@ contract Create2CodeTest is Test {
         );
         unit.deploy2(net, salt, at);
         unit.setTag(1);
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deploy2(net, salt, at);
+        assertFalse(vm.exists(path), "a refused adoption was journaled");
+        unit.setRefuseReuse(false);
         assertFalse(unit.deploy2(net, salt, at), "an adoption sent");
         assertEq(vm.parseJsonAddress(vm.readFile(path), ".toy"), at);
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), vm.parseJsonBytes32(journal, ".toyCodeHash"));
