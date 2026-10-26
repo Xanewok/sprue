@@ -5,7 +5,7 @@ import {rehearsalPrefix} from "../src/Chains.sol";
 import {Graph} from "../src/graph/Graph.sol";
 import {FixtureVault} from "./FixtureVault.sol";
 import {GraphTest} from "./GraphTest.sol";
-import {LIMIT, SUPPLY, TokenUnit, VaultGraph} from "./VaultGraph.sol";
+import {LIMIT, SUPPLY, TokenUnit, VaultGraph, VaultUnit} from "./VaultGraph.sol";
 
 contract GraphFixtureTest is GraphTest {
     uint256 private constant OPEN_AT = 2_000_000_000;
@@ -156,11 +156,37 @@ contract GraphFixtureTest is GraphTest {
         );
         fresh.check(net);
 
-        fresh.trustTestCreationAt(token, bytes32(uint256(1)));
-        vm.expectRevert(bytes("token's witnessed creation sent other initcode than the journal records"));
+        fresh.trustTestCreationAt(token, hex"01");
+        vm.expectRevert(bytes("token's witnessed creation sent other initcode or arguments than its input"));
         fresh.check(net);
 
-        fresh.trustTestCreationAt(token, hash);
+        fresh.trustTestCreationAt(token, sent[0].data);
+        fresh.check(net);
+    }
+
+    function test_trustTestCreationAt_refusesNoInitcode() public {
+        _world("zero");
+        Sent[] memory sent = upTo("token.deploy");
+        TokenUnit fresh = new TokenUnit();
+        vm.expectRevert();
+        fresh.trustTestCreationAt(sent[0].to, "");
+    }
+
+    /// @dev Changing the input and the journal's arguments together must not make a witnessed creation pass for
+    ///      constructor arguments it did not send.
+    function test_trustTestCreationAt_refusesArgumentsTheCreationDidNotSend() public {
+        _world("args");
+        Sent[] memory sent = upTo("vault.check");
+        address other = makeAddr("other operator");
+        string memory dir = string.concat("deployments/", net);
+        vm.writeFile(string.concat(dir, "/vault.input.json"), string.concat('{"operator":"', vm.toString(other), '"}'));
+        vm.writeJson(
+            vm.toString(abi.encode(role("token", ".token"), other)), string.concat(dir, "/vault.json"), ".vaultArgs"
+        );
+        VaultUnit fresh = new VaultUnit();
+        fresh.trustTestCreationAt(sent[0].to, sent[0].data);
+        fresh.trustTestCreationAt(sent[1].to, sent[1].data);
+        vm.expectRevert();
         fresh.check(net);
     }
 }

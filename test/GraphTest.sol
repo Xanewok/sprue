@@ -33,6 +33,8 @@ abstract contract GraphTest is Test, IFixtureHost {
     string private _net;
     address[] private _units;
     Sent[] private _sent;
+    /// @dev The depth of the graph's own calls, from the `fixtureRun` call in the diff.
+    uint256 private _floor;
 
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
@@ -137,8 +139,9 @@ abstract contract GraphTest is Test, IFixtureHost {
     }
 
     /// @dev Appends the sends in the state diff recorded so far and vouches for each CREATE to every unit,
-    ///      so that a unit reads a role another unit created. Not the calls the graph makes to this test,
-    ///      nor the probes it runs: both are the graph's own, and a probe's self-call reverts.
+    ///      so that a unit reads a role another unit created. The graph's own calls (depth `_floor` and
+    ///      above) are not sends; of those, a probe and a callback to this test are skipped with their
+    ///      subtrees, by who calls and who is called, never by calldata: a probe's self-call reverts.
     function _absorb() private {
         VmSafe.AccountAccess[] memory log = vm.stopAndReturnStateDiff();
         uint256 inside = type(uint256).max;
@@ -147,8 +150,14 @@ abstract contract GraphTest is Test, IFixtureHost {
             if (a.depth > inside) continue;
             inside = type(uint256).max;
             bool call = a.kind == VmSafe.AccountAccessKind.Call;
-            if (call && (a.account == address(this) || _isProbe(a.data))) {
-                inside = a.depth;
+            if (call && a.accessor == address(this) && a.account == address(_graph)) {
+                _floor = a.depth + 1;
+                continue;
+            }
+            if (a.depth <= _floor) {
+                if (call && (a.account == address(this) || (_isUnit(a.account) && _isProbe(a.data)))) {
+                    inside = a.depth;
+                }
                 continue;
             }
             if (!call && a.kind != VmSafe.AccountAccessKind.Create) continue;
@@ -156,9 +165,16 @@ abstract contract GraphTest is Test, IFixtureHost {
             _sent.push(Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data));
             if (call || a.reverted) continue;
             for (uint256 u; u < _units.length; ++u) {
-                Deployment(_units[u]).trustTestCreationAt(a.account, keccak256(a.data));
+                Deployment(_units[u]).trustTestCreationAt(a.account, a.data);
             }
         }
+    }
+
+    function _isUnit(address account) private view returns (bool) {
+        for (uint256 i; i < _units.length; ++i) {
+            if (_units[i] == account) return true;
+        }
+        return false;
     }
 
     function _isProbe(bytes memory data) private pure returns (bool) {

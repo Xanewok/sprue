@@ -16,7 +16,7 @@ contract FixtureGuard is Script {
             require(_same(reason, "only a test runs a fixture"), reason);
         }
         TokenUnit unit = new TokenUnit();
-        try unit.trustTestCreationAt(address(1), bytes32(uint256(1))) {
+        try unit.trustTestCreationAt(address(1), hex"01") {
             revert("trustTestCreationAt ran in a script");
         } catch Error(string memory reason) {
             require(_same(reason, "only a test trusts creations"), reason);

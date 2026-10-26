@@ -16,6 +16,19 @@ contract FoundryFactsTarget {
     }
 }
 
+contract FoundryFactsCallee {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    address public caller;
+    uint256 public value;
+
+    function broadcast() external {
+        caller = msg.sender;
+        vm.startBroadcast(msg.sender);
+        ++value;
+        vm.stopBroadcast();
+    }
+}
+
 contract FoundryFactsTest is Test {
     address private sender = makeAddr("sender");
     FoundryFactsTarget private a = new FoundryFactsTarget();
@@ -134,5 +147,22 @@ contract FoundryFactsTest is Test {
             if (accesses[i].kind == VmSafe.AccountAccessKind.Call && accesses[i].accessor.code.length == 0) ++sends;
         }
         assertEq(sends, 1);
+    }
+
+    /// @dev A fixture cannot enter a step as its sender with a prank and leave the step's broadcast to the step:
+    ///      the prank is still active in the called frame.
+    function test_prank_blocksTheCalledFramesBroadcast() public {
+        FoundryFactsCallee callee = new FoundryFactsCallee();
+        vm.prank(sender, sender);
+        (bool ok, bytes memory ret) = address(callee).call(abi.encodeCall(FoundryFactsCallee.broadcast, ()));
+        assertFalse(ok);
+        assertTrue(vm.contains(abi.decode(_strip(ret), (string)), "you have an active prank"));
+    }
+
+    function _strip(bytes memory data) private pure returns (bytes memory rest) {
+        rest = new bytes(data.length - 4);
+        for (uint256 i; i < rest.length; ++i) {
+            rest[i] = data[i + 4];
+        }
     }
 }
