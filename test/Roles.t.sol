@@ -239,6 +239,12 @@ contract ReaderToy is ToyJournal {
         _done(false);
     }
 
+    function readExt(string calldata network, bytes32 pinned) external returns (address a) {
+        _use(network);
+        a = _at(extern("ext", "ext", pinned).unit("kinds"));
+        _done(false);
+    }
+
     function _unit() internal pure override returns (string memory) {
         return "reader";
     }
@@ -563,6 +569,32 @@ contract RolesTest is Test {
         unit.checkToyOnly(network);
     }
 
+    /// @dev A receipt is findable for the role the step proved; the one it skipped is the refusal, not a due step.
+    function test_endCheck_judgesNoReceiptDueWhileADeclaredRoleIsUnproved() public {
+        _network("unproved-probe", vm.toString(ops));
+        LandedToy landed = new LandedToy();
+        landed.setTestSender(ops);
+        landed.deployBoth(network);
+        address toy = vm.parseJsonAddress(_journal(), ".toy");
+        landed.confirm(keccak256("the toy's creation"));
+        string memory chainDir = string.concat(dir, "/broadcast/ToyUnit.sol/", vm.toString(block.chainid));
+        vm.createDir(chainDir, true);
+        vm.writeFile(
+            string.concat(chainDir, "/deploy-latest.json"),
+            string.concat(
+                '{"chain": ',
+                vm.toString(block.chainid),
+                ', "transactions": [], "receipts": [{"contractAddress": "',
+                vm.toLowercase(vm.toString(toy)),
+                '", "transactionHash": "',
+                vm.toString(keccak256("the toy's creation")),
+                '", "blockNumber": "0x1"}]}'
+            )
+        );
+        vm.expectRevert(bytes("the step did not prove second"));
+        Probes.due(address(landed), abi.encodeCall(RolesToy.checkToyOnly, (network)), ops);
+    }
+
     function test_endCheck_doesNotDependOnTheOrderTheStepProvedTheRoles() public {
         _network("order", vm.toString(ops));
         unit.deployBoth(network);
@@ -627,6 +659,55 @@ contract RolesTest is Test {
         _set(".toyNonce", "3");
         vm.expectRevert(bytes("toy's address is not its recorded deployer's CREATE at its recorded nonce"));
         reader.read(network);
+    }
+
+    function test_at_anotherUnitsRole_isRefusedWhenItsCodeIsNotTheJournaled() public {
+        _network("reader-code", vm.toString(ops));
+        unit.deploy(network);
+        ReaderToy reader = new ReaderToy();
+        address toy = vm.parseJsonAddress(_journal(), ".toy");
+
+        vm.etch(toy, bytes.concat(toy.code, hex"00"));
+        vm.expectRevert(bytes("toy's code differs from roles.json"));
+        reader.read(network);
+
+        vm.etch(toy, "");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "toy at ",
+                    vm.toString(toy),
+                    " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+                )
+            )
+        );
+        reader.read(network);
+    }
+
+    function test_at_anotherUnitsExternRole_isTheInputsAddressWithThePinnedCode() public {
+        _network("reader-extern", vm.toString(ops));
+        ReaderToy reader = new ReaderToy();
+        address ext = address(new ToyPayload(3));
+        vm.expectRevert();
+        reader.readExt(network, ext.codehash);
+
+        vm.writeFile(string.concat(dir, "/kinds.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}'));
+        assertEq(reader.readExt(network, ext.codehash), ext);
+
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        reader.readExt(network, bytes32(uint256(1)));
+
+        vm.etch(ext, "");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "ext at ",
+                    vm.toString(ext),
+                    " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+                )
+            )
+        );
+        reader.readExt(network, ext.codehash);
     }
 
     // ==== Recovery ====

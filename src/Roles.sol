@@ -278,9 +278,14 @@ abstract contract Roles is Deployment {
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
             if (!_own(declared[i])) continue;
-            uint256 at = _provedIndex(declared[i].name);
-            require(at != type(uint256).max, string.concat("the step did not prove ", declared[i].name));
-            Proved memory p = _proved[at];
+            require(
+                _provedIndex(declared[i].name) != type(uint256).max,
+                string.concat("the step did not prove ", declared[i].name)
+            );
+        }
+        for (uint256 i; i < declared.length; ++i) {
+            if (!_own(declared[i])) continue;
+            Proved memory p = _proved[_provedIndex(declared[i].name)];
             if (p.kind == Kind.Extern) continue;
             _requireReceipt(journal, p.name, p.addr, p.kind == Kind.Create2);
         }
