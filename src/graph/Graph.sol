@@ -259,8 +259,11 @@ abstract contract Graph is Script {
                 // its answer. A fixed date not yet reached leaves any other judgment for the plan made after
                 // it: the `Due` view was read on a chain still before the date.
                 bool predicate = bytes(n.until).length != 0;
-                if (visit.status == Status.Done && !predicate) visit.notBefore = 0;
-                else if (visit.notBefore != 0 && (predicate || vm.contains(n.gate, "."))) visit.status = Status.NotJudged;
+                if (visit.status == Status.Done && !predicate) {
+                    visit.notBefore = 0;
+                } else if (visit.notBefore != 0 && (predicate || vm.contains(n.gate, "."))) {
+                    visit.status = Status.NotJudged;
+                }
             }
             if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
                 visit.status = Status.Due;

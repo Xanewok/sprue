@@ -771,7 +771,8 @@ contract StepBuildersTest is Test, Declares {
         vm.warp(50);
         counting.renew();
         Step[] memory s = new Step[](2);
-        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector).gateView("freshFrom", Counting.freshFrom.selector);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector)
+            .gateView("freshFrom", Counting.freshFrom.selector);
         s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
         return new BuilderGraph(Registration(address(counting), unit.script), s);
     }
