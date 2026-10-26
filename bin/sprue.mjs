@@ -81,7 +81,7 @@ skips every node already done, rehearse starts over from network's files:
       of the network
   3   a node it cannot reach yet (\`# cannot reach\`)
   4   a date the chain has not reached; --wait waits for it instead
-  5   the target is not done: a plan is unchanged after its sends
+  5   the target is not done: a plan is unchanged after its sends, or holds a step it just sent
   6   the person did not answer \`yes\`; the step was not sent
   128+n  signal n (130 SIGINT, 143 SIGTERM), once the forge it stopped has exited
   *   forge's own code, when a step refuses
@@ -920,6 +920,9 @@ async function main(argv) {
 
   const quiet = ["ignore", "ignore", "inherit"];
   let sent = "";
+  // The commands sent since the last plan. One that the next plan holds again made no progress that
+  // the plan can see, even when another step of the same plan did.
+  let wave = new Set();
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
     // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
@@ -930,6 +933,8 @@ async function main(argv) {
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same
     // commands again.
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);
+    for (const line of text.split("\n")) if (wave.has(line)) fail(5, `cannot reach ${target}: a step is due again after sending it: ${line}`);
+    wave = new Set();
     for (const line of text.split("\n")) {
       if (line.startsWith("# not before ")) {
         const [at, ...r] = line.slice(13).split(" ");
@@ -989,6 +994,7 @@ async function main(argv) {
           fail(2, `refusing: forge would keep this run's resume data in ${config.cache_path}, not ${cacheDir}; check foundry.toml and FOUNDRY_CACHE_PATH: ${line}`);
         }
         sent = text;
+        wave.add(line);
         await (attended ? attend(line, cmd) : step(cmd));
       }
     }
