@@ -847,6 +847,33 @@ scenario_lag() {
   echo "ok  lag a lagging RPC stops each run at what it cannot see yet, and the reruns end done, each transaction once"
 }
 
+# The lag again, with the vault deployed once the token's deploy step is done, so that one plan holds both
+# token.check and vault.deploy. When the check turns done while the vault, just sent, stays due behind the
+# lag, the plan's text changes, and the run must still stop rather than send the vault again.
+scenario_lag_wave() {
+  local up out rc nodes i seen=no v=script/deploy/units/vault/DeployVault.s.sol
+  cp "$v" "$W.vault"
+  sed -i.bak -e 's/needs("token.check")/needs("token.deploy")/' -e 's/_checked("token", "token")/_recorded("token", "token")/g' \
+    -e 's/_step("vault.check", this.check).needs("vault.fund")/&.needs("token.check")/' "$v" && rm -f "$v.bak"
+  nodes=$PIDS; LAG=1 live_node $((PORT + 8)) 1337; nodes=${PIDS#"$nodes"}
+  up=$(sed -n 's/^Listening on \(.*\)$/http:\/\/\1/p' "$W.node-$((PORT + 8)).log")
+  fresh "$up"; network lagwave 1337
+  for i in 1 2 3 4 5 6 7 8; do
+    rc=0; out=$(env -u DEPLOYER G run lagwave vault.check 2>&1) || rc=$?
+    [ "$rc" = 0 ] && break
+    ! grep -aq "a step is due again after sending it" <<<"$out" || seen=yes
+    grep -aq "has no code: if the RPC lags\|its plan is unchanged after sending it\|a step is due again after sending it\|the vault is not funded" <<<"$out" \
+      || die "lag_wave: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
+    cast rpc evm_mine --rpc-url "$up" >/dev/null
+  done
+  mv "$W.vault" "$v"
+  [ "$rc" = 0 ] || die "lag_wave: not done after $i runs"
+  [ "$seen" = yes ] || die "lag_wave: no run stopped on a step due again after its send"
+  [ "$(cast nonce "$OPS" --rpc-url "$up")" = 3 ] || die "lag_wave: $(cast nonce "$OPS" --rpc-url "$up") transactions, not 3"
+  for p in $nodes; do kill "$p" 2>/dev/null || true; done
+  echo "ok  lag_wave a step due again after its send stops the run, though another step of its plan turned done"
+}
+
 # The chart is for mermaid, which this script cannot run: check its shape against the export.
 scenario_mermaid() {
   local m; m=$(G mermaid)
@@ -861,7 +888,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag two_chain rehearse attended tag; do
+for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag lag_wave two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done

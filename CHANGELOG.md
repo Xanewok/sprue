@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
+so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
+due, and the node refused the transaction ("nonce too low").
+
 `_deployRoleCreate2(journal, role, artifact, args, salt, at, authenticate)` is a deploy step for a role
 the CREATE2 factory creates at the input's `at` for `salt`. A journaled role that landed is proven by its
 recorded salt and code, then `authenticate`. Otherwise this build with `args` must land at `at`: a role
