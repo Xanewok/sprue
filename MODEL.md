@@ -46,8 +46,10 @@ cached non-monotone predicate is the thing that goes stale.
 "Build Systems à la Carte" (Mokhov, Mitchell, Peyton Jones, 2018) says the same in build terms. A recorded
 "this was checked with these inputs" is a verifying trace. A verifying trace stays valid only while nobody
 else changes the store, and the chain is a store that others change. So the journal caches identity, which
-is written once, and does not cache "done": done is the step's own check, read at the chain's head. The
-exception is a `.doneByCheck()` step, which its unit's certificate marks done until the unit's input changes.
+is written once, and does not cache "done": done is the step's own check, read at the chain's head. Today's
+exception is the unit's certificate: it marks done a `check` step, the `.doneByCheck()` steps that the
+`check` reaches, and every step of a unit that cannot be probed, until the unit's input changes (DESIGN.md
+decision 6). The model's target drops it.
 
 The same paper separates applicative dependencies, known before anything runs, from monadic ones,
 discovered while running. A step's `needs` are applicative, so `plan` can print every node and its order
