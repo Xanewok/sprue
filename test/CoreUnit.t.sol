@@ -4,6 +4,7 @@ pragma solidity ^0.8.27;
 import {Test} from "forge-std/Test.sol";
 
 import {unitInputHash, unitInputPath} from "../src/Journal.sol";
+import {Probes} from "../src/Probes.sol";
 import {Unit} from "../src/Unit.sol";
 import {ToyPayload} from "./ToyPayload.sol";
 import {DirtyToyUnit, ToyUnit} from "./ToyUnit.sol";
@@ -377,6 +378,38 @@ contract CoreUnitTest is Test {
         unit.confirm(later);
         unit.deploy(network);
         assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyTx"), hash, "a recorded receipt was replaced");
+    }
+
+    /// @dev forge simulates a send in an earlier block than the one it lands in, so a constructor that stores
+    ///      `block.timestamp` in an immutable lands with another code hash than the journal's simulated one.
+    function test_deploy_aRoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsCreationInput() public {
+        _network("landed-code", FREE, "");
+        unit.deploy(network);
+        address addr = _journalOf("toy", ".toy");
+        vm.etch(addr, bytes.concat(addr.code, hex"00")); // unreachable: the same behaviour, another code hash
+        bytes32 hash = keccak256("the payload's creation");
+        _writeReceipts("run-latest.json", '"abc1234"', addr, hash, hash);
+        unit.confirm(hash);
+        string memory path = string.concat(dir, "/toy.json");
+        string memory simulated = vm.readFile(path);
+
+        assertFalse(Probes.due(address(unit), abi.encodeCall(ToyUnit.deploy, (network)), ops));
+        assertEq(vm.readFile(path), simulated, "a probe journaled the landed code");
+        unit.send(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(2))));
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.deploy(network);
+        vm.stopBroadcast();
+
+        unit.send("");
+        vm.writeJson(vm.toString(keccak256("a transaction that created no toy")), path, ".toyTx");
+        vm.expectRevert(bytes("toy's code differs from toy.json"));
+        unit.deploy(network);
+        vm.stopBroadcast();
+
+        vm.writeFile(path, simulated);
+        unit.deploy(network);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), addr.codehash);
+        unit.check(network);
     }
 
     /// @dev Only the unit's own script's records are read: its runs on this chain and its multi-chain runs.

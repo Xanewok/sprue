@@ -256,6 +256,23 @@ contract ReaderToy is ToyJournal {
     }
 }
 
+/// @dev The chain as a test confirms it: `confirmed` created the toy, and sent the toy's initcode.
+contract LandedToy is RolesToy {
+    bytes32 public confirmed;
+
+    function confirm(bytes32 hash) external {
+        confirmed = hash;
+    }
+
+    function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
+        return hash == confirmed && !create2 ? 5 : 0;
+    }
+
+    function _sentInput(bytes32) internal view override returns (bytes memory) {
+        return bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)));
+    }
+}
+
 contract RolesTest is Test {
     address private constant FACTORY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     bytes private constant FACTORY_CODE =
@@ -354,6 +371,44 @@ contract RolesTest is Test {
         RolesToy unsent = new RolesToy();
         vm.expectRevert(bytes("pass --sender <deployer>: the sender of the lost deployments"));
         unsent.recover(network);
+    }
+
+    /// @dev forge simulates a send in an earlier block than the one it lands in, so a constructor that stores
+    ///      `block.timestamp` in an immutable lands with another code hash than the journal's simulated one.
+    function test_at_aRoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsCreationInput() public {
+        _network("landed", vm.toString(ops));
+        LandedToy landed = new LandedToy();
+        landed.setTestSender(ops);
+        landed.deploy(network);
+        string memory path = string.concat(dir, "/roles.json");
+        address addr = vm.parseJsonAddress(vm.readFile(path), ".toy");
+        vm.etch(addr, bytes.concat(addr.code, hex"00")); // unreachable: the same behaviour, another code hash
+        bytes32 hash = keccak256("the toy's creation");
+        vm.writeJson(vm.toString(hash), path, ".toyTx");
+
+        vm.expectRevert(bytes("toy's code differs from roles.json"));
+        landed.atToy(network);
+
+        landed.confirm(hash);
+        assertEq(landed.atToy(network), addr);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), addr.codehash);
+    }
+
+    /// @dev As for a CREATE role, but a CREATE2 address commits to the journaled initcode: no transaction is read.
+    function test_at_aCreate2RoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsAddress() public {
+        _network("landed2", vm.toString(ops));
+        bytes32 salt = bytes32(uint256(6));
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
+        vm.writeFile(
+            string.concat(dir, "/kinds.input.json"),
+            string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
+        );
+        kinds.deployHook(network);
+        vm.etch(at, bytes.concat(at.code, hex"00")); // unreachable: the same behaviour, another code hash
+
+        assertEq(kinds.atHook(network), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(string.concat(dir, "/kinds.json")), ".hookCodeHash"), at.codehash);
     }
 
     function test_at_outsideAStep_provesOnEveryCall() public {

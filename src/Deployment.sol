@@ -190,6 +190,44 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
+    /// @dev `_requireRecordedCode` that also takes the code a role's creation left. forge journals the code hash
+    ///      of a simulation, which runs the constructor in an earlier block than the send lands in, so a
+    ///      constructor that reads the block leaves other code. Only exactly the journaled initcode vouches for
+    ///      that code: a CREATE2 address commits to it, and a CREATE's creation transaction must have sent it.
+    ///      Outside a probe the landed hash replaces the journal's.
+    function _requireLandedCode(string memory journal, string memory role, bool create2)
+        internal
+        returns (address addr)
+    {
+        string memory key = string.concat(".", role);
+        addr = _addr(journal, key);
+        if (
+            addr.code.length != 0 && _has(journal, string.concat(key, "CodeHash"))
+                && addr.codehash != vm.parseJsonBytes32(journal, string.concat(key, "CodeHash"))
+                && _has(journal, string.concat(key, "InitcodeHash")) && _madeByInitcode(journal, role, addr, create2)
+        ) {
+            if (!_inProbe()) _put(string.concat(key, "CodeHash"), vm.toString(addr.codehash));
+            return addr;
+        }
+        return _requireRecordedCode(journal, role);
+    }
+
+    function _madeByInitcode(string memory journal, string memory role, address addr, bool create2)
+        private
+        returns (bool)
+    {
+        string memory key = string.concat(".", role);
+        bytes32 initcodeHash = vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"));
+        if (create2) {
+            return _has(journal, string.concat(key, "Salt"))
+                && vm.computeCreate2Address(
+                    vm.parseJsonBytes32(journal, string.concat(key, "Salt")), initcodeHash, CREATE2_FACTORY
+                ) == addr;
+        }
+        bytes32 hash = _createTx(journal, role);
+        return hash != 0 && _createdIn(hash, addr, false) != 0 && keccak256(_sentInput(hash)) == initcodeHash;
+    }
+
     /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
     function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
         // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
@@ -238,7 +276,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoUnjournaled(journal, role, sender);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) _requireLandedCode(journal, role, false);
     }
 
     /// @dev `_reuseForSend` for a `Due` view. A view shares the step's decision but knows neither the
@@ -261,7 +299,7 @@ abstract contract Deployment is ForgeBroadcasts {
             return address(0);
         }
         addr = _reusableAddress(journal, role);
-        if (addr != address(0)) _requireRecordedCode(journal, role);
+        if (addr != address(0)) _requireLandedCode(journal, role, false);
     }
 
     /// @dev A receipt or a check of `role` says it landed. With no code at its address, the RPC lags or the
@@ -810,7 +848,7 @@ abstract contract Deployment is ForgeBroadcasts {
             _requireNoStray(journal, role, artifact, at);
         }
         if (journaled && landed) {
-            _requireRecordedCode(journal, role);
+            _requireLandedCode(journal, role, true);
             _requireCreate2Record(journal, role, args, true);
         } else {
             // A new salt for a landed role would deploy a second one.
