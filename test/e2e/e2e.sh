@@ -234,11 +234,13 @@ scenario_failure() {
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
+  # A declared role's reuse is proven by the pin, so the opt-in to another key cannot send one.
   fresh "$RPC"; rm -f deployments/pinned/token.json
-  out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1) || die "failure: the unsafe run failed: ${out: -400}"
+  n0=$(nonce)
+  if out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1); then die "failure: the unsafe run sent a declared role as another key"; fi
   grep -qi "^deployer $OPS, from the signer (--unsafe-unexpected-deployer)$" <<<"$out" || die "failure: the unsafe run did not print its deployer: $(grep -v "^ " <<<"$out" | head -20)"
-  [ "$(jq -r .tokenDeployer deployments/pinned/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$OPS")" ] \
-    || die "failure: --unsafe-unexpected-deployer did not send the pin's steps as the signer"
+  grep -q "a declared role's creation is proven by the pin" <<<"$out" || die "failure: the unsafe run failed for another reason: ${out: -400}"
+  [ "$(nonce)" = "$n0" ] || die "failure: a refused declared role sent"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml. From a fresh chain, where the plan's probe
   # of the step finds nothing else to refuse.
@@ -256,7 +258,7 @@ scenario_failure() {
   for o in ./out/ "$(pwd -P)/out" "$W.link/out"; do
     fresh "$RPC"; network "spelled$((i += 1))" 31337; exits 0 env FOUNDRY_OUT="$o" G run "spelled$i" token.check
   done
-  echo "ok  a deployer the run cannot sign as is refused; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
+  echo "ok  a deployer the run cannot sign as is refused, and the opt-in to another key sends no declared role; a failed step ends with forge's Error: line; a send whose records or build would go elsewhere is refused"
 }
 
 # A rerun of a finished target mines no block and changes no nonce or journal. The first run reaches
@@ -850,7 +852,7 @@ scenario_lag() {
     rc=0; out=$(env -u DEPLOYER G run lag vault.check 2>&1) || rc=$?
     [ "$rc" = 0 ] && break
     ! grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags" <<<"$out" || seen=yes
-    grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|the vault is not funded" <<<"$out" \
+    grep -aq "token at 0x[0-9a-fA-F]* has no code: if the RPC lags\|its plan is unchanged after sending it\|a step is due again after sending it\|the vault is not funded" <<<"$out" \
       || die "lag: run $i exited $rc for another reason: $(grep -a '^Error\|sprue:' <<<"$out" | tail -3)"
     cast rpc evm_mine --rpc-url "$up" >/dev/null
   done

@@ -4,13 +4,19 @@ pragma solidity ^0.8.27;
 import {VmSafe} from "forge-std/Vm.sol";
 
 import {chainId, chainRpc, deploymentsDir, graphScript, isFencedChainId, isTestChain, unitsDir} from "./Chains.sol";
-import {Deployment} from "./Deployment.sol";
+import {Roles} from "./Roles.sol";
 import {isRehearsalNetwork, slashed} from "./Journal.sol";
 import {Declares} from "./graph/Step.sol";
 
 /// @notice The base of a deploy unit. It reads the network's `network.json`, keeps the unit's journal
 ///         `<unit>.json` beside it, and records the build that the unit's `check` step authenticates.
-abstract contract Unit is Deployment, Declares {
+abstract contract Unit is Roles, Declares {
+    /// @dev The unit's `recover` step, from its `_roles()`. A unit whose journal holds more than its roles
+    ///      adds it in `_onRecover`; one that recovers another way overrides this.
+    function recover(string calldata network) external virtual returns (string memory) {
+        return _recoverRoles(network);
+    }
+
     function _deployments() internal view override returns (string memory) {
         return deploymentsDir();
     }

@@ -7,6 +7,24 @@ stays deployed, and no step replaces it` for each role of the target's units who
 differs from this build, after the `# chain` lines; `run` prints each warning once and goes on. The line
 repeats in every plan while the role runs older code: a tool that reads plan lines must ignore `# warning`.
 
+Roles: a unit declares each contract once, by how its address is made, in an `internal pure` function:
+`create(name, artifact)`, `create2(name, artifact, key)` (the input's `<key>.salt` and `<key>.address`) or
+`extern(name, key, codeHash)`, with `.args(bytes)` or `.args(fn)`, `.check(fn)` and `.unit(owner)`. A step
+written `external step(network)` calls `_deploy(role)`, which sends the role or proves its reuse, `_at(role)`,
+which proves it without a send, and `_certify()`, which certifies the roles the step proved in `_roles()`'s
+order (`_certify(_certificate().with...(...))` adds facts). A role is proven by the identity its journal
+records: a CREATE by its recorded deployer at its recorded nonce, which is the pin where `network.json` has
+one, with a creation transaction known; a CREATE2 by the factory under its recorded salt and initcode hash,
+not this build's; an extern by its pinned code hash. Its recorded arguments must be the declared ones and
+its `.check` must pass; another unit's role is proven by its identity and code. A source edit after a
+deployment warns and orphans nothing. Where `network.json` pins a deployer, only the pin sends a declared
+role, whatever `--unsafe-unexpected-deployer` says. `Unit` derives `recover(string)` from `_roles()`, and
+`_onRecover` adds a unit's own keys. `_send(target, call)` sends a call the step decided on itself.
+
+Breaking: `Unit` now declares `recover(string)`, so a unit's own `recover` needs `override`. A reused
+`_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
+recorded arguments be the step's.
+
 Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").

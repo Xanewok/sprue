@@ -7,8 +7,9 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 ## Concepts
 
 - **Unit**: a Forge script `Deploy<Name>.s.sol` that inherits `Unit` and holds the steps for a few
-  related contracts. Each contract it deploys is a **role**: one deployment, named by a string such
-  as `"token"`, whose facts the journal keeps under `<role>*` keys (`token`, `tokenNonce`, `tokenTx`).
+  related contracts. Each contract it deploys or reads is a **role**, declared once by how its address
+  is made (`create`, `create2`, `extern`) and named by a string such as `"token"`; the journal keeps its
+  facts under `<role>*` keys (`token`, `tokenNonce`, `tokenTx`).
 - **Journal**: `deployments/<network>/<unit>.json`, committed: each role's address, deployer, nonce
   and code hash, and the path of its build metadata file beside it.
 - **Step**: an external function of a unit that takes the network name (and an index, for a step per
@@ -35,8 +36,24 @@ then differ from the commit, the build is not the commit's, and an attended `run
 2. Add `deployments/<network>/network.json`, which gives each chain its id and an `rpc` alias from
    `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's
-   [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) as a
-   template. A step is judged by a probe once everything it needs is done, so it must decide its own
+   [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) and
+   [`DeployVault.s.sol`](examples/token-vault/script/deploy/units/vault/DeployVault.s.sol) as templates.
+   Declare each role once, in an `internal pure` function: `create(name, artifact)` for a CREATE by the
+   deployer, `create2(name, artifact, key)` for a CREATE2 at the address that `<unit>.input.json` gives
+   under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
+   not deploy, at the input's `<key>`. `.args(...)` gives the constructor arguments, as bytes or as a
+   function that builds them from the inputs and other roles; `.check(fn)` checks what later transactions
+   can change, such as an owner or a proxy's implementation; `.unit(owner)` lets other units read the
+   role with `_at`. A role kept in a state variable puts the code its functions reach into the unit's
+   creation code too, which can make the graph too large for forge to deploy against a node. List the unit's roles in `_roles()`, in
+   the order its certificate and its derived `recover` take them.
+   Write each step as `function deploy(string calldata network) external step(network) { ... }`.
+   `_deploy(role)` sends a role or proves its reuse, `_at(role)` proves it without a send, and `_certify()`
+   certifies the roles the step proved, with `_certify(_certificate().with...(...))` for more facts. A role
+   is proven when its address follows from the deployer and nonce, or the salt and initcode hash, that its
+   journal records, its code is the recorded code, its recorded arguments are the declared ones and its
+   `.check` passes. Where `network.json` pins a `deployer`, the pin must have created it, and only the pin
+   sends one. `_send(target, call)` sends a call the step decided on itself. A step is judged by a probe once everything it needs is done, so it must decide its own
    work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
    A step that opens the broadcast before it decides is always due, and `run` stops when its plan
    repeats. Use `vm.startBroadcast` only through `_startBroadcast()`: a probe refuses forge's

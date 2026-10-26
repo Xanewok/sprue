@@ -83,7 +83,7 @@ forge script script/deploy/units/token/DeployToken.s.sol:DeployToken --sig 'chec
 # then plan again vault.deploy
 ```
 
-The vault needs the token's address, so the plan stops until those two commands land. `run` sends them
+The vault needs the token's address, so the plan stops until the token's deploy lands. `run` sends them
 with `$DEPLOYER` as Anvil's dev key, the run's own signer here, and plans again until the plan prints
 `# done` for all five steps, and a second `run` sends nothing.
 The example's [README](examples/token-vault/README.md) explains each step, then loses a journal and
