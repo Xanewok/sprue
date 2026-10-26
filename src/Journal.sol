@@ -37,6 +37,13 @@ function unitInputPath(string memory network, string memory unit) view returns (
     return inputPath(deploymentsDir(), network, unit);
 }
 
+/// @dev The hash a certificate records of `unit`'s input on `network`, read where the graph reads it: of the
+///      parsed JSON, whose keys forge orders, so that a formatting edit leaves it. Zero without the file.
+function unitInputHash(string memory network, string memory unit) view returns (bytes32) {
+    string memory path = unitInputPath(network, unit);
+    return cheats.exists(path) ? keccak256(cheats.parseJson(cheats.readFile(path))) : bytes32(0);
+}
+
 /// @dev A `vm.readDir` entry's path with `/` throughout. On Windows readDir joins each name below the root
 ///      with `\`; on Unix a `\` is a name's own character, so the path stays as it is.
 function slashed(string memory path) view returns (string memory) {
@@ -492,17 +499,17 @@ abstract contract Journal is Script, IProbe {
     }
 
     /// @dev Starts the certificate object for `role` at `at` with `evmBlock`, the default chain's
-    ///      id, the role's address and, when the unit has an input file, `inputHash`, the hash of its
-    ///      bytes: a plan judges a certificate of other inputs stale. The caller adds its own keys and
-    ///      ends with `_certify`. Forge keeps a serialized object for the whole run, so it starts
+    ///      id, the role's address and, when the unit has an input file, `inputHash`
+    ///      (`unitInputHash`): a plan judges a certificate of other inputs stale. The caller adds its own
+    ///      keys and ends with `_certify`. Forge keeps a serialized object for the whole run, so it starts
     ///      empty: no key of an earlier check in the same run survives into this certificate.
     function _beginChecked(string memory role, address addr) internal returns (string memory obj) {
         obj = string.concat(role, "-checked");
         vm.serializeJson(obj, "{}");
         vm.serializeUint(obj, "evmBlock", block.number);
         vm.serializeUint(obj, string.concat(_defaultChain(_networkJson()), "ChainId"), block.chainid);
-        string memory input = inputPath(_deployments(), _networkName(), _unit());
-        if (vm.exists(input)) vm.serializeBytes32(obj, "inputHash", keccak256(bytes(vm.readFile(input))));
+        bytes32 input = unitInputHash(_networkName(), _unit());
+        if (input != 0) vm.serializeBytes32(obj, "inputHash", input);
         vm.serializeAddress(obj, role, addr);
     }
 

@@ -201,12 +201,18 @@ contract GuardsTest is Test, Declares {
         vm.writeFile(input, '{"n":1}');
         assertEq(g.plan(net, "fixture.check"), done, "a certificate without inputHash");
 
-        vm.writeJson(vm.toString(keccak256('{"n":1}')), journal, ".checked.inputHash");
+        vm.writeJson(vm.toString(keccak256(vm.parseJson('{"n":1}'))), journal, ".checked.inputHash");
         assertEq(g.plan(net, "fixture.check"), done, "the certified inputs");
+        vm.writeFile(input, '{ "n" : 1 }\n');
+        assertEq(g.plan(net, "fixture.check"), done, "the certified inputs, formatted otherwise");
         vm.writeFile(input, '{"n":2}');
         assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "other inputs");
         vm.removeFile(input);
         assertFalse(vm.contains(g.plan(net, "fixture.check"), "# done fixture.check"), "no input");
+
+        vm.writeJson('"0x12"', journal, ".checked.inputHash");
+        vm.expectRevert(bytes("fixture.json's checked.inputHash is not a hash: a person must resolve it"));
+        g.plan(net, "fixture.check");
         vm.removeDir(string.concat("deployments/", net), true);
     }
 

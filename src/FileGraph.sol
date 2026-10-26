@@ -13,14 +13,14 @@ import {
     noRpc,
     rehearsalPrefix
 } from "./Chains.sol";
-import {isRehearsalNetwork, outputsEnv, stageInputs, unitInputPath} from "./Journal.sol";
+import {isRehearsalNetwork, outputsEnv, stageInputs, unitInputHash, unitInputPath} from "./Journal.sol";
 import {Graph} from "./graph/Graph.sol";
 
 /// @notice Implements `Graph`'s hooks from the files in `<paths.deployments>/<network>/`. A project's
 ///         graph script inherits it.
 abstract contract FileGraph is Graph {
     /// @dev Done by certificate: the unit's journal holds `checked`, and its `inputHash`, when it has one,
-    ///      is the hash of the unit's input file as it is now. The chain is not read; a dependent
+    ///      is `unitInputHash` of the unit's input as it is now. The chain is not read; a dependent
     ///      re-checks the certified code before it sends.
     function _journalChecked(string memory net, string memory unit) internal view override returns (bool) {
         string memory path = string.concat(deploymentsDir(), "/", net, "/", unit, ".json");
@@ -28,10 +28,11 @@ abstract contract FileGraph is Graph {
         string memory journal = vm.readFile(path);
         if (!vm.keyExistsJson(journal, ".checked")) return false;
         if (!vm.keyExistsJson(journal, ".checked.inputHash")) return true;
-        string memory input = unitInputPath(net, unit);
-        return
-            vm.exists(input)
-                && vm.parseJsonBytes32(journal, ".checked.inputHash") == keccak256(bytes(vm.readFile(input)));
+        try vm.parseJsonBytes32(journal, ".checked.inputHash") returns (bytes32 recorded) {
+            return recorded == unitInputHash(net, unit);
+        } catch {
+            revert(string.concat(unit, ".json's checked.inputHash is not a hash: a person must resolve it"));
+        }
     }
 
     /// @dev `ref` is `<input file>.<key>` in `net`'s inputs, or `network.<key>` for `network.json`.
