@@ -66,6 +66,7 @@ one fails there first.
 | A test's sends leave no broadcast record | `test_broadcast_leavesNoRecordUnderATest` |
 | A recording started in one callback is drained in a later one, in order, and each restart holds only what ran since | `test_stateDiff_startedInACallbackSurvivesItsReturn`, `test_stateDiff_repeatedSegmentsEachHoldTheirOwnAccesses` |
 | A snapshot restores the clock and nonces but not files, and a replayed CREATE lands at its recorded address | `test_snapshot_restoresTimestampAndNonceButKeepsFileWrites`, `test_snapshot_replayedCreateLandsAtRecordedAddress` |
+| A broadcast from an account that has code is a call from that account whose parent frame belongs to the script that called `vm.broadcast` | `test_broadcast_fromAnAccountWithCodeHasAParentOfAnotherAccount` |
 | A prank makes a call from the pranked account, so a probe's call to its own unit shows as a send from that account; its parent is the probe's frame | `test_prank_makesAProbesSelfCallACallFromThePrankedAccount` |
 | A prank is still active in the called frame, so the fixture cannot enter a step as its sender: `quiet` probes each body as the step's sender, so a body that branches on `msg.sender` is caught | `test_prank_blocksTheCalledFramesBroadcast` |
 

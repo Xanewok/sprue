@@ -96,4 +96,9 @@ contract GraphMutantsTest is GraphTest {
         vm.expectRevert(bytes(string.concat(vm.toString(FIXTURE_SENDER), " sent outside a step's call")));
         this.again("raw.reenter");
     }
+
+    function test_quiet_failsOnASendFromAnAccountWithCode() public {
+        vm.expectRevert("raw.codey sends on a rerun");
+        this.again("raw.codey");
+    }
 }

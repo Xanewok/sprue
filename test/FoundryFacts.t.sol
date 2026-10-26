@@ -39,6 +39,13 @@ contract FoundryFactsPayload {
 }
 
 contract FoundryFactsRelay {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function broadcastAs(address as_, FoundryFactsTarget target) external {
+        vm.broadcast(as_);
+        target.touch();
+    }
+
     function createThenRevert() external {
         new FoundryFactsPayload(1, false);
         revert("undone");
@@ -380,5 +387,28 @@ contract FoundryFactsTest is Test {
             }
             assertEq(sends, 1);
         }
+    }
+
+    /// @dev A broadcast from an account that has code is a call from that account whose parent frame belongs to
+    ///      the script that called `vm.broadcast`; a nested call by the account has the account as its parent.
+    function test_broadcast_fromAnAccountWithCodeHasAParentOfAnotherAccount() public {
+        FoundryFactsRelay relay = new FoundryFactsRelay();
+        vm.startStateDiffRecording();
+        relay.broadcastAs(address(b), a);
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        uint256 found;
+        for (uint256 i = 1; i < accesses.length; ++i) {
+            if (accesses[i].account != address(a) || accesses[i].accessor != address(b)) continue;
+            ++found;
+            uint256 j = i;
+            while (
+                accesses[j - 1].kind != VmSafe.AccountAccessKind.Call || accesses[j - 1].depth >= accesses[i].depth
+            ) {
+                --j;
+            }
+            assertEq(accesses[j - 1].account, address(relay));
+            assertEq(accesses[j - 1].depth + 1, accesses[i].depth);
+        }
+        assertEq(found, 1);
     }
 }
