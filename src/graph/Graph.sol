@@ -114,7 +114,7 @@ abstract contract Graph is Script {
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
     ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
     ///           has not been reached on that chain (without `on`, the default chain). The command
-    ///           after it is valid only once the date is reached.
+    ///           after it is valid only once the date is reached. A done step has no date line.
     ///         - `# cannot reach <id>: <reason>`: the node's step would refuse now, and its command
     ///           follows; or, for a predicate node, its condition is not met, and no command follows.
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
@@ -253,10 +253,17 @@ abstract contract Graph is Script {
                     if (block.timestamp >= visit.notBefore) visit.notBefore = 0;
                     _fork(back);
                 }
-                // The date is fixed and not yet reached, so the step's `Due` view would be read on a
-                // chain still before it. Leave the step unjudged for the plan made after the date.
-                if (visit.notBefore != 0 && vm.contains(n.gate, ".")) visit.status = Status.NotJudged;
-                else (visit.status, visit.reason) = _status(network, n, passed[i]);
+                (visit.status, visit.reason) = _status(network, n, passed[i]);
+                // A step's done check is relied on to stay done after the date, so only a step still to send
+                // waits for it. A predicate holds only now, so before its date it is not judged, whichever
+                // its answer. A fixed date not yet reached leaves any other judgment for the plan made after
+                // it: the `Due` view was read on a chain still before the date.
+                bool predicate = bytes(n.until).length != 0;
+                if (visit.status == Status.Done && !predicate) {
+                    visit.notBefore = 0;
+                } else if (visit.notBefore != 0 && (predicate || vm.contains(n.gate, "."))) {
+                    visit.status = Status.NotJudged;
+                }
             }
             if (alone && visit.status == Status.Done && bytes(n.step).length != 0) {
                 visit.status = Status.Due;
@@ -353,9 +360,9 @@ abstract contract Graph is Script {
                     break;
                 }
                 if (visit.status == Status.Waiting && bytes(n.until).length != 0) {
-                    // The predicate was judged before its date. Warp to the date and judge again. With no
-                    // date left, the driver has one try until the predicate is met: a driver that claims
-                    // progress it cannot make would otherwise loop forever.
+                    // A step sent earlier in this walk may have moved the date past the clock: warp to it and
+                    // judge again. With no date left, the driver has one try until the predicate is met: a
+                    // driver that claims progress it cannot make would otherwise loop forever.
                     if (!_warpToDate(network, n)) {
                         if (driven[visit.node] || !_unmetPredicate(visit.node)) return false;
                         driven[visit.node] = true;

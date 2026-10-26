@@ -59,6 +59,9 @@ end-to-end scenario for each invariant.
 - A change of the pin is not supported. A CREATE role is proven only as the pin's CREATE, so after a
   new pin every role the old key created is refused, and `network.json` with `formerDeployers` is
   refused by name.
+- A step's done check must stay done once it holds. sprue judges a done step before its date and does
+  not wait for the date, so a check that holds before the date and fails after it reports the step
+  done, and the step is never sent.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A dependent that
   reads the role through `_checked` re-reads its certified code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.

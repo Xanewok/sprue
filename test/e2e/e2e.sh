@@ -338,11 +338,17 @@ scenario_wait() {
   PATH="$PWD/stub:$PATH" exits 0 G run wait vault.check --wait
   wait "$bumper"
   [ -n "$(jq -r '.checked // empty' deployments/wait/vault.json)" ] || die "wait: --wait did not finish the target"
+  # A date moved past the finished funding: the run stops neither at it nor sends.
+  local nonce; nonce=$(cast nonce "$OPS" --rpc-url "$GETH")
+  jq ".openAt = $(($(now "$GETH") + 3600))" deployments/wait/vault.input.json >vault.input.json
+  mv vault.input.json deployments/wait/vault.input.json
+  PATH="$PWD/stub:$PATH" exits 0 G run wait vault.check
+  [ "$(cast nonce "$OPS" --rpc-url "$GETH")" = "$nonce" ] || die "wait: a finished deployment sent after its date moved"
   network onanvil 31337 0
   exits 2 G run --wait onanvil vault.check
   exits 2 G plan onanvil no.such.target
   refused "unknown network 'nosuch'" G plan nosuch vault.check
-  echo "ok  wait exit 4 before a date, --wait waits for it; Anvil, an unknown target or network exit 2"
+  echo "ok  wait exit 4 before a date, --wait waits for it, a done step ignores a moved date; Anvil, an unknown target or network exit 2"
 }
 
 # A kill while a CREATE is pending. The rerun refuses. Once the CREATE lands, a rerun resumes its

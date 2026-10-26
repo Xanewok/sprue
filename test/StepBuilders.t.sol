@@ -108,6 +108,28 @@ contract Counting {
     function fresh(string calldata) external view returns (bool) {
         return block.timestamp <= openUntil;
     }
+
+    function freshFrom(string calldata) external pure returns (uint256) {
+        return 100;
+    }
+
+    uint256 private _ripeAt = 40;
+
+    function ripeAt(string calldata) external view returns (uint256) {
+        return _ripeAt;
+    }
+
+    function postpone(string calldata) external {
+        _ripeAt = 100;
+    }
+
+    function postponeDue(string calldata) external view returns (bool) {
+        return _ripeAt != 100;
+    }
+
+    function ripe(string calldata) external view returns (bool) {
+        return block.timestamp >= 100;
+    }
 }
 
 /// @dev Two chains' clocks on one EVM: selecting a chain parks the selected one's clock and loads
@@ -706,6 +728,81 @@ contract StepBuildersTest is Test, Declares {
     function test_anInputDateIsReadOnTheStartingChain() public {
         ClockGraph g = _datedAfterOtherChain(new TwoClocks());
         assertTrue(vm.contains(g.plan("anvil", "fixture.check"), "# not before 100"));
+    }
+
+    /// @dev A done check stays done after the date: a view's date does not stop the plan.
+    function test_aDoneStepPrintsNoFutureViewDate() public {
+        TwoClocks clocks = new TwoClocks();
+        clocks.pre("");
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.notify.0", "notify", TwoClocks.notify.selector)
+            .withArg(0)
+            .due(TwoClocks.notifyDue.selector)
+            .gateView("windowEnd", TwoClocks.windowEnd.selector);
+        ClockGraph g = new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
+        assertEq(g.plan("anvil", "fixture.notify.0"), "# done fixture.notify.0\n");
+    }
+
+    /// @dev An input date moved past a finished step does not stop the plan.
+    function test_aDoneStepPrintsNoFutureInputDate() public {
+        TwoClocks clocks = new TwoClocks();
+        vm.warp(50);
+        clocks.pre("");
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector).notBefore("fixture.openAt");
+        ClockGraph g = new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
+        assertEq(g.plan("anvil", "fixture.pre"), "# done fixture.pre\n");
+    }
+
+    /// @dev A predicate that holds before its date may not hold at it: its dependents wait for the date.
+    function test_aPredicateThatHoldsBeforeItsDate_waitsForIt() public {
+        Counting counting = new Counting();
+        vm.warp(50);
+        counting.renew();
+        Step[] memory s = new Step[](2);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector).notBefore("fixture.time");
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
+        BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
+        assertEq(g.plan("anvil", "fixture.deploy"), "# not before 100 fixture.fresh\n# then plan again fixture.fresh\n");
+    }
+
+    function _freshUntil60BehindAViewDateOf100() private returns (BuilderGraph) {
+        Counting counting = new Counting();
+        vm.warp(50);
+        counting.renew();
+        Step[] memory s = new Step[](2);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector)
+            .gateView("freshFrom", Counting.freshFrom.selector);
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
+        return new BuilderGraph(Registration(address(counting), unit.script), s);
+    }
+
+    function test_aPredicateThatHoldsBeforeItsViewDate_waitsForIt() public {
+        assertEq(
+            _freshUntil60BehindAViewDateOf100().plan("anvil", "fixture.deploy"),
+            "# not before 100 fixture.fresh, movable until reached\n# then plan again fixture.fresh\n"
+        );
+    }
+
+    /// @dev A step of the same walk moves a reached date into the future: the predicate is read at the new date.
+    function test_rehearse_readsAPredicateAtTheDateAnEarlierStepMoved() public {
+        Counting counting = new Counting();
+        vm.warp(50);
+        Step[] memory s = new Step[](3);
+        s[0] = _step("fixture.postpone", Counting.postpone.selector).due(Counting.postponeDue.selector);
+        s[1] = _until("fixture.ripe", "ripe", Counting.ripe.selector).gateView("ripeAt", Counting.ripeAt.selector);
+        s[2] = _step("fixture.deploy", Counting.deploy.selector)
+            .due(Counting.deployDue.selector)
+            .needs("fixture.postpone")
+            .needs("fixture.ripe");
+        new BuilderGraph(Registration(address(counting), unit.script), s).rehearse("anvil", "fixture.deploy");
+        assertEq(counting.deploys(), 1);
+        assertEq(block.timestamp, 100);
+    }
+
+    function test_executeNode_readsAPredicateAtItsViewDate() public {
+        assertFalse(_freshUntil60BehindAViewDateOf100().executeNode("anvil", "fixture.fresh"));
+        assertEq(block.timestamp, 100);
     }
 
     function test_rehearse_doesNotWarpAnotherChainToAnInputDate() public {
