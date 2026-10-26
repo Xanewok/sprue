@@ -21,6 +21,8 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     Graph private _graph;
     string private _net;
     address[] private _units;
+    /// @dev A run keeps one transcript, one recording and the graph's `_fixture`: a `_meet` may not start another.
+    bool private _running;
 
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
@@ -117,10 +119,13 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     /// @dev The recording runs through the whole call: what it holds between steps was sent by a judgment of
     ///      the planner or by the graph itself, and the graph sends nothing.
     function _run(string memory id, bool alone) private returns (Sent[] memory) {
+        require(!_running, "a fixture run is already running");
+        _running = true;
         _transcriptBegin(_senders());
         _recordStart();
         require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
         _noSendOutside();
+        _running = false;
         return _transcriptEnd();
     }
 

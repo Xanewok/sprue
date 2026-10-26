@@ -8,6 +8,7 @@ import {RawGraph, RawUnit} from "./RawGraph.sol";
 /// @dev Steps that send on a rerun in ways the fixture must see.
 contract GraphMutantsTest is GraphTest {
     RawGraph private graph;
+    bool private nest;
 
     function setUp() public {
         vm.chainId(31337);
@@ -71,5 +72,21 @@ contract GraphMutantsTest is GraphTest {
     function test_quiet_failsOnAnExplicitDueThatHidesACallerBranch() public {
         vm.expectRevert("raw.explicit would send as its sender");
         this.again("raw.explicit");
+    }
+
+    function _meet(string memory) internal override returns (bool) {
+        if (nest) runNode("raw.silent");
+        RawUnit(graph.node(0).unit).setOpen();
+        return true;
+    }
+
+    function reach(string memory node) external {
+        upTo(node);
+    }
+
+    function test_runNode_refusesToNestInAMeet() public {
+        nest = true;
+        vm.expectRevert("a fixture run is already running");
+        this.reach("raw.gate");
     }
 }
