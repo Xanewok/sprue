@@ -119,6 +119,8 @@ abstract contract Roles is Deployment {
     ///      `recover` found. A dry run journals nothing, so a later role's `.args` read an earlier role of the
     ///      same step from here.
     mapping(bytes32 => address) private _thisRun;
+    /// @dev Set while a role's `.check` runs, so that a `.check` that reads its own role refuses by name.
+    mapping(bytes32 => bool) private _checking;
 
     /// @dev The unit's roles, in the order its certificate lists them and its `recover` journals them.
     function _roles() internal view virtual returns (Role[] memory) {}
@@ -143,6 +145,24 @@ abstract contract Roles is Deployment {
         (r[0], r[1], r[2], r[3]) = (a, b, c, d);
     }
 
+    function _list(Role memory a, Role memory b, Role memory c, Role memory d, Role memory e)
+        internal
+        pure
+        returns (Role[] memory r)
+    {
+        r = new Role[](5);
+        (r[0], r[1], r[2], r[3], r[4]) = (a, b, c, d, e);
+    }
+
+    function _list(Role memory a, Role memory b, Role memory c, Role memory d, Role memory e, Role memory f)
+        internal
+        pure
+        returns (Role[] memory r)
+    {
+        r = new Role[](6);
+        (r[0], r[1], r[2], r[3], r[4], r[5]) = (a, b, c, d, e, f);
+    }
+
     /// @dev `_use(network)` before the step's body, and `_done()` after it unless the body ended the step
     ///      itself (`_certify(c)` does). An early `return` still reaches the tail.
     modifier step(string calldata network) {
@@ -164,9 +184,11 @@ abstract contract Roles is Deployment {
     function _deploy(Role memory r) internal returns (address addr) {
         require(_own(r), string.concat(r.name, " is ", r.owner, "'s role: read it with _at"));
         require(r.kind != Kind.Extern, string.concat(r.name, " is extern: read it with _at"));
+        _requireDeclared(r);
         string memory journal = _journal();
         bytes memory a = _argsOf(r);
         _warnIfOlder(journal, r);
+        _enterCheck(r);
         if (r.kind == Kind.Create) {
             (addr,) = _deployIdentified(journal, r.name, r.artifact, a, r.auth);
         } else {
@@ -174,6 +196,7 @@ abstract contract Roles is Deployment {
             _deployRoleCreate2(journal, r.name, r.artifact, a, salt, at, r.auth);
             addr = at;
         }
+        _checking[_runKey(r.name)] = false;
         _proven(r, addr);
     }
 
@@ -185,11 +208,14 @@ abstract contract Roles is Deployment {
             addr = _thisRun[_runKey(r.name)];
             if (addr != address(0)) return addr;
         }
+        if (own) _requireDeclared(r);
         if (r.kind == Kind.Extern) {
             addr = _requiredAddress(_inputFile(own ? _unit() : r.owner), r.key);
             _requireCode(addr, r.name);
             require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
-            if (own) r.auth(addr, "");
+            if (!own) return addr;
+            _enterCheck(r);
+            r.auth(addr, "");
         } else if (!own) {
             return _atOther(r);
         } else {
@@ -199,9 +225,23 @@ abstract contract Roles is Deployment {
             _warnIfOlder(journal, r);
             if (r.kind == Kind.Create) _requireCreateIdentity(journal, r.name, a);
             else _requireCreate2Record(journal, r.name, a, true);
+            _enterCheck(r);
             r.auth(addr, a);
         }
+        _checking[_runKey(r.name)] = false;
         _proven(r, addr);
+    }
+
+    /// @dev Another unit's role as that unit's `check` certified it, for a role whose configuration after its
+    ///      deploy matters: its certified address must be the one its journal's identity proves. The step
+    ///      needs `.needs("<owner>.check")`. `_at` is the default, for what the role's code fixes.
+    function _checked(Role memory r) internal view returns (address addr) {
+        require(!_own(r), string.concat(r.name, " is this unit's role: prove it with _at"));
+        addr = _checked(r.owner, r.name);
+        if (r.kind == Kind.Extern) return addr;
+        require(
+            _atOther(r) == addr, string.concat(r.owner, ".json's check certified another ", r.name, " than it records")
+        );
     }
 
     function _atOther(Role memory r) private view returns (address addr) {
@@ -217,6 +257,24 @@ abstract contract Roles is Deployment {
         );
         if (r.kind == Kind.Create) _requireCreateRecord(r.owner, record, r.name, addr);
         else _requireCreate2Record(record, r.name, "", false);
+    }
+
+    function _enterCheck(Role memory r) private {
+        bytes32 key = _runKey(r.name);
+        require(
+            !_checking[key],
+            string.concat(r.name, "'s .check reads ", r.name, " itself: use the address and arguments it is given")
+        );
+        _checking[key] = true;
+    }
+
+    /// @dev `recover` and the certificate take the roles from `_roles()`, so a role the unit uses must be there.
+    function _requireDeclared(Role memory r) private view {
+        Role[] memory declared = _roles();
+        for (uint256 i; i < declared.length; ++i) {
+            if (keccak256(bytes(declared[i].name)) == keccak256(bytes(r.name))) return;
+        }
+        revert(string.concat(r.name, " is not in ", _unit(), "'s _roles(): declare it there"));
     }
 
     function _own(Role memory r) private pure returns (bool) {
@@ -261,14 +319,15 @@ abstract contract Roles is Deployment {
         return type(uint256).max;
     }
 
-    /// @dev Certifies the roles the step proved, with `_certificate()`, and ends the step.
+    /// @dev Certifies every role of `_roles()`, which the step must have proven, with `_certificate()`, and ends
+    ///      the step.
     function _certify() internal returns (string memory) {
         return _certify(_certificate());
     }
 
-    /// @dev The certificate of every role of this unit that the step proved with `_deploy` or `_at`, in the
-    ///      order `_roles()` declares them, each with its code hash; a `with...` adds facts before `_certify`.
-    ///      Journals each deployed role's receipt. Refuses a declared role the step did not prove.
+    /// @dev The certificate of every role of `_roles()`, in that order, each with its code hash; a `with...`
+    ///      adds facts before `_certify`. Refuses a declared role the step did not prove with `_deploy` or
+    ///      `_at`. Journals each deployed role's receipt.
     function _certificate() internal returns (Certificate memory c) {
         require(_proved.length != 0, "the step proved no role: prove each role it certifies with _at");
         Proved[] memory order = new Proved[](_proved.length);
@@ -317,10 +376,13 @@ abstract contract Roles is Deployment {
             Role memory r = rs[i];
             if (r.kind != Kind.Create || !_own(r)) continue;
             names[i] = [r.name, r.artifact];
-            found[i] = _createToRecover(journal, r.name, r.artifact, sender);
+            if (_has(journal, string.concat(".", r.name))) continue;
+            // Before the search: several roles of one artifact are told apart by their arguments.
+            bytes memory a = _argsOf(r);
+            found[i] = _createToRecover(journal, r.name, r.artifact, sender, _initcodeHash(r.artifact, a));
             if (found[i].addr == address(0)) continue;
             _thisRun[_runKey(r.name)] = found[i].addr;
-            _requireCurrent(found[i], r.artifact, _argsOf(r));
+            _requireCurrent(found[i], r.artifact, a);
         }
         _journalRecovered(journal, names, found);
         _onRecover(journal);

@@ -135,7 +135,9 @@ abstract contract Deployment is ForgeBroadcasts {
         }
     }
 
-    /// @dev Sends `call` to `target` in the step's broadcast, for a step that decided itself that it must.
+    /// @dev Sends `call` to `target` in the step's broadcast, for a step that decided itself that it must. Guard
+    ///      it with the step's own condition: a probe reads a step that always sends as due, and `run` would
+    ///      send it each time.
     function _send(address target, bytes memory call) internal {
         _want(false, target, 0, call);
     }
@@ -689,9 +691,21 @@ abstract contract Deployment is ForgeBroadcasts {
         internal
         returns (Create memory found)
     {
+        return _createToRecover(journal, role, artifact, sender, 0);
+    }
+
+    /// @dev `_createToRecover` where several CREATEs of `artifact` landed, as for two roles of one
+    ///      artifact: the one whose input is `initcodeHash`'s, if exactly one is.
+    function _createToRecover(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        address sender,
+        bytes32 initcodeHash
+    ) internal returns (Create memory found) {
         if (_has(journal, string.concat(".", role))) return found;
         bool landed;
-        (landed, found) = _landedCreate(journal, role, artifact, sender);
+        (landed, found) = _landedCreate(journal, role, artifact, sender, initcodeHash);
         if (landed) _requireNoKeysOf(journal, role);
     }
 
@@ -779,10 +793,13 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      is not this project's to adopt, so the stray guard keeps refusing it until a person
     ///      resolves it. Reverts if a CREATE has no code but its nonce is unused, or if two
     ///      different ones landed.
-    function _landedCreate(string memory journal, string memory role, string memory artifact, address sender)
-        private
-        returns (bool, Create memory found)
-    {
+    function _landedCreate(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        address sender,
+        bytes32 initcodeHash
+    ) private returns (bool, Create memory found) {
         Create[] memory creates = _creates(artifact);
         string memory landed;
         uint256 count;
@@ -830,6 +847,10 @@ abstract contract Deployment is ForgeBroadcasts {
             found = c;
             ++count;
         }
+        if (count > 1 && initcodeHash != 0) {
+            (uint256 matching, Create memory only) = _landedWith(journal, artifact, sender, initcodeHash);
+            if (matching == 1) return (true, only);
+        }
         require(
             count < 2,
             string.concat(
@@ -846,6 +867,22 @@ abstract contract Deployment is ForgeBroadcasts {
             )
         );
         return (count == 1, found);
+    }
+
+    /// @dev How many addresses `sender` created `artifact` at with code and input `initcodeHash`, and one.
+    function _landedWith(string memory journal, string memory artifact, address sender, bytes32 initcodeHash)
+        private
+        view
+        returns (uint256 count, Create memory found)
+    {
+        Create[] memory creates = _creates(artifact);
+        for (uint256 i; i < creates.length; ++i) {
+            Create memory c = creates[i];
+            if (c.from != sender || c.create2 || _isRetired(journal, c.addr) || c.addr.code.length == 0) continue;
+            if (keccak256(_txInput(c)) != initcodeHash || (count != 0 && c.addr == found.addr)) continue;
+            found = c;
+            ++count;
+        }
     }
 
     /// @dev A CREATE replaced at the same nonce outside forge lands other initcode at the same
@@ -1255,7 +1292,7 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `role`'s address is the CREATE of its recorded deployer at its recorded nonce, that deployer is
-    ///      the one `network.json` pins, its recorded arguments are `args`, and some transaction is known to
+    ///      the one `network.json` pins or one of its `formerDeployers`, its recorded arguments are `args`, and some transaction is known to
     ///      have created it: the journal's `<role>Tx`, a broadcast record's, the chain's at the recorded
     ///      nonce, or this run's. On a network that pins no deployer, the recorded deployer stands, with a
     ///      warning: nothing then says whose CREATE the role must be.
@@ -1263,6 +1300,7 @@ abstract contract Deployment is ForgeBroadcasts {
         string memory key = string.concat(".", role);
         address addr = _addr(journal, key);
         _requireCreateRecord(_unit(), journal, role, addr);
+        _requireKey(_unit(), journal, role, "Args");
         require(
             keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
@@ -1283,12 +1321,14 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `unit`'s journal `record` puts `role` at `addr` by a CREATE of its recorded deployer at its
-    ///      recorded nonce, and that deployer is the pin, if `network.json` has one.
+    ///      recorded nonce, and that deployer is the pin or a former one, if `network.json` has a pin.
     function _requireCreateRecord(string memory unit, string memory record, string memory role, address addr)
         internal
         view
     {
         string memory key = string.concat(".", role);
+        _requireKey(unit, record, role, "Deployer");
+        _requireKey(unit, record, role, "Nonce");
         address deployer = _addr(record, string.concat(key, "Deployer"));
         address pinned = _pinnedDeployer();
         if (pinned == address(0)) {
@@ -1298,12 +1338,36 @@ abstract contract Deployment is ForgeBroadcasts {
                 )
             );
         } else {
-            require(deployer == pinned, string.concat(role, "'s recorded deployer is not network.json's deployer"));
+            require(
+                deployer == pinned || _isFormerDeployer(deployer),
+                string.concat(
+                    role, "'s recorded deployer is neither network.json's deployer nor one of its formerDeployers"
+                )
+            );
         }
         require(
             vm.computeCreateAddress(deployer, _uint(record, string.concat(key, "Nonce"))) == addr,
             string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
         );
+    }
+
+    /// @dev Whether `network.json`'s `formerDeployers`, the keys a pin replaced, lists `deployer`: a role one
+    ///      of them created stays proven, though only the pin sends.
+    function _isFormerDeployer(address deployer) internal view returns (bool) {
+        string memory network = _networkJson();
+        if (!_has(network, ".formerDeployers")) return false;
+        address[] memory former = vm.parseJsonAddressArray(network, ".formerDeployers");
+        for (uint256 i; i < former.length; ++i) {
+            if (former[i] == deployer && deployer != address(0)) return true;
+        }
+        return false;
+    }
+
+    function _requireKey(string memory unit, string memory record, string memory role, string memory suffix)
+        internal
+        view
+    {
+        require(_has(record, string.concat(".", role, suffix)), string.concat(unit, ".json records no ", role, suffix));
     }
 
     /// @dev The factory puts `role`, under the salt and initcode hash `record` records, at the address it
@@ -1324,6 +1388,7 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat(role, "'s address is not the CREATE2 factory's for its recorded salt and initcode")
         );
         if (!withArgs) return;
+        _requireKey(_unit(), record, role, "Args");
         require(
             keccak256(vm.parseJsonBytes(record, string.concat(key, "Args"))) == keccak256(args),
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
@@ -1436,7 +1501,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 _dir(),
                 "/network.json's deployer ",
                 vm.toString(pinned),
-                ": a declared role's creation is proven by the pin, so run with that key, or change the pin in a reviewed commit"
+                ": only the pin sends a declared CREATE role, whose address follows from its sender; to change keys, pin the new one in a reviewed commit and list the old one in network.json's formerDeployers"
             )
         );
         require(

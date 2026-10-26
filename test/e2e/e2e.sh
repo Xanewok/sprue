@@ -234,12 +234,12 @@ scenario_failure() {
   [ "$rc" = 1 ] || die "failure: exited $rc, not 1: ${out: -400}"
   [ "$(tail -n 1 <<<"$out")" = "$(tail -n 2 <<<"$out" | head -n 1)" ] && [[ $(tail -n 1 <<<"$out") == Error:* ]] \
     || die "failure: forge's Error: line is not repeated at the end: $(tail -n 2 <<<"$out" | cut -c1-80)"
-  # A declared role's reuse is proven by the pin, so the opt-in to another key cannot send one.
+  # A declared CREATE role is proven by the pin, so the opt-in to another key cannot send one.
   fresh "$RPC"; rm -f deployments/pinned/token.json
   n0=$(nonce)
   if out=$(env -u DEPLOYER G run --unsafe-unexpected-deployer pinned token.check 2>&1); then die "failure: the unsafe run sent a declared role as another key"; fi
   grep -qi "^deployer $OPS, from the signer (--unsafe-unexpected-deployer)$" <<<"$out" || die "failure: the unsafe run did not print its deployer: $(grep -v "^ " <<<"$out" | head -20)"
-  grep -q "a declared role's creation is proven by the pin" <<<"$out" || die "failure: the unsafe run failed for another reason: ${out: -400}"
+  grep -q "only the pin sends a declared CREATE role" <<<"$out" || die "failure: the unsafe run failed for another reason: ${out: -400}"
   [ "$(nonce)" = "$n0" ] || die "failure: a refused declared role sent"
   # A send whose records forge would write where no unit reads them is refused, before it sends, by
   # what forge resolves: the inherited environment or foundry.toml. From a fresh chain, where the plan's probe

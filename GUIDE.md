@@ -35,6 +35,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `<paths.rehearsal>/` and `<paths.rehearsal>-x/`.
 2. Add `deployments/<network>/network.json`, which gives each chain its id and an `rpc` alias from
    `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
+   `"deployer"` pins the key that sends; `"formerDeployers"` lists keys it replaced, whose roles stay
+   proven.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's
    [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) and
    [`DeployVault.s.sol`](examples/token-vault/script/deploy/units/vault/DeployVault.s.sol) as templates.
@@ -49,12 +51,20 @@ then differ from the commit, the build is not the commit's, and an attended `run
    the order its certificate and its derived `recover` take them.
    Write each step as `function deploy(string calldata network) external step(network) { ... }`.
    `_deploy(role)` sends a role or proves its reuse, `_at(role)` proves it without a send, and `_certify()`
-   certifies the roles the step proved, with `_certify(_certificate().with...(...))` for more facts. A role
-   is proven when its address follows from the deployer and nonce, or the salt and initcode hash, that its
-   journal records, its code is the recorded code, its recorded arguments are the declared ones and its
-   `.check` passes. Where `network.json` pins a `deployer`, the pin must have created it, and only the pin
-   sends one. `_send(target, call)` sends a call the step decided on itself. A step is judged by a probe once everything it needs is done, so it must decide its own
-   work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
+   certifies every role of `_roles()`, which the step must prove first, with
+   `_certify(_certificate().with...(...))` for more facts. A role the unit uses must be in `_roles()`. A
+   role is proven when its address follows from the deployer and nonce, or the salt and initcode hash, that
+   its journal records, its code is the recorded code, its recorded arguments are the declared ones and its
+   `.check` passes. A CREATE address follows from its sender, so where `network.json` pins a `deployer`, a
+   CREATE role must have been created by the pin or by a key its `formerDeployers` lists, and only the pin
+   sends one; to change keys, pin the new one and list the old one there. A CREATE2 address does not follow
+   from its sender, so a CREATE2 role is proven whoever sent it, and its `.check` covers what the sender
+   decides, such as an owner set from `tx.origin`. Another unit's role comes from `_at(OTHER())`, after
+   `.needs("<unit>.deploy")`, when its code fixes what the step reads; from `_checked(OTHER())`, after
+   `.needs("<unit>.check")`, when what that unit configured after the deploy matters too.
+   `_send(target, call)` sends a call the step decided on itself; guard it with that decision, or the
+   step is always due and every `run` sends it again. A step is judged by a probe once everything it needs
+   is done, so it must decide its own work before it sends: read the chain and the journal, and call `_startBroadcast()` only to send.
    A step that opens the broadcast before it decides is always due, and `run` stops when its plan
    repeats. Use `vm.startBroadcast` only through `_startBroadcast()`: a probe refuses forge's
    cheatcode. A probe journals no receipt, so a decision must not read `<role>Tx` or `<role>Block`.

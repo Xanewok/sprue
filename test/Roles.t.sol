@@ -21,6 +21,11 @@ contract RolesToy is ToyJournal {
     bytes32 public externHash;
     uint256 public checks;
     bool public stop;
+    bool public refuseSecond;
+
+    function setRefuseSecond(bool refuse_) external {
+        refuseSecond = refuse_;
+    }
 
     function setTag(uint256 tag_) external {
         tag = tag_;
@@ -46,12 +51,12 @@ contract RolesToy is ToyJournal {
         return create("second", "SecondPayload").args(_secondArgs);
     }
 
-    function hook() internal pure returns (Role memory) {
-        return create2("hook", "ToyPayload", "create2").args(abi.encode(uint256(7)));
+    function undeclared() internal pure returns (Role memory) {
+        return create("undeclared", "ToyPayload").args(abi.encode(uint256(9)));
     }
 
-    function ext() internal view returns (Role memory) {
-        return extern("ext", "ext", externHash);
+    function selfReading() internal pure returns (Role memory) {
+        return TOY().args(_toyArgs).check(_readsItself);
     }
 
     function deploy(string calldata network) external step(network) {
@@ -64,12 +69,14 @@ contract RolesToy is ToyJournal {
         _deploy(second());
     }
 
-    function deployHook(string calldata network) external step(network) {
-        _deploy(hook());
+    function deployUndeclared(string calldata network) external step(network) {
+        _deploy(undeclared());
     }
 
-    function deployExt(string calldata network) external step(network) {
-        _deploy(ext());
+    function atSelfReading(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(selfReading());
+        _done(false);
     }
 
     function check(string calldata network) external step(network) {
@@ -101,18 +108,6 @@ contract RolesToy is ToyJournal {
         _done(false);
     }
 
-    function atHook(string calldata network) external returns (address a) {
-        _use(network);
-        a = _at(hook());
-        _done(false);
-    }
-
-    function atExt(string calldata network) external returns (address a) {
-        _use(network);
-        a = _at(ext());
-        _done(false);
-    }
-
     function recover(string calldata network) external returns (string memory) {
         return _recoverRoles(network);
     }
@@ -122,7 +117,12 @@ contract RolesToy is ToyJournal {
     }
 
     function _secondArgs() internal returns (bytes memory) {
+        require(!refuseSecond, "second refused");
         return abi.encode(uint256(uint160(_at(toy()))));
+    }
+
+    function _readsItself(address, bytes memory) internal {
+        _at(selfReading());
     }
 
     function _toyCheck(address at, bytes memory a) internal {
@@ -140,11 +140,90 @@ contract RolesToy is ToyJournal {
     }
 }
 
+/// @dev A CREATE2 role and an extern one, each declared.
+contract KindsToy is ToyJournal {
+    bytes32 public externHash;
+
+    function setExternHash(bytes32 hash) external {
+        externHash = hash;
+    }
+
+    function hook() internal pure returns (Role memory) {
+        return create2("hook", "ToyPayload", "create2").args(abi.encode(uint256(7)));
+    }
+
+    function ext() internal view returns (Role memory) {
+        return extern("ext", "ext", externHash);
+    }
+
+    function deployHook(string calldata network) external step(network) {
+        _deploy(hook());
+    }
+
+    function deployExt(string calldata network) external step(network) {
+        _deploy(ext());
+    }
+
+    function atHook(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(hook());
+        _done(false);
+    }
+
+    function atExt(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(ext());
+        _done(false);
+    }
+
+    function _roles() internal view override returns (Role[] memory) {
+        return _list(hook(), ext());
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "kinds";
+    }
+}
+
+/// @dev Two roles of one artifact, which a recovery tells apart by their arguments.
+contract TwinToy is ToyJournal {
+    function left() internal pure returns (Role memory) {
+        return create("left", "ToyPayload").args(abi.encode(uint256(1)));
+    }
+
+    function right() internal pure returns (Role memory) {
+        return create("right", "ToyPayload").args(abi.encode(uint256(2)));
+    }
+
+    function deploy(string calldata network) external step(network) {
+        _deploy(left());
+        _deploy(right());
+    }
+
+    function recover(string calldata network) external returns (string memory) {
+        return _recoverRoles(network);
+    }
+
+    function _roles() internal pure override returns (Role[] memory) {
+        return _list(left(), right());
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "twin";
+    }
+}
+
 /// @dev Another unit, which reads `TOY()` from the roles unit's journal.
 contract ReaderToy is ToyJournal {
     function read(string calldata network) external returns (address a) {
         _use(network);
         a = _at(TOY());
+        _done(false);
+    }
+
+    function readChecked(string calldata network) external returns (address a) {
+        _use(network);
+        a = _checked(TOY());
         _done(false);
     }
 
@@ -161,6 +240,7 @@ contract RolesTest is Test {
     address private ops = makeAddr("ops");
     address private other = makeAddr("other key");
     RolesToy private unit = new RolesToy();
+    KindsToy private kinds = new KindsToy();
     string private network;
     string private dir;
 
@@ -171,6 +251,7 @@ contract RolesTest is Test {
         if (vm.exists(dir)) vm.removeDir(dir, true);
         vm.createDir(dir, true);
         unit.setTestSender(ops);
+        kinds.setTestSender(ops);
         string memory json = '{"chains":{"main":{"rpc":"main","id":31337}}';
         if (bytes(pin).length != 0) json = string.concat(json, ',"deployer":"', pin, '"');
         vm.writeFile(string.concat(dir, "/network.json"), string.concat(json, "}"));
@@ -181,7 +262,11 @@ contract RolesTest is Test {
     }
 
     function _set(string memory key, string memory value) private {
-        vm.writeJson(value, string.concat(dir, "/roles.json"), key);
+        _setIn("roles", key, value);
+    }
+
+    function _setIn(string memory unit_, string memory key, string memory value) private {
+        vm.writeJson(value, string.concat(dir, "/", unit_, ".json"), key);
     }
 
     // ==== CREATE roles ====
@@ -217,7 +302,7 @@ contract RolesTest is Test {
                     dir,
                     "/network.json's deployer ",
                     vm.toString(ops),
-                    ": a declared role's creation is proven by the pin, so run with that key, or change the pin in a reviewed commit"
+                    ": only the pin sends a declared CREATE role, whose address follows from its sender; to change keys, pin the new one in a reviewed commit and list the old one in network.json's formerDeployers"
                 )
             )
         );
@@ -240,7 +325,9 @@ contract RolesTest is Test {
             string.concat(dir, "/network.json"),
             string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(other), '"}')
         );
-        vm.expectRevert(bytes("toy's recorded deployer is not network.json's deployer"));
+        vm.expectRevert(
+            bytes("toy's recorded deployer is neither network.json's deployer nor one of its formerDeployers")
+        );
         unit.atToy(network);
     }
 
@@ -354,37 +441,37 @@ contract RolesTest is Test {
         bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
         address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
         vm.writeFile(
-            string.concat(dir, "/roles.input.json"),
+            string.concat(dir, "/kinds.input.json"),
             string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
         );
-        unit.deployHook(network);
+        kinds.deployHook(network);
         assertEq(ToyPayload(at).tag(), 7);
         uint256 nonce = vm.getNonce(ops);
-        unit.deployHook(network);
+        kinds.deployHook(network);
         assertEq(vm.getNonce(ops), nonce, "a rerun sent");
-        assertEq(unit.atHook(network), at);
+        assertEq(kinds.atHook(network), at);
 
-        _set(".hookArgs", '"0x01"');
-        vm.expectRevert(bytes("hook's constructor arguments differ from roles.json"));
-        unit.atHook(network);
-        _set(".hookArgs", string.concat('"', vm.toString(abi.encode(uint256(7))), '"'));
-        _set(".hookInitcodeHash", string.concat('"', vm.toString(bytes32(uint256(1))), '"'));
+        _setIn("kinds", ".hookArgs", '"0x01"');
+        vm.expectRevert(bytes("hook's constructor arguments differ from kinds.json"));
+        kinds.atHook(network);
+        _setIn("kinds", ".hookArgs", string.concat('"', vm.toString(abi.encode(uint256(7))), '"'));
+        _setIn("kinds", ".hookInitcodeHash", string.concat('"', vm.toString(bytes32(uint256(1))), '"'));
         vm.expectRevert(bytes("hook's address is not the CREATE2 factory's for its recorded salt and initcode"));
-        unit.atHook(network);
+        kinds.atHook(network);
     }
 
     function test_extern_isTheInputsAddress_withThePinnedCode() public {
         _network("extern", vm.toString(ops));
         address ext = address(new ToyPayload(3));
-        vm.writeFile(string.concat(dir, "/roles.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}'));
-        unit.setExternHash(ext.codehash);
-        assertEq(unit.atExt(network), ext);
+        vm.writeFile(string.concat(dir, "/kinds.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}'));
+        kinds.setExternHash(ext.codehash);
+        assertEq(kinds.atExt(network), ext);
 
-        unit.setExternHash(bytes32(uint256(1)));
+        kinds.setExternHash(bytes32(uint256(1)));
         vm.expectRevert(bytes("ext's code is not the code its role pins"));
-        unit.atExt(network);
+        kinds.atExt(network);
         vm.expectRevert(bytes("ext is extern: read it with _at"));
-        unit.deployExt(network);
+        kinds.deployExt(network);
     }
 
     function test_at_readsAnotherUnitsRole_byItsJournaledIdentity() public {
@@ -427,6 +514,115 @@ contract RolesTest is Test {
         assertEq(vm.parseJsonBytes(got, ".secondArgs"), abi.encode(uint256(uint160(toy))));
         unit.deployBoth(network);
         assertEq(vm.getNonce(ops), 2, "a step after recover sent");
+    }
+
+    // ==== Review cases ====
+
+    function test_deploy_aRefusalOfALaterRole_leavesTheEarliersIntent_whichTheRerunSendsAsPlanned() public {
+        _network("refused", vm.toString(ops));
+        unit.setRefuseSecond(true);
+        vm.expectRevert(bytes("second refused"));
+        unit.deployBoth(network);
+        string memory journal = _journal();
+        address planned = vm.parseJsonAddress(journal, ".toy");
+        assertEq(planned.code.length, 0, "the refused step's CREATE stayed");
+        assertEq(vm.parseJsonString(journal, ".toyCommit"), "pending");
+
+        unit.setRefuseSecond(false);
+        unit.deployBoth(network);
+        assertEq(vm.parseJsonAddress(_journal(), ".toy"), planned, "the rerun did not send the planned intent");
+        assertTrue(planned.code.length != 0);
+    }
+
+    function test_deploy_refusesARoleOutsideRoles() public {
+        _network("undeclared", vm.toString(ops));
+        vm.expectRevert(bytes("undeclared is not in roles's _roles(): declare it there"));
+        unit.deployUndeclared(network);
+    }
+
+    function test_check_thatReadsItsOwnRole_refusesByName() public {
+        _network("self", vm.toString(ops));
+        unit.deploy(network);
+        vm.expectRevert(bytes("toy's .check reads toy itself: use the address and arguments it is given"));
+        unit.atSelfReading(network);
+    }
+
+    function test_at_acceptsARoleAFormerDeployerCreated_whileOnlyThePinSends() public {
+        _network("rotate", vm.toString(ops));
+        unit.deploy(network);
+        string memory rotated =
+            string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(other), '"');
+        vm.writeFile(string.concat(dir, "/network.json"), string.concat(rotated, "}"));
+        vm.expectRevert(
+            bytes("toy's recorded deployer is neither network.json's deployer nor one of its formerDeployers")
+        );
+        unit.atToy(network);
+
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat(rotated, ',"formerDeployers":["', vm.toString(ops), '"]}')
+        );
+        assertEq(unit.atToy(network), vm.parseJsonAddress(_journal(), ".toy"));
+        vm.expectRevert();
+        unit.deployBoth(network);
+        vm.stopBroadcast();
+    }
+
+    function test_create2_isProvenWhoeverSentIt() public {
+        _network("create2-any", vm.toString(ops));
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(6));
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
+        vm.writeFile(
+            string.concat(dir, "/kinds.input.json"),
+            string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
+        );
+        kinds.allowOtherDeployer();
+        kinds.setTestSender(other);
+        kinds.deployHook(network);
+        kinds.setTestSender(ops);
+        assertEq(kinds.atHook(network), at);
+    }
+
+    function test_recover_tellsTwoRolesOfOneArtifactApart_byTheirArguments() public {
+        _network("twin", vm.toString(ops));
+        TwinToy twin = new TwinToy();
+        twin.setTestSender(ops);
+        twin.deploy(network);
+        string memory lost = vm.readFile(string.concat(dir, "/twin.json"));
+        vm.removeFile(string.concat(dir, "/twin.json"));
+        address left = vm.parseJsonAddress(lost, ".left");
+        address right = vm.parseJsonAddress(lost, ".right");
+        string memory records = string.concat(dir, "/broadcast/TwinToy.s.sol/records");
+        vm.createDir(records, true);
+        vm.writeFile(
+            string.concat(records, "/0-latest.json"),
+            string.concat(
+                '{"chain": 31337, "transactions": [',
+                _create("ToyPayload", left, 0, abi.encode(uint256(1))),
+                ", ",
+                _create("ToyPayload", right, 1, abi.encode(uint256(2))),
+                "]}"
+            )
+        );
+        twin.recover(network);
+        string memory got = vm.readFile(string.concat(dir, "/twin.json"));
+        assertEq(vm.parseJsonAddress(got, ".left"), left);
+        assertEq(vm.parseJsonAddress(got, ".right"), right);
+    }
+
+    function test_checked_readsAnotherUnitsCertifiedRole_matchingItsIdentity() public {
+        _network("checked", vm.toString(ops));
+        unit.deployBoth(network);
+        unit.check(network);
+        ReaderToy reader = new ReaderToy();
+        assertEq(reader.readChecked(network), vm.parseJsonAddress(_journal(), ".toy"));
+
+        _set(".checked.toy", string.concat('"', vm.toString(vm.parseJsonAddress(_journal(), ".second")), '"'));
+        _set(".checked.toyCodeHash", vm.toString(vm.parseJsonAddress(_journal(), ".second").codehash));
+        vm.expectRevert(bytes("roles.json's check certified another toy than it records"));
+        reader.readChecked(network);
     }
 
     function _create(string memory name, address addr, uint256 nonce, bytes memory args)

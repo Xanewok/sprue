@@ -37,8 +37,8 @@ sprue run local vault.check              # refused: prints the `recover` command
    CREATE the journal lacks. Run the `recover` command it prints (this unit's script with
    `--sig 'recover(string)'`), then `run` again: it reaches done and sends nothing.
 4. Without a `deployer` in `network.json`, each role is proven against the deployer its journal records,
-   with a warning. Pin the deployer on a real network: then only the pin sends a role, and a role the pin
-   did not create is refused.
+   with a warning. Pin the deployer on a real network: then only the pin sends a CREATE role, and one the
+   pin did not create is refused.
 
 ## For a real network
 
