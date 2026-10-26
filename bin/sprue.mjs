@@ -664,6 +664,8 @@ async function main(argv) {
   // Only an attended run filters its own journals from git status and offers tags. The units come from
   // the graph, which the run plans with, not from a saved export that may lag it.
   const units = new Set();
+  // The nodes the last plan printed as done: a tag marks a unit whose check it judged done.
+  const done = new Set();
   if (attended) {
     for (const n of JSON.parse((await graph(GRAPH, "GRAPH", "graph()")).join("\n")).nodes) if (typeof n.unit === "string" && n.unit) units.add(n.unit);
   }
@@ -862,6 +864,7 @@ async function main(argv) {
       const j = readJson(`${DEPLOYMENTS}/${network}/${unit}.json`);
       // A tag marks what landed on a live chain, not a test deployment that reads one.
       if (!isObject(j) || !Object.entries(j).some(([k, v]) => k.endsWith("ChainId") && live.has(String(v)))) continue;
+      if (!done.has(`${unit}.check`)) continue;
       const tag = `deploy/${network}/${unit}`;
       const ref = `refs/tags/${tag}`;
       // One tag by name: push.followTags would add others.
@@ -927,6 +930,7 @@ async function main(argv) {
     if (sent && text === sent) fail(5, `cannot reach ${target}: its plan is unchanged after sending it`);
     for (const line of text.split("\n")) if (wave.has(line)) fail(5, `cannot reach ${target}: a step is due again after sending it: ${line}`);
     wave = new Set();
+    done.clear();
     for (const line of text.split("\n")) {
       if (line.startsWith("# not before ")) {
         const [at, ...r] = line.slice(13).split(" ");
@@ -961,6 +965,7 @@ async function main(argv) {
       } else if (line.startsWith("# chain ") || line.startsWith("# done ")) {
         const chain = /^# chain [^ ]+ ([0-9]+) live$/.exec(line);
         if (chain) live.add(chain[1]);
+        if (line.startsWith("# done ")) done.add(line.slice(7));
         out(`${line}\n`);
       }
       else if (line.startsWith("#") || (line && !COMMAND.test(line))) fail(2, `unknown plan line: ${line}`);

@@ -833,6 +833,14 @@ scenario_tag() {
   jq -e '.token' deployments/stage/token.json >/dev/null || die "tag: the test-chain run deployed nothing"
   ! git rev-parse -q --verify refs/tags/deploy/stage/token >/dev/null || die "tag: a test-chain unit was tagged"
   ! grep -q 'deploy/stage/token' <<<"$out" || die "tag: a test-chain unit was offered: $(tail -c 600 <<<"$out")"
+  # A unit whose check the last plan did not print as done gets no offer, though its journal is stamped.
+  git tag -d "$tag" >/dev/null
+  jq --arg c "$commit" 'del(.tokenDirty) | .tokenCommit = $c | .tokenNonce += 5' deployments/prod/token.json >"$W/j" \
+    && mv "$W/j" deployments/prod/token.json
+  git add -A; git commit -qm undone
+  out=$(tty yes "${run[@]}" 2>&1) && die "tag: a run over a changed token finished"
+  grep -q '# cannot reach' <<<"$out" || die "tag: the changed token was not refused: $(tail -c 600 <<<"$out")"
+  ! grep -q "deploy/prod/token\|Type yes" <<<"$out" || die "tag: an unfinished unit was offered a tag: $(tail -c 600 <<<"$out")"
   rm -rf "$W.remote"
   echo "ok  a live run offers a tag at the journal's commit and its push; a rerun offers only what is missing, a failed push keeps the status, a tag never moves, a dirty journal or a unit on a test chain gets none"
 }
