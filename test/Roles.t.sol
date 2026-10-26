@@ -231,6 +231,44 @@ contract TwinToy is ToyJournal {
     }
 }
 
+/// @dev An extern role fixed at one address, optional, required on a chain the test sets, with the input key defaulted.
+contract AtToy is ToyJournal {
+    address public canonical;
+    bytes32 public externHash;
+    uint256 public requiredChain = 777;
+
+    function setRequired(uint256 chainId) external {
+        requiredChain = chainId;
+    }
+
+    function set(address at_, bytes32 hash) external {
+        (canonical, externHash) = (at_, hash);
+    }
+
+    function ext() internal view returns (Role memory) {
+        return extern("ext", externHash).at(canonical).optional().requiredOn(requiredChain);
+    }
+
+    function atExt(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(ext());
+        _done(false);
+    }
+
+    function readOther(string calldata network) external returns (address) {
+        _use(network);
+        return _atOther(ext().unit("at"));
+    }
+
+    function _roles() internal view override returns (Role[] memory) {
+        return _list(ext());
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "at";
+    }
+}
+
 /// @dev Another unit, which reads `TOY()` from the roles unit's journal.
 contract ReaderToy is ToyJournal {
     function read(string calldata network) external returns (address a) {
@@ -808,6 +846,111 @@ contract RolesTest is Test {
             )
         );
         reader.readExt(network, ext.codehash);
+    }
+
+    // ==== Extern roles with a canonical address ====
+
+    function _atInput(string memory value) private {
+        vm.writeFile(string.concat(dir, "/at.input.json"), string.concat('{"ext":', value, "}"));
+    }
+
+    function _atFixture() private returns (AtToy t, address ext) {
+        t = new AtToy();
+        ext = address(new ToyPayload(3));
+        t.set(ext, ext.codehash);
+    }
+
+    function test_extern_at_isTheInputsAddressWhenItIsTheCanonicalOne_underTheDefaultKey() public {
+        _network("extern-at", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        assertEq(t.atExt(network), ext);
+        assertEq(t.readOther(network), ext);
+    }
+
+    function test_extern_at_refusesAnotherAddress_evenWithThePinnedCode() public {
+        _network("extern-at-other", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        address clone = makeAddr("clone");
+        vm.etch(clone, ext.code);
+        _atInput(string.concat('"', vm.toString(clone), '"'));
+        bytes memory reason =
+            bytes(string.concat("ext's input names ", vm.toString(clone), ", not its canonical ", vm.toString(ext)));
+        vm.expectRevert(reason);
+        t.atExt(network);
+        vm.expectRevert(reason);
+        t.readOther(network);
+    }
+
+    function test_extern_at_keepsTheCodeHashCheck() public {
+        _network("extern-at-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        t.set(ext, bytes32(uint256(1)));
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        t.atExt(network);
+    }
+
+    function test_extern_optional_absentIsAZeroAddress_whileTheCanonicalAddressHoldsNoCode() public {
+        _network("extern-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+        assertEq(t.readOther(network), address(0));
+    }
+
+    function test_extern_optional_refusesAbsenceOnceCodeAppears_onEveryRead() public {
+        _network("extern-absent-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+
+        vm.etch(ext, hex"00");
+        bytes memory reason = bytes(
+            string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+        );
+        vm.expectRevert(reason);
+        t.atExt(network);
+        vm.expectRevert(reason);
+        t.readOther(network);
+    }
+
+    function test_extern_requiredOn_refusesAbsenceOnThatChain_only() public {
+        _network("extern-required", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+        t.setRequired(31337);
+        vm.expectRevert(bytes("ext is required on chain 31337: name it in the input"));
+        t.atExt(network);
+        vm.expectRevert(bytes("ext is required on chain 31337: name it in the input"));
+        t.readOther(network);
+    }
+
+    function test_extern_builders_refuseWhatTheyCannotMean() public {
+        Role memory r = extern("ext", bytes32(0));
+        assertEq(r.key, "ext");
+        vm.expectRevert(bytes("ext's .optional needs .at: absence is proven at one address"));
+        this.buildOptional();
+        vm.expectRevert(bytes("ext's .requiredOn needs .optional first"));
+        this.buildRequiredOn();
+        vm.expectRevert(bytes("t's .at is for an extern role"));
+        this.buildAtOnCreate();
+    }
+
+    function buildOptional() external pure {
+        extern("ext", bytes32(0)).optional();
+    }
+
+    function buildRequiredOn() external pure {
+        extern("ext", bytes32(0)).requiredOn(1);
+    }
+
+    function buildAtOnCreate() external pure {
+        create("t", "ToyPayload").at(address(1));
     }
 
     // ==== Recovery ====

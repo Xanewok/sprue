@@ -23,6 +23,12 @@ struct Role {
     string key;
     /// @dev `extern` only.
     bytes32 codeHash;
+    /// @dev `extern` only: the one address the input may name; zero when it may name any.
+    address canonical;
+    /// @dev `extern` only: the input may say `"absent"`, and the canonical address then holds no code.
+    bool absentOk;
+    /// @dev `extern` only: chain ids on which the input may not say `"absent"`.
+    uint256[] requiredChains;
     bool computed;
     bytes fixedArgs;
     function() internal returns (bytes memory) argsFn;
@@ -48,8 +54,13 @@ function create2(string memory name, string memory artifact, string memory key) 
     r.key = key;
 }
 
+/// @dev `extern(name, name, codeHash)`: the input key is the role's name.
+function extern(string memory name, bytes32 codeHash) pure returns (Role memory r) {
+    return extern(name, name, codeHash);
+}
+
 /// @dev A contract the unit did not deploy: the unit's input holds its address at `key`, and its code must
-///      hash to `codeHash`.
+///      hash to `codeHash`. `.at` and `.optional` narrow what the input may say.
 function extern(string memory name, string memory key, bytes32 codeHash) pure returns (Role memory r) {
     r.name = name;
     r.kind = Kind.Extern;
@@ -81,6 +92,37 @@ library RoleLib {
     ///      roles with `_at`, but not this one.
     function ensure(Role memory r, function(address, bytes memory) internal fn) internal pure returns (Role memory) {
         r.ensureFn = fn;
+        return r;
+    }
+
+    /// @dev `extern` only. The input may name only `addr`; any other address is refused. The code hash check stays.
+    function at(Role memory r, address addr) internal pure returns (Role memory) {
+        require(r.kind == Kind.Extern, string.concat(r.name, "'s .at is for an extern role"));
+        require(addr != address(0), string.concat(r.name, "'s .at is the zero address"));
+        r.canonical = addr;
+        return r;
+    }
+
+    /// @dev `extern` only. The input may say `"absent"`: `_at` then returns the zero address, after proving on
+    ///      every read that the `.at` address holds no code. Absence is never remembered: code can appear later.
+    function optional(Role memory r) internal pure returns (Role memory) {
+        require(
+            r.canonical != address(0), string.concat(r.name, "'s .optional needs .at: absence is proven at one address")
+        );
+        r.absentOk = true;
+        return r;
+    }
+
+    /// @dev On `chainId` the role is required: the input may not say `"absent"` there. Adds to earlier calls.
+    function requiredOn(Role memory r, uint256 chainId) internal pure returns (Role memory) {
+        require(r.absentOk, string.concat(r.name, "'s .requiredOn needs .optional first"));
+        uint256 n = r.requiredChains.length;
+        uint256[] memory next = new uint256[](n + 1);
+        for (uint256 i; i < n; ++i) {
+            next[i] = r.requiredChains[i];
+        }
+        next[n] = chainId;
+        r.requiredChains = next;
         return r;
     }
 
@@ -182,11 +224,9 @@ abstract contract Roles is Deployment {
         if (proved != type(uint256).max) return _proved[proved].addr;
         _requireDeclared(r);
         if (r.kind == Kind.Extern) {
-            addr = _requiredAddress(_inputFile(_unit()), r.key);
-            _requireCode(addr, r.name);
-            require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
+            addr = _externAddress(r, _inputFile(_unit()));
             _enterCheck(r);
-            r.ensureFn(addr, "");
+            if (addr != address(0)) r.ensureFn(addr, "");
         } else {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
@@ -204,10 +244,7 @@ abstract contract Roles is Deployment {
     ///      is proven here, and what its unit configured after the deploy is for the step to read.
     function _atOther(Role memory r) internal view returns (address addr) {
         if (r.kind == Kind.Extern) {
-            addr = _requiredAddress(_inputFile(r.declaredBy), r.key);
-            _requireCode(addr, r.name);
-            require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
-            return addr;
+            return _externAddress(r, _inputFile(r.declaredBy));
         }
         string memory journal = _journalOf(r.declaredBy);
         string memory key = string.concat(".", r.name);
@@ -221,6 +258,44 @@ abstract contract Roles is Deployment {
         );
         if (r.kind == Kind.Create) _requireCreateRecord(r.declaredBy, journal, r.name, addr);
         else _requireCreate2Record(journal, r.name, "", false);
+    }
+
+    /// @dev An extern role's address from `input`, or zero for a permitted `"absent"`, whose absence is proven
+    ///      here on every call.
+    function _externAddress(Role memory r, Input memory input) private view returns (address addr) {
+        if (r.absentOk && _isAbsent(input, r.key)) {
+            for (uint256 i; i < r.requiredChains.length; ++i) {
+                require(
+                    r.requiredChains[i] != block.chainid,
+                    string.concat(
+                        r.name, " is required on chain ", vm.toString(block.chainid), ": name it in the input"
+                    )
+                );
+            }
+            require(
+                r.canonical.code.length == 0,
+                string.concat(
+                    r.name,
+                    " is absent in the input, but ",
+                    vm.toString(r.canonical),
+                    " holds code: name it in the input"
+                )
+            );
+            return address(0);
+        }
+        addr = _requiredAddress(input, r.key);
+        require(
+            r.canonical == address(0) || addr == r.canonical,
+            string.concat(
+                r.name, "'s input names ", vm.toString(addr), ", not its canonical ", vm.toString(r.canonical)
+            )
+        );
+        _requireCode(addr, r.name);
+        require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
+    }
+
+    function _isAbsent(Input memory input, string memory key) private pure returns (bool) {
+        return keccak256(bytes(vm.parseJsonString(input.json, string.concat(".", key)))) == keccak256("absent");
     }
 
     function _enterCheck(Role memory r) private {

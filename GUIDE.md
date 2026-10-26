@@ -41,7 +41,10 @@ then differ from the commit, the build is not the commit's, and an attended `run
    Declare each role once, in an `internal pure` function: `create(name, artifact)` for a CREATE by the
    deployer, `create2(name, artifact, key)` for a CREATE2 at the address that `<unit>.input.json` gives
    under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
-   not deploy, at the input's `<key>`. `artifact` is a contract's name, in a source file of the same name.
+   not deploy, at the input's `<key>` (`extern(name, codeHash)` takes the name as the key). `.at(addr)`
+   lets the input name only `addr`; `.optional()` (which needs `.at`) lets it say `"absent"`, which `_at`
+   reads as the zero address after proving on every read that `addr` holds no code, and
+   `.requiredOn(chainId)` refuses `"absent"` on that chain. `artifact` is a contract's name, in a source file of the same name.
    `.args(...)` gives the constructor arguments, as bytes or as a function that builds them from the
    inputs and other roles. `.ensure(fn)` runs `fn(address, args)` on every proof, and reverts on what later
    transactions can change, such as an admin or a proxy's implementation. `.unit("<unit>")` is the role as
