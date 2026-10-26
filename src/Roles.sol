@@ -109,6 +109,8 @@ abstract contract Roles is Deployment {
         string name;
         address addr;
         Kind kind;
+        /// @dev A step may select several forks: a proof holds on its own chain only.
+        uint256 chainId;
     }
 
     /// @dev This unit's roles that `_deploy` or `_at` proved in the open step, or that `recover` found. A dry
@@ -265,12 +267,14 @@ abstract contract Roles is Deployment {
 
     function _proven(Role memory r, address addr) private {
         if (!_own(r) || !_stepOpen) return;
-        if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind));
+        if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind, block.chainid));
     }
 
     function _provedIndex(string memory name) private view returns (uint256) {
         for (uint256 i; i < _proved.length; ++i) {
-            if (keccak256(bytes(_proved[i].name)) == keccak256(bytes(name))) return i;
+            if (keccak256(bytes(_proved[i].name)) == keccak256(bytes(name)) && _proved[i].chainId == block.chainid) {
+                return i;
+            }
         }
         return type(uint256).max;
     }
@@ -330,7 +334,7 @@ abstract contract Roles is Deployment {
             bytes memory a = _argsOf(r);
             found[i] = _createToRecover(journal, r.name, r.artifact, sender, _initcodeHash(r.artifact, a));
             if (found[i].addr == address(0)) continue;
-            _proved.push(Proved(r.name, found[i].addr, Kind.Create));
+            _proved.push(Proved(r.name, found[i].addr, Kind.Create, block.chainid));
             _requireCurrent(found[i], r.artifact, a);
         }
         _journalRecovered(journal, names, found);
