@@ -1019,9 +1019,10 @@ abstract contract Deployment is ForgeBroadcasts {
         );
         if (_createdThisRun[_deployment(addr)]) return;
         // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
-        // revert and lasts one forge run, or one test. Only a success is kept. It rests on a mined
-        // transaction, which a run treats as final. The record check above made `addr` its deployer's CREATE
-        // at its nonce, which one transaction alone can make, so the key needs no transaction hash.
+        // revert and lasts one forge run, or one test. Only a success is kept. The record check above made
+        // `addr` its deployer's CREATE at its nonce, which one transaction of a chain's history makes, so the
+        // key needs no transaction hash. `_use` gives each chain of the network its own id, so the id names
+        // one history; a reorg that replaces the creation is not seen, as nothing in sprue waits for finality.
         address proven = address(uint160(uint256(keccak256(abi.encode(block.chainid, addr, keccak256(args))))));
         if (keccak256(bytes(vm.getLabel(proven))) == keccak256(bytes(PROVEN))) return;
         bytes32 hash = _createTx(journal, role);

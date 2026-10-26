@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
 import {
+    chainAlias,
     chainId,
     chainKind,
     defaultChain,
@@ -158,6 +159,25 @@ abstract contract Journal is Script, IProbe {
         string memory path = string.concat(_dir(), "/network.json");
         require(vm.exists(path), string.concat(path, " is missing: name a network under ", _deployments(), "/"));
         string memory file = vm.readFile(path);
+        // sprue knows a chain by its id: in its journal stamps, its config and the proofs a run keeps. Two
+        // names of one chain must read one endpoint.
+        string[] memory chains = vm.parseJsonKeys(file, ".chains");
+        for (uint256 i; i < chains.length; ++i) {
+            for (uint256 j; j < i; ++j) {
+                require(
+                    chainId(file, chains[i]) != chainId(file, chains[j])
+                        || keccak256(bytes(chainAlias(file, chains[i])))
+                            == keccak256(bytes(chainAlias(file, chains[j]))),
+                    string.concat(
+                        "network.json's chains ",
+                        chains[j],
+                        " and ",
+                        chains[i],
+                        " have one chain id but other rpcs: name one rpc for both, or give each its own id"
+                    )
+                );
+            }
+        }
         require(
             block.chainid == chainId(file, _defaultChain(file)),
             string.concat("the RPC's chain is not ", network, "'s default chain")

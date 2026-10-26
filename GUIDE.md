@@ -32,7 +32,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `sprue` runs from any directory below `sprue.json`, and refuses unless git ignores
    `<paths.rehearsal>/` and `<paths.rehearsal>-x/`.
 2. Add `deployments/<network>/network.json`, which gives each chain its id and an `rpc` alias from
-   `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
+   `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`. Two chains of a
+   network may share an id only with one `rpc`.
    `"deployer"` pins the key that sends. A change of the pin is not supported: a role an earlier key
    created is refused.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's

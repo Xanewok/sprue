@@ -545,6 +545,64 @@ contract RolesTest is Test {
         assertEq(fresh.atToy(network), toy);
     }
 
+    function _provenOnce(string memory name) private returns (LandedToy fresh, address toy) {
+        _network(name, vm.toString(ops));
+        unit.deploy(network);
+        fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        toy = fresh.atToy(network);
+        fresh.confirm(0);
+    }
+
+    /// @dev A kept proof is the address's: another address the chain shows no creation of is refused.
+    function test_at_aKeptProofCoversNoOtherAddress() public {
+        (LandedToy fresh, address toy) = _provenOnce("kept-addr");
+        address other = vm.computeCreateAddress(ops, 1);
+        vm.etch(other, toy.code);
+        _set(".toy", vm.toString(other));
+        _set(".toyNonce", "1");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A kept proof is the chain's: the same address on another chain id is proven again.
+    function test_at_aKeptProofCoversNoOtherChain() public {
+        (LandedToy fresh,) = _provenOnce("kept-chain");
+        vm.chainId(5);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":5}},"deployer":"', vm.toString(ops), '"}')
+        );
+        _set(".mainChainId", "5");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A chain id names one chain's history, which a kept proof relies on: two names of it read one rpc.
+    function test_use_refusesTwoChainsOfOneIdWithOtherRpcs() public {
+        _network("one-id", vm.toString(ops));
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            '{"chains":{"main":{"rpc":"main","id":31337},"mirror":{"rpc":"mirror","id":31337}}}'
+        );
+        vm.expectRevert(
+            bytes(
+                "network.json's chains main and mirror have one chain id but other rpcs: name one rpc for both, or give each its own id"
+            )
+        );
+        unit.deploy(network);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            '{"chains":{"main":{"rpc":"main","id":31337},"alias":{"rpc":"main","id":31337}}}'
+        );
+        // Past `_use`: the toy itself takes one chain.
+        vm.expectRevert(bytes("toy network: not exactly one chain"));
+        unit.deploy(network);
+    }
+
     function test_check_runsOnEveryReuse_andItsRefusalStopsTheStep() public {
         _network("check", vm.toString(ops));
         unit.deploy(network);
