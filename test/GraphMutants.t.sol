@@ -89,4 +89,11 @@ contract GraphMutantsTest is GraphTest {
         vm.expectRevert("a fixture run is already running");
         this.reach("raw.gate");
     }
+
+    function test_quiet_refusesAJudgmentThatStartsAnotherRun() public {
+        RawUnit(graph.node(0).unit).setHost(address(this));
+        upTo("raw.reenter");
+        vm.expectRevert(bytes(string.concat(vm.toString(FIXTURE_SENDER), " sent outside a step's call")));
+        this.again("raw.reenter");
+    }
 }

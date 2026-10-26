@@ -14,7 +14,7 @@ contract RawUnit is FixtureUnit {
     FixtureToken public sink = new FixtureToken(0);
 
     function steps() external view returns (Step[] memory s) {
-        s = new Step[](9);
+        s = new Step[](10);
         s[0] = _step("raw.silent", "silent", this.silent.selector).due(this.silentDue.selector);
         s[1] = _step("raw.raw", "raw", this.raw.selector).due(this.rawDue.selector);
         s[2] = _step("raw.stray", "stray", this.stray.selector).due(this.strayDue.selector);
@@ -24,6 +24,7 @@ contract RawUnit is FixtureUnit {
         s[7] =
             _step("raw.explicit", "explicit", this.explicit.selector).due(this.explicitDue.selector).by("raw.operator");
         s[8] = _until("raw.gate", "gateOpen", this.gateOpen.selector);
+        s[9] = _step("raw.reenter", "reenter", this.reenter.selector).due(this.reenterDue.selector);
         s[3] = _step("raw.hidden", "hidden", this.hidden.selector).due(this.hiddenDue.selector);
     }
 
@@ -73,6 +74,30 @@ contract RawUnit is FixtureUnit {
 
     function gateOpen(string calldata) external view returns (bool) {
         return open;
+    }
+
+    address public host;
+    bool private reentered;
+    bool private fired;
+
+    function setHost(address host_) external {
+        host = host_;
+    }
+
+    function reenter(string calldata network) external step(network) {
+        reentered = true;
+    }
+
+    /// @dev Sends once at the first judgment after the step ran, then calls back into the fixture.
+    function reenterDue(string calldata) external returns (bool) {
+        if (!reentered) return true;
+        if (!fired) {
+            fired = true;
+            vm.broadcast(FIXTURE_SENDER);
+            address(sink).call(_transfer());
+            host.call(abi.encodeWithSignature("once(string)", "raw.silent"));
+        }
+        return false;
     }
 
     bool private judged;

@@ -21,8 +21,16 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     Graph private _graph;
     string private _net;
     address[] private _units;
-    /// @dev A run keeps one transcript, one recording and the graph's `_fixture`: a `_meet` may not start another.
     bool private _running;
+
+    /// @dev A run or a judgment keeps one transcript, one recording and the graph's `_fixture`: nothing it calls
+    ///      back into, such as a `_meet`, may start another.
+    modifier exclusive() {
+        require(!_running, "a fixture run is already running");
+        _running = true;
+        _;
+        _running = false;
+    }
 
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
@@ -120,19 +128,16 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
 
     /// @dev The recording runs through the whole call: what it holds between steps was sent by a judgment of
     ///      the planner or by the graph itself, and the graph sends nothing.
-    function _run(string memory id, bool alone) private returns (Sent[] memory) {
-        require(!_running, "a fixture run is already running");
-        _running = true;
+    function _run(string memory id, bool alone) private exclusive returns (Sent[] memory) {
         _transcriptBegin(_senders());
         _recordStart();
         require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
         _noSendOutside();
-        _running = false;
         return _transcriptEnd();
     }
 
     /// @dev The planner's verdict, with the senders' nonces and the recording watching the judgment.
-    function _judge(string memory id) private returns (Graph.Status verdict) {
+    function _judge(string memory id) private exclusive returns (Graph.Status verdict) {
         _transcriptBegin(_senders());
         _recordStart();
         verdict = _graph.status(_net, id);
