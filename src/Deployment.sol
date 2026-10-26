@@ -4,10 +4,11 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, planRpc} from "./Chains.sol";
+import {chainId} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
-import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
+import {Certificate} from "./Journal.sol";
+import {Ctx, ISprueEngine} from "./SprueEngine.sol";
 
 /// @dev The deploy step for one role (a contract a unit deploys), and the guards that keep a rerun
 ///      from deploying it twice.
@@ -24,11 +25,6 @@ import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
 ///      Relies on: forge's `broadcast/` records, and the chain's nonces and code. It reads them and
 ///      cannot prove that they are complete.
 abstract contract Deployment is ForgeBroadcasts {
-    /// @dev Whether `_requireNoUnjournaled` applies. True on a chain where every CREATE from a
-    ///      deployer key belongs to this project, so unjournaled code at such an address is a lost
-    ///      deployment.
-    function _fenced() internal view virtual returns (bool);
-
     address private _testSender;
     bool private _testCreationsTrusted;
     /// @dev The broadcaster of the step's first broadcast, and its nonce then. `_done` clears it.
@@ -142,17 +138,117 @@ abstract contract Deployment is ForgeBroadcasts {
         _want(false, target, value, call);
     }
 
-    /// @dev The deployer that `network.json` pins with `deployer`, or zero when it pins none. Reverts
-    ///      if the field is the zero address or forge's default sender.
-    function _pinnedDeployer() internal view returns (address) {
-        string memory network = _networkJson();
-        if (!_has(network, ".deployer")) return address(0);
-        address pinned = _addr(network, ".deployer");
-        require(
-            pinned != address(0) && pinned != address(uint160(uint256(keccak256("foundry default caller")))),
-            "network.json's deployer is the zero or forge's default address: fix it, or remove the field"
-        );
-        return pinned;
+    // ==== The engine ====
+
+    /// @dev Where `SprueEngine` is placed. A static call to it is not a transaction of a broadcast.
+    address internal constant ENGINE = address(uint160(uint256(keccak256("sprue.engine.v1"))));
+
+    /// @dev Places the engine on first use, outside a view too: forge allows `vm.etch` in a static frame, which
+    ///      only the compiler forbids. The engine's code is a cache of the build, so a probe that places it and
+    ///      reverts leaves nothing a rerun reads.
+    function _engine() private view returns (ISprueEngine) {
+        if (ENGINE.code.length == 0) _asView(_place)();
+        return ISprueEngine(ENGINE);
+    }
+
+    function _place() private {
+        vm.etch(ENGINE, vm.getDeployedCode("SprueEngine.sol:SprueEngine"));
+        vm.allowCheatcodes(ENGINE);
+        vm.makePersistent(ENGINE);
+    }
+
+    function _asView(function() internal f) private pure returns (function() internal view g) {
+        assembly ("memory-safe") {
+            g := f
+        }
+    }
+
+    /// @dev A test unit that answers the engine's hooks returns itself; a script must never name its own address.
+    function _testHost() internal view virtual returns (address) {
+        return address(0);
+    }
+
+    function _ctx(bool script, bool chains) private view returns (Ctx memory c) {
+        c.host = _testHost();
+        c.unit = _unit();
+        c.deployments = _deployments();
+        c.network = _networkName();
+        if (script) c.script = _deployScript();
+        if (chains) {
+            c.defaultChain = _defaultChain(_networkJson());
+            c.selected = _selectedChain();
+        }
+        c.fenced = _fenced();
+        c.rehearsal = _rehearsal();
+        c.probing = _inProbe();
+    }
+
+    function _requireNoStray(string memory journal, string memory role, string memory artifact) internal view {
+        _requireNoStray(journal, role, artifact, address(0));
+    }
+
+    /// @dev `adopted`, a CREATE2 address the step is about to deploy or adopt, is that role itself.
+    function _requireNoStray(string memory journal, string memory role, string memory artifact, address adopted)
+        internal
+        view
+    {
+        _engine().requireNoStray(_ctx(true, false), journal, role, artifact, adopted);
+    }
+
+    function _hasRecoverStep() internal view returns (bool) {
+        return _engine().hasRecoverStep(_ctx(true, false));
+    }
+
+    function _requireNoUnjournaled(string memory journal, string memory role, address sender) internal view {
+        if (_fenced()) _engine().requireNoUnjournaled(_ctx(false, false), journal, role, sender);
+    }
+
+    function _recordReceipt(string memory journal, string memory role, address deployed) internal {
+        _recordReceipt(journal, role, deployed, false);
+    }
+
+    function _recordCreate2Receipt(string memory journal, string memory role, address deployed) internal {
+        _recordReceipt(journal, role, deployed, true);
+    }
+
+    function _recordReceipt(string memory journal, string memory role, address deployed, bool create2) private {
+        if (_inProbe()) return;
+        _engine().recordReceipt(_ctx(true, false), journal, role, deployed, create2);
+    }
+
+    function _findReceipt(string memory journal, string memory role, address deployed, bool create2)
+        internal
+        returns (bytes32, uint256, string memory)
+    {
+        return _engine().findReceipt(_ctx(true, false), journal, role, deployed, create2);
+    }
+
+    function _createToRecover(string memory journal, string memory role, string memory artifact, address sender)
+        internal
+        returns (Create memory)
+    {
+        return _createToRecover(journal, role, artifact, sender, 0);
+    }
+
+    function _createToRecover(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        address sender,
+        bytes32 initcodeHash
+    ) internal returns (Create memory) {
+        return _engine().createToRecover(_ctx(false, false), journal, role, artifact, sender, initcodeHash);
+    }
+
+    function _requireCurrent(Create memory found, string memory artifact, bytes memory args) internal {
+        if (found.addr == address(0)) return;
+        Create memory landed = _engine().requireCurrent(_ctx(false, false), found, artifact, args);
+        (found.path, found.record, found.run, found.key, found.args) =
+            (landed.path, landed.record, landed.run, landed.key, landed.args);
+    }
+
+    function _journalRecovered(string memory journal, string[2][] memory roles, Create[] memory found) internal {
+        _engine().journalRecovered(_ctx(false, true), journal, roles, found);
     }
 
     // ==== The build record ====
@@ -321,18 +417,6 @@ abstract contract Deployment is ForgeBroadcasts {
         _requireJournaledCreate(journal, role, args);
     }
 
-    /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
-    function _hashSplit(bytes memory input, uint256 tail) private pure returns (bytes32 code, bytes32 rest) {
-        // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
-        // within `input`.
-        assembly ("memory-safe") {
-            let start := add(input, 32)
-            let cut := sub(mload(input), tail)
-            code := keccak256(start, cut)
-            rest := keccak256(add(start, cut), tail)
-        }
-    }
-
     function _creationTx(string memory journal, string memory role) internal returns (bytes32 hash) {
         string memory key = string.concat(".", role);
         if (_has(journal, string.concat(key, "Tx"))) return vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
@@ -470,195 +554,6 @@ abstract contract Deployment is ForgeBroadcasts {
             && vm.parseJsonBytes32(journal, hashKey) == _initcodeHash(artifact, args);
     }
 
-    /// @dev For a role that `journal` lacks. A CREATE, or a CREATE2 factory call, of `artifact` in
-    ///      this chain's broadcast records, by any sender, may be the role's lost record, and a fresh
-    ///      deployment would then be a second one. Such a record is refused while it has code, or
-    ///      while its nonce may still land, with or without a receipt. Only two kinds are ignored: a
-    ///      record without code whose nonce is used elsewhere, and an address in the journal's
-    ///      `retired` list. Another journal naming the address does not exempt it, because that
-    ///      journal can outlive the lost one.
-    function _requireNoStray(string memory journal, string memory role, string memory artifact) internal view {
-        _requireNoStray(journal, role, artifact, address(0));
-    }
-
-    /// @dev `adopted`, a CREATE2 address the step is about to deploy or adopt, is that role itself.
-    function _requireNoStray(string memory journal, string memory role, string memory artifact, address adopted)
-        internal
-        view
-    {
-        Create[] memory creates = _creates(artifact);
-        for (uint256 i; i < creates.length; ++i) {
-            Create memory c = creates[i];
-            if (c.addr.code.length == 0 && vm.getNonce(c.from) > c.nonce) continue;
-            if (c.create2 && c.addr == adopted) continue;
-            require(
-                _isRetired(journal, c.addr),
-                string.concat(
-                    _unit(),
-                    ".json lacks ",
-                    role,
-                    ", yet ",
-                    c.path,
-                    c.create2 ? " holds a CREATE2 of " : " holds a CREATE of ",
-                    artifact,
-                    " at ",
-                    vm.toString(c.addr),
-                    " that landed or may land: restore the journal",
-                    c.create2 || !_hasRecoverStep() ? "" : _recoverCommand(c)
-                )
-            );
-        }
-    }
-
-    /// @dev Whether the unit's script compiled a `recover(string)` function, read from the ABIs under
-    ///      `out/<script file>/`. False when that directory is absent, so a refusal never names a
-    ///      command that cannot run.
-    function _hasRecoverStep() internal view returns (bool) {
-        string[] memory path = vm.split(_deployScript(), "/");
-        string memory dir = string.concat("out/", path[path.length - 1]);
-        if (!vm.exists(dir)) return false;
-        VmSafe.DirEntry[] memory files = vm.readDir(dir);
-        for (uint256 i; i < files.length; ++i) {
-            if (!vm.exists(files[i].path) || files[i].isDir) continue;
-            string memory abi_ = vm.readFile(files[i].path);
-            if (!vm.keyExistsJson(abi_, ".abi")) continue;
-            for (uint256 k; vm.keyExistsJson(abi_, string.concat(".abi[", vm.toString(k), "]")); ++k) {
-                string memory entry = string.concat(".abi[", vm.toString(k), "]");
-                if (
-                    vm.keyExistsJson(abi_, string.concat(entry, ".name"))
-                        && keccak256(bytes(vm.parseJsonString(abi_, string.concat(entry, ".name"))))
-                            == keccak256("recover") && vm.keyExistsJson(abi_, string.concat(entry, ".inputs[0].type"))
-                        && !vm.keyExistsJson(abi_, string.concat(entry, ".inputs[1]"))
-                        && keccak256(bytes(vm.parseJsonString(abi_, string.concat(entry, ".inputs[0].type"))))
-                            == keccak256("string")
-                ) return true;
-            }
-        }
-        return false;
-    }
-
-    function _recoverCommand(Create memory c) private view returns (string memory) {
-        return string.concat(
-            ", or rebuild it: ",
-            isRehearsalNetwork(_networkName()) ? outputsEnv(_dir()) : "",
-            "forge script ",
-            _deployScript(),
-            " --sig 'recover(string)' ",
-            _networkName(),
-            " --rpc-url ",
-            planRpc(_networkJson()),
-            " --sender ",
-            vm.toString(c.from)
-        );
-    }
-
-    /// @dev The most nonces of one deployer that `_requireNoUnjournaled` will scan for code. A
-    ///      deployer past it is refused, not partly checked.
-    uint256 internal constant FENCED_NONCES = 256;
-
-    /// @dev For a role that `journal` lacks, on a `_fenced()` chain. Code at a CREATE address of
-    ///      `sender`, of the pinned deployer, or of any deployer that a journal of this network
-    ///      records may be this role's deployment whose journal and broadcast records are both lost,
-    ///      and a fresh deployment would then be a second one. The code passes only if a journal has
-    ///      a `<role>Deployer` key and records the address as `<role>` with `<role>CodeHash` equal to
-    ///      the live code hash (`_journaled`), or if the journal's `retired` list names the address.
-    ///      The deployer and nonce are not compared here: that relies on the journal having been
-    ///      written by `_recordSender`. Another journal merely naming the address, as a dependency,
-    ///      does not count. The code itself is not compared: no build can say what a lost
-    ///      deployment's code was. On a chain where `_fenced()` is false this does nothing.
-    function _requireNoUnjournaled(string memory journal, string memory role, address sender) internal view {
-        if (!_fenced()) return;
-        string[] memory journals = _journals();
-        address pinned = _pinnedDeployer();
-        if (sender != DEFAULT_SENDER) _requireNoUnjournaled(journal, role, sender, journals);
-        if (pinned != address(0)) _requireNoUnjournaled(journal, role, pinned, journals);
-        for (uint256 j; j < journals.length; ++j) {
-            string[] memory keys = vm.parseJsonKeys(journals[j], "$");
-            for (uint256 k; k < keys.length; ++k) {
-                if (!_endsWith(keys[k], "Deployer")) continue;
-                _requireNoUnjournaled(journal, role, _addr(journals[j], string.concat(".", keys[k])), journals);
-            }
-        }
-    }
-
-    function _requireNoUnjournaled(
-        string memory journal,
-        string memory role,
-        address deployer,
-        string[] memory journals
-    ) private view {
-        uint256 used = vm.getNonce(deployer);
-        require(
-            used <= FENCED_NONCES,
-            string.concat(
-                vm.toString(deployer),
-                " has used more nonces than the fence reads: a person must account for its deployments, or use a fresh deploy key, or list the chain in chains.unrecordedDeploys[<id>]"
-            )
-        );
-        for (uint256 n; n < used; ++n) {
-            address addr = vm.computeCreateAddress(deployer, n);
-            if (addr.code.length == 0 || _isRetired(journal, addr) || _journaled(journals, addr)) continue;
-            revert(
-                string.concat(
-                    _unit(),
-                    ".json lacks ",
-                    role,
-                    ", yet ",
-                    vm.toString(addr),
-                    ", the CREATE of ",
-                    vm.toString(deployer),
-                    " at nonce ",
-                    vm.toString(n),
-                    ", has code no journal records: find its journal with git log --all -i -G ",
-                    vm.toString(addr),
-                    " -- ",
-                    _dir(),
-                    "; if it is none of ",
-                    _unit(),
-                    "'s roles, list it in ",
-                    _unit(),
-                    ".json's retired; if it may be one and git has no journal, stop: a person must resolve it"
-                )
-            );
-        }
-    }
-
-    /// @dev The contents of every `.json` file in the network directory except `*.input.json`. Any
-    ///      other entry reads as `{}`. Inputs are skipped because a malformed input must not abort an
-    ///      unrelated step. Files that are not journals hold no `*Deployer` key, so they match
-    ///      nothing.
-    function _journals() private view returns (string[] memory journals) {
-        VmSafe.DirEntry[] memory files = vm.readDir(_dir());
-        journals = new string[](files.length);
-        for (uint256 i; i < files.length; ++i) {
-            string memory path = files[i].path;
-            journals[i] = !files[i].isDir && _endsWith(path, ".json") && !_endsWith(path, ".input.json")
-                ? vm.readFile(path)
-                : "{}";
-        }
-    }
-
-    /// @dev Whether some journal records `at` as a role with `at`'s current code hash. The address
-    ///      fixes the deployer and nonce, which `_recordSender` keeps consistent with it. The hash
-    ///      also tells a multi-chain unit's record on one chain from a CREATE on another chain by
-    ///      the same key at the same nonce.
-    function _journaled(string[] memory journals, address addr) private view returns (bool) {
-        for (uint256 j; j < journals.length; ++j) {
-            string memory journal = journals[j];
-            string[] memory keys = vm.parseJsonKeys(journal, "$");
-            for (uint256 k; k < keys.length; ++k) {
-                if (!_endsWith(keys[k], "Deployer")) continue;
-                string memory role = string.concat(".", vm.replace(keys[k], "Deployer", ""));
-                if (
-                    _has(journal, role) && _addr(journal, role) == addr
-                        && _has(journal, string.concat(role, "CodeHash"))
-                        && vm.parseJsonBytes32(journal, string.concat(role, "CodeHash")) == addr.codehash
-                ) return true;
-            }
-        }
-        return false;
-    }
-
     /// @notice Starts a unit's `recover` step. Returns the unit's journal and the sender whose lost
     ///         deployments the step journals.
     function _recovering(string memory network) internal returns (string memory journal, address sender) {
@@ -687,258 +582,9 @@ abstract contract Deployment is ForgeBroadcasts {
         return _journal();
     }
 
-    /// @dev The one landed CREATE of `artifact` by `sender` on this chain, for a `recover` step to
-    ///      journal as `role` once `_requireCurrent` holds. Returns a `Create` with a zero `at` when
-    ///      the journal already has the role or no such CREATE landed.
-    function _createToRecover(string memory journal, string memory role, string memory artifact, address sender)
-        internal
-        returns (Create memory found)
-    {
-        return _createToRecover(journal, role, artifact, sender, 0);
-    }
-
-    /// @dev `_createToRecover` where several CREATEs of `artifact` landed, as for two roles of one
-    ///      artifact: the one whose input is `initcodeHash`'s, if exactly one is.
-    function _createToRecover(
-        string memory journal,
-        string memory role,
-        string memory artifact,
-        address sender,
-        bytes32 initcodeHash
-    ) internal returns (Create memory found) {
-        if (_has(journal, string.concat(".", role))) return found;
-        bool landed;
-        (landed, found) = _landedCreate(journal, role, artifact, sender, initcodeHash);
-        if (landed) _requireNoKeysOf(journal, role);
-    }
-
-    /// @dev Reverts unless `found`, if set, was made from this build's `artifact` with `args`, as the
-    ///      chain shows. A genuine deployment from other inputs is an earlier one, not the one the
-    ///      journal lost.
-    function _requireCurrent(Create memory found, string memory artifact, bytes memory args) internal {
-        if (found.addr == address(0)) return;
-        bytes memory input = _txInput(found);
-        require(
-            keccak256(input) == _initcodeHash(artifact, args),
-            string.concat(
-                found.path,
-                " records ",
-                artifact,
-                " at ",
-                vm.toString(found.addr),
-                " with initcode other than this build's with the current inputs: if it is the lost deployment,",
-                " restore the commit and inputs that made it; if not, list it in ",
-                _unit(),
-                ".json's retired"
-            )
-        );
-        require(
-            vm.computeCreateAddress(found.from, found.nonce) == found.addr, "a deployment is not at its sender's nonce"
-        );
-        Create memory landed = _landedAsRecorded(artifact, found, input);
-        (found.path, found.record, found.run, found.key, found.args) =
-        (landed.path, landed.record, landed.run, landed.key, args);
-    }
-
-    /// @dev Writes each role of `roles` (role, artifact) whose `found` is set. Call it only after
-    ///      every check passed, so that a refusal leaves no key behind.
-    function _journalRecovered(string memory journal, string[2][] memory roles, Create[] memory found) internal {
-        bool recovered;
-        for (uint256 i; i < roles.length; ++i) {
-            if (found[i].addr == address(0)) continue;
-            _recoverRole(roles[i][0], roles[i][1], found[i]);
-            recovered = true;
-        }
-        if (recovered && !_has(journal, _selectedStampKey())) _putChainStamp();
-    }
-
-    /// @dev Reverts if the journal holds any extension key of `role`, so that recovery never writes
-    ///      over part of a role. A key counts if it is `<role>` followed by an uppercase letter, so a
-    ///      unit's own extensions (`<role>Salt`) count without being listed here.
-    function _requireNoKeysOf(string memory journal, string memory role) private view {
-        string[] memory keys = vm.parseJsonKeys(journal, "$");
-        uint256 n = bytes(role).length;
-        for (uint256 i; i < keys.length; ++i) {
-            bytes memory k = bytes(keys[i]);
-            if (k.length <= n || vm.indexOf(keys[i], role) != 0 || k[n] < "A" || k[n] > "Z") continue;
-            revert(string.concat(_unit(), ".json holds ", keys[i], " but not ", role, ": a person must resolve it"));
-        }
-    }
-
     /// @dev `_put`, unless `journal` holds `key`.
     function _putNew(string memory journal, string memory key, string memory value) internal {
         if (!_has(journal, key)) _put(key, value);
-    }
-
-    /// @dev Journals a recovered role. The original code hash is lost, so it records the live code's
-    ///      hash, which proves nothing about the code. What vouches for it is the initcode check in
-    ///      `_requireCurrent`.
-    function _recoverRole(string memory role, string memory artifact, Create memory found) private {
-        bytes memory input = _txInput(found);
-        _recordSender(role, found.addr, found.from, found.nonce);
-        _put(string.concat(".", role, "Args"), vm.toString(found.args));
-        _put(string.concat(".", role, "InitcodeHash"), vm.toString(keccak256(input)));
-        require(
-            input.length >= found.args.length, string.concat("the recovered ", role, "'s arguments exceed its input")
-        );
-        (bytes32 code,) = _hashSplit(input, found.args.length);
-        _put(string.concat(".", role, "CreationCodeHash"), vm.toString(code));
-        _recordBuild(role, found.addr, artifact);
-        (bool hasCommit, string memory commit) = _commit(found);
-        if (hasCommit) _put(string.concat(".", role, "Commit"), string.concat('"', commit, '"'));
-        _put(string.concat(".", role), vm.toString(found.addr));
-        _recordReceipt(_journal(), role, found.addr);
-        console.log("recovered", role, found.addr);
-    }
-
-    /// @dev `sender`'s one CREATE of `artifact` on this chain that has code, ignoring addresses the
-    ///      journal's `retired` list names. Only `sender`'s count: an address another sender created
-    ///      is not this project's to adopt, so the stray guard keeps refusing it until a person
-    ///      resolves it. Reverts if a CREATE has no code but its nonce is unused, or if two
-    ///      different ones landed and not exactly one of them with input `initcodeHash`.
-    function _landedCreate(
-        string memory journal,
-        string memory role,
-        string memory artifact,
-        address sender,
-        bytes32 initcodeHash
-    ) private returns (bool, Create memory found) {
-        Create[] memory creates = _creates(artifact);
-        string memory landed;
-        uint256 count;
-        uint256 matching;
-        Create memory match_;
-        for (uint256 i; i < creates.length; ++i) {
-            Create memory c = creates[i];
-            if (c.from != sender || c.create2 || _isRetired(journal, c.addr)) continue;
-            if (c.addr.code.length == 0) {
-                require(
-                    vm.getNonce(sender) > c.nonce,
-                    string.concat(
-                        _unit(),
-                        ".json lacks ",
-                        role,
-                        ", yet ",
-                        c.path,
-                        " holds a CREATE of ",
-                        artifact,
-                        " at ",
-                        vm.toString(c.addr),
-                        " that may still land: wait, or spend the nonce"
-                    )
-                );
-                continue;
-            }
-            // forge writes each run twice, as `-latest` and timestamped, so an address can repeat.
-            // The same address with other initcode is a transaction replaced at that nonce, and only
-            // the chain knows which one landed.
-            if (vm.contains(landed, vm.toString(c.addr))) {
-                require(
-                    c.addr != found.addr || keccak256(_txInput(c)) == keccak256(_txInput(found)),
-                    string.concat(
-                        _unit(),
-                        ".json lacks ",
-                        role,
-                        ", and the records create ",
-                        artifact,
-                        " at ",
-                        vm.toString(c.addr),
-                        " with different initcode: a person must choose"
-                    )
-                );
-                continue;
-            }
-            landed = count == 0 ? vm.toString(c.addr) : string.concat(landed, ", ", vm.toString(c.addr));
-            found = c;
-            ++count;
-            if (initcodeHash != 0 && keccak256(_txInput(c)) == initcodeHash) {
-                match_ = c;
-                ++matching;
-            }
-        }
-        if (count > 1 && matching == 1) return (true, match_);
-        require(
-            count < 2,
-            string.concat(
-                _unit(),
-                ".json lacks ",
-                role,
-                ", and ",
-                vm.toString(sender),
-                " created ",
-                artifact,
-                " at ",
-                landed,
-                ": a person must choose"
-            )
-        );
-        return (count == 1, found);
-    }
-
-    /// @dev A CREATE replaced at the same nonce outside forge lands other initcode at the same
-    ///      address with no record, so the recorded initcode proves nothing about the live code. The
-    ///      chain must therefore show that a transaction of a run recording `found`'s CREATE, with
-    ///      `input`, created it. A resend with a higher fee leaves the landed hash in another run.
-    ///      `forge test` keeps no transaction history, so under test this takes `found` as the
-    ///      record that landed. Only a run against a live node proves it.
-    function _landedAsRecorded(string memory artifact, Create memory found, bytes memory input)
-        private
-        returns (Create memory)
-    {
-        if (vm.isContext(VmSafe.ForgeContext.Test)) return found;
-        Create[] memory creates = _creates(artifact);
-        for (uint256 i; i < creates.length; ++i) {
-            Create memory c = creates[i];
-            if (
-                !c.create2 && c.addr == found.addr && keccak256(_txInput(c)) == keccak256(input)
-                    && _isLandedIn(c, input)
-            ) {
-                return c;
-            }
-        }
-        revert(
-            string.concat(
-                "no transaction of ",
-                found.path,
-                " that the chain shows created ",
-                vm.toString(found.addr),
-                " sent the recorded initcode: a person must resolve it"
-            )
-        );
-    }
-
-    /// @dev Any of the run's hashes may be `c`'s: see `_recordReceipt`.
-    function _isLandedIn(Create memory c, bytes memory input) private returns (bool) {
-        for (uint256 j; _hasTransaction(c, j); ++j) {
-            (bool ok, bytes32 hash) = _candidateHash(c, j);
-            if (!ok || _createdIn(hash, c.addr, false) == 0) continue;
-            if (keccak256(_sentInput(hash)) == keccak256(input)) return true;
-        }
-        return false;
-    }
-
-    /// @dev Whether the journal's `retired` list names `at`.
-    function _isRetired(string memory journal, address addr) private view returns (bool) {
-        if (!_has(journal, ".retired")) return false;
-        address[] memory retired = vm.parseJsonAddressArray(journal, ".retired");
-        for (uint256 i; i < retired.length; ++i) {
-            if (retired[i] == addr) return true;
-        }
-        return false;
-    }
-
-    /// @dev The broadcaster and its next nonce, read inside the broadcast that will use them.
-    function _broadcaster() internal returns (address deployer, uint256 nonce) {
-        (, deployer,) = vm.readCallers();
-        nonce = vm.getNonce(deployer);
-    }
-
-    /// @dev Records the deployer and nonce, which fix the CREATE address, so that a rerun can tell a
-    ///      lost broadcast from a pending one. Reverts if `deployed` is not that address.
-    function _recordSender(string memory role, address deployed, address deployer, uint256 nonce) internal {
-        require(vm.computeCreateAddress(deployer, nonce) == deployed, "a deployment is not at its sender's nonce");
-        _put(string.concat(".", role, "Deployer"), vm.toString(deployer));
-        _put(string.concat(".", role, "Nonce"), vm.toString(nonce));
     }
 
     function _recordIntent(string memory role, string memory name, bytes memory args) internal {
@@ -948,14 +594,6 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat(".", role, "CreationCodeHash"),
             vm.toString(keccak256(vm.getCode(string.concat(name, ".sol:", name))))
         );
-    }
-
-    function _initcodeHash(string memory name, bytes memory args) internal view returns (bytes32) {
-        return keccak256(_initcode(name, args));
-    }
-
-    function _initcode(string memory name, bytes memory args) internal view returns (bytes memory) {
-        return bytes.concat(vm.getCode(string.concat(name, ".sol:", name)), args);
     }
 
     // ==== CREATE2, a unit's opt-in ====
@@ -1442,18 +1080,6 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      keccak), so that a rebuild at that commit can be checked file by file. The commit is
     ///      `pending` until `_recordReceipt` reads the commit forge sent from. The metadata is copied
     ///      beside the journal because `out/` is usually git-ignored.
-    function _recordBuild(string memory role, address deployed, string memory name) internal {
-        if (_inProbe()) revert StepDue();
-        string memory metadataPath = string.concat(_dir(), "/", name, ".metadata.json");
-        vm.writeFile(
-            metadataPath,
-            vm.parseJsonString(vm.readFile(string.concat("out/", name, ".sol/", name, ".json")), ".rawMetadata")
-        );
-        _put(string.concat(".", role, "Commit"), '"pending"');
-        _put(string.concat(".", role, "CodeHash"), vm.toString(deployed.codehash));
-        _put(string.concat(".", role, "Metadata"), string.concat('"', metadataPath, '"'));
-    }
-
     /// @dev True when the person opted in to deploy with a key other than the pin, by setting the
     ///      variable to exactly `1`.
     function _unexpectedDeployerAllowed() internal view virtual returns (bool) {

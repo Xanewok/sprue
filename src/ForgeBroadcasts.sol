@@ -23,40 +23,7 @@ abstract contract ForgeBroadcasts is Journal {
     ///      under `<records>/<its file name>/`.
     function _deployScript() internal view virtual returns (string memory);
 
-    function _txInput(Create memory c) internal pure returns (bytes memory) {
-        return vm.parseJsonBytes(c.record, string.concat(c.key, ".transaction.input"));
-    }
-
-    /// @dev The commit of `c`'s run, if the record has one. `_recordReceipt` reads a commit only from
-    ///      the top level of a single-chain record.
-    function _commit(Create memory c) internal view returns (bool, string memory) {
-        return _commitAt(c.record, string.concat(c.run, ".commit"));
-    }
-
-    /// @dev Forge writes `null` for a run outside git. That must stay `pending`, never the string
-    ///      "null": a journal's commit is hex or `pending`.
-    function _commitAt(string memory record, string memory key) internal view returns (bool, string memory commit) {
-        if (!_has(record, key)) return (false, "");
-        commit = vm.parseJsonString(record, key);
-        if (keccak256(bytes(commit)) == keccak256("null")) return (false, "");
-        return (true, commit);
-    }
-
-    function _hasTransaction(Create memory c, uint256 j) internal view returns (bool) {
-        return _has(c.record, string.concat(c.run, ".transactions[", vm.toString(j), "]"));
-    }
-
-    /// @dev Transaction `j`'s recorded hash; `ok` is false for one that does not parse. Read one at a
-    ///      time so a caller that finds its match stops parsing.
-    function _candidateHash(Create memory c, uint256 j) internal view returns (bool ok, bytes32 hash) {
-        try vm.parseJsonBytes32(c.record, string.concat(c.run, ".transactions[", vm.toString(j), "].hash")) returns (
-            bytes32 h
-        ) {
-            return (true, h);
-        } catch {
-            return (false, 0);
-        }
-    }
+    function _fenced() internal view virtual returns (bool);
 
     struct Create {
         /// @dev A factory call forge recorded as `CREATE2`: no nonce fixes its address.
@@ -73,91 +40,6 @@ abstract contract ForgeBroadcasts is Journal {
         bytes args;
     }
 
-    /// @dev Every CREATE and CREATE2 of `artifact` that this chain's broadcast records hold, by any
-    ///      sender. An unreadable record is refused, as one that may hold it. A missing records
-    ///      directory holds none.
-    function _creates(string memory artifact) internal view returns (Create[] memory found) {
-        if (!vm.exists(_records())) return found;
-        VmSafe.DirEntry[] memory files = vm.readDir(_records(), 3);
-        for (uint256 i; i < files.length; ++i) {
-            require(
-                bytes(files[i].errorMessage).length == 0,
-                string.concat("cannot rule out a stray ", artifact, ": ", files[i].errorMessage)
-            );
-            if (files[i].isDir || files[i].depth != 3 || !_endsWith(files[i].path, ".json")) continue;
-            uint256 mark = _freeMemory();
-            uint256 had = found.length;
-            string memory path = slashed(files[i].path);
-            string memory record = vm.readFile(path);
-            if (_has(record, ".chain")) {
-                found = _createsIn(found, artifact, path, record, "");
-                if (found.length == had) _releaseMemory(mark);
-                continue;
-            }
-            // A multi-chain run's record holds one run per chain.
-            require(
-                _has(record, ".deployments"),
-                string.concat("cannot rule out a stray ", artifact, ": ", path, " names no chain")
-            );
-            for (uint256 k; _has(record, string.concat(".deployments[", vm.toString(k), "]")); ++k) {
-                found = _createsIn(found, artifact, path, record, string.concat(".deployments[", vm.toString(k), "]"));
-            }
-            if (found.length == had) _releaseMemory(mark);
-        }
-    }
-
-    function _freeMemory() private pure returns (uint256 at) {
-        assembly ("memory-safe") {
-            at := mload(0x40)
-        }
-    }
-
-    /// @dev Frees everything allocated since `_freeMemory` returned `at`; the caller must reference none of it.
-    ///      A scan of many records calls it after each record that yields nothing: a step never frees memory,
-    ///      and its gas grows with the square of what it holds, so a dozen records would end a probe.
-    function _releaseMemory(uint256 at) private pure {
-        assembly ("memory-safe") {
-            mstore(0x40, at)
-        }
-    }
-
-    /// @dev Matches the chain id written inside the run, not the chain directory in the path,
-    ///      because path separators differ between hosts.
-    function _createsIn(
-        Create[] memory found,
-        string memory artifact,
-        string memory path,
-        string memory record,
-        string memory run
-    ) private view returns (Create[] memory) {
-        if (_uint(record, string.concat(run, ".chain")) != block.chainid) return found;
-        // One query for the whole run: a query per transaction copies the record each time.
-        if (!_has(record, string.concat("$", run, ".transactions[?(@.contractName == '", artifact, "')]"))) {
-            return found;
-        }
-        for (uint256 j; _has(record, string.concat(run, ".transactions[", vm.toString(j), "]")); ++j) {
-            string memory t = string.concat(run, ".transactions[", vm.toString(j), "]");
-            if (!_isCreateOf(record, t, artifact)) continue;
-            Create[] memory more = new Create[](found.length + 1);
-            for (uint256 n; n < found.length; ++n) {
-                more[n] = found[n];
-            }
-            more[found.length] = Create({
-                create2: keccak256(bytes(vm.parseJsonString(record, string.concat(t, ".transactionType"))))
-                    == keccak256("CREATE2"),
-                addr: _addr(record, string.concat(t, ".contractAddress")),
-                from: _addr(record, string.concat(t, ".transaction.from")),
-                nonce: _uint(record, string.concat(t, ".transaction.nonce")),
-                path: path,
-                record: record,
-                run: run,
-                key: t,
-                args: ""
-            });
-            found = more;
-        }
-        return found;
-    }
 
     function _endsWith(string memory s, string memory suffix) internal pure returns (bool) {
         bytes memory b = bytes(s);
@@ -167,191 +49,6 @@ abstract contract ForgeBroadcasts is Journal {
             if (b[b.length - end.length + i] != end[i]) return false;
         }
         return true;
-    }
-
-    function _isCreateOf(string memory record, string memory t, string memory artifact) private view returns (bool) {
-        bytes32 kind = keccak256(bytes(vm.parseJsonString(record, string.concat(t, ".transactionType"))));
-        if (kind != keccak256("CREATE") && kind != keccak256("CREATE2")) return false;
-        // A CREATE forge could not attribute has a null name.
-        try vm.parseJsonString(record, string.concat(t, ".contractName")) returns (string memory name) {
-            return keccak256(bytes(name)) == keccak256(bytes(artifact));
-        } catch {
-            return false;
-        }
-    }
-
-    /// @dev The deploy run cannot see its own receipt, because forge writes it under `broadcast/`
-    ///      after the run returns. So a later run of the step, or `check`, with `deployed`'s chain
-    ///      selected, records the receipt that this chain confirms created `deployed` (`_findReceipt`).
-    ///
-    ///      A `pending` commit, the label a unit records, becomes the commit forge sent from.
-    function _recordReceipt(string memory journal, string memory role, address deployed) internal {
-        _recordReceipt(journal, role, deployed, false);
-    }
-
-    /// @dev A CREATE2 receipt names no created address: the factory call whose salt and initcode
-    ///      fix `deployed` succeeded at most once, since the factory reverts on an occupied address.
-    function _recordCreate2Receipt(string memory journal, string memory role, address deployed) internal {
-        _recordReceipt(journal, role, deployed, true);
-    }
-
-    function _recordReceipt(string memory journal, string memory role, address deployed, bool create2) private {
-        // forge writes a send's record after the run, so a probe would find its receipt and plan the step
-        // again after every send. The step's next run, or `check`, journals it.
-        if (_inProbe()) return;
-        // A recorded receipt is final. A rerun must not replace the transaction or block the journal
-        // names.
-        if (_has(journal, string.concat(".", role, "Tx")) && _has(journal, string.concat(".", role, "Block"))) {
-            return;
-        }
-        (bytes32 hash, uint256 landed, string memory record) = _findReceipt(journal, role, deployed, create2);
-        if (landed == 0) {
-            console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
-            return;
-        }
-        _put(string.concat(".", role, "Tx"), vm.toString(hash));
-        _put(string.concat(".", role, "Block"), vm.toString(landed));
-        if (bytes(record).length != 0) _settleCommit(journal, role, record);
-    }
-
-    /// @dev The transaction that created `deployed`, the block it landed in (zero if none is found) and
-    ///      the broadcast record that holds it (empty if only the chain does). Only `receipts[]` names
-    ///      the right hash: older forge versions wrote a batch's hashes into `transactions[]` in the
-    ///      order the sends returned. Only the unit's own script's records are read, its runs on this chain
-    ///      and its multi-chain runs: the others grow with every unit and run, and a probe reads them under
-    ///      the block gas limit. With no record, as after a killed forge or for a role another script created, a CREATE
-    ///      is searched for on the chain by the journal's deployer and nonce.
-    function _findReceipt(string memory journal, string memory role, address deployed, bool create2)
-        internal
-        returns (bytes32 hash, uint256 landed, string memory record)
-    {
-        string memory candidates = create2
-            ? string.concat(
-                "$..receipts[?(@.to == '", vm.toLowercase(vm.toString(CREATE2_FACTORY)), "')].transactionHash"
-            )
-            : string.concat(
-                "$..receipts[?(@.contractAddress == '", vm.toLowercase(vm.toString(deployed)), "')].transactionHash"
-            );
-        string[] memory script = vm.split(_deployScript(), "/");
-        string memory name = script[script.length - 1];
-        (hash, landed, record) = _receiptIn(
-            string.concat(_records(), "/", name, "/", vm.toString(block.chainid)), 1, "", candidates, deployed, create2
-        );
-        if (landed != 0) return (hash, landed, record);
-        // A multi-chain run's records: `multi/<script>-latest/` and `multi/<script>-<timestamp>/`.
-        (hash, landed, record) = _receiptIn(
-            string.concat(_records(), "/multi"), 2, string.concat("/", name, "-"), candidates, deployed, create2
-        );
-        if (landed != 0) return (hash, landed, record);
-        string memory key = string.concat(".", role);
-        // An adopted role, which this project did not create, has no nonce.
-        if (create2 || !_has(journal, string.concat(key, "Deployer")) || !_has(journal, string.concat(key, "Nonce"))) {
-            return (0, 0, "");
-        }
-        hash = _sentAt(_addr(journal, string.concat(key, "Deployer")), _uint(journal, string.concat(key, "Nonce")));
-        landed = hash == 0 ? 0 : _createdIn(hash, deployed, false);
-        record = "";
-    }
-
-    /// @dev The first receipt in the records `depth` levels under `dir`, in a path that contains `under`, whose
-    ///      hash `candidates` selects and that this chain confirms created `deployed`.
-    function _receiptIn(
-        string memory dir,
-        uint64 depth,
-        string memory under,
-        string memory candidates,
-        address deployed,
-        bool create2
-    ) private returns (bytes32, uint256, string memory) {
-        if (!vm.exists(dir)) return (0, 0, "");
-        try vm.readDir(dir, depth) returns (VmSafe.DirEntry[] memory files) {
-            for (uint256 i; i < files.length; ++i) {
-                string memory path = slashed(files[i].path);
-                if (files[i].isDir || files[i].depth != depth || !_endsWith(path, ".json")) continue;
-                if (bytes(under).length != 0 && !vm.contains(path, under)) continue;
-                uint256 mark = _freeMemory();
-                string memory record = vm.readFile(path);
-                // A multi-chain run can create the same address on two chains.
-                bytes32[] memory sent = _matches(record, candidates);
-                for (uint256 j; j < sent.length; ++j) {
-                    uint256 landed = _createdIn(sent[j], deployed, create2);
-                    if (landed != 0) return (sent[j], landed, record);
-                }
-                _releaseMemory(mark);
-            }
-        } catch {}
-        return (0, 0, "");
-    }
-
-    /// @dev The hash of `deployer`'s transaction at `nonce`, as the chain shows it, or zero while the
-    ///      nonce is unused. Zero too with no RPC, or for a transaction older than the state the RPC keeps.
-    function _sentAt(address deployer, uint256 nonce) private returns (bytes32) {
-        // The chain's, not the simulation's: a deployment this run simulated has no transaction. And
-        // `block.number` can be a rollup's parent chain's number.
-        uint256 hi;
-        try vm.rpc("eth_blockNumber", "[]") returns (bytes memory head) {
-            hi = _rpcUint(head);
-        } catch {
-            // No RPC, as under `forge test`.
-            return 0;
-        }
-        (bool landed, uint256 sent) = _nonceAt(deployer, hi);
-        if (!landed || sent <= nonce) return 0;
-        // Invariant: `deployer`'s nonce at `hi` is past `nonce`, and at `lo` is not or is not served. A
-        // block whose state the RPC no longer keeps counts as before the transaction: the scan below checks.
-        uint256 lo;
-        while (hi - lo > 1) {
-            uint256 mid = (lo + hi) / 2;
-            (bool ok, uint256 used) = _nonceAt(deployer, mid);
-            if (ok && used > nonce) hi = mid;
-            else lo = mid;
-        }
-        string memory blockJson;
-        try VmRpcJson(address(vm)).rpcJson("eth_getBlockByNumber", string.concat('["', _hex(hi), '", true]')) returns (
-            string memory found
-        ) {
-            blockJson = found;
-        } catch {
-            return 0;
-        }
-        for (uint256 i; _has(blockJson, string.concat(".transactions[", vm.toString(i), "]")); ++i) {
-            string memory t = string.concat(".transactions[", vm.toString(i), "]");
-            if (
-                _addr(blockJson, string.concat(t, ".from")) == deployer
-                    && _uint(blockJson, string.concat(t, ".nonce")) == nonce
-            ) {
-                return vm.parseJsonBytes32(blockJson, string.concat(t, ".hash"));
-            }
-        }
-        return 0;
-    }
-
-    function _nonceAt(address account, uint256 blockNumber) private returns (bool, uint256) {
-        try vm.rpc(
-            "eth_getTransactionCount", string.concat('["', vm.toString(account), '", "', _hex(blockNumber), '"]')
-        ) returns (
-            bytes memory count
-        ) {
-            return (true, _rpcUint(count));
-        } catch {
-            return (false, 0);
-        }
-    }
-
-    function _rpcUint(bytes memory word) private pure returns (uint256) {
-        return uint256(bytes32(word)) >> (8 * (32 - word.length));
-    }
-
-    /// @dev A JSON-RPC quantity: hex without leading zeros.
-    function _hex(uint256 x) private pure returns (string memory) {
-        bytes memory digits = bytes(vm.toString(bytes32(x)));
-        uint256 start = 2;
-        while (start < 65 && digits[start] == "0") ++start;
-        bytes memory out = new bytes(digits.length - start);
-        for (uint256 i; i < out.length; ++i) {
-            out[i] = digits[start + i];
-        }
-        return string.concat("0x", string(out));
     }
 
     /// @dev The input of the chain's transaction `hash`, whose receipt the chain showed. Virtual only
@@ -368,22 +65,6 @@ abstract contract ForgeBroadcasts is Journal {
             )
         );
         return vm.parseJsonBytes(sent, ".input");
-    }
-
-    function _settleCommit(string memory journal, string memory role, string memory record) private {
-        string memory key = string.concat(".", role, "Commit");
-        (bool has, string memory commit) = _commitAt(record, ".commit");
-        if (has && _has(journal, key) && keccak256(bytes(vm.parseJsonString(journal, key))) == keccak256("pending")) {
-            _put(key, string.concat('"', commit, '"'));
-        }
-    }
-
-    /// @dev forge returns no match as no bytes, one as itself and several as an array.
-    function _matches(string memory json, string memory path) private pure returns (bytes32[] memory hashes) {
-        bytes memory found = vm.parseJson(json, path);
-        if (found.length != 32) return found.length == 0 ? hashes : abi.decode(found, (bytes32[]));
-        hashes = new bytes32[](1);
-        hashes[0] = bytes32(found);
     }
 
     /// @dev The block in which `txHash` created `deployed` on the selected chain, or zero. A
@@ -424,5 +105,64 @@ abstract contract ForgeBroadcasts is Journal {
             initcodeHash := keccak256(add(input, 0x40), sub(mload(input), 0x20))
         }
         return vm.computeCreate2Address(salt, initcodeHash, CREATE2_FACTORY);
+    }
+
+    /// @dev The deployer that `network.json` pins with `deployer`, or zero when it pins none. Reverts
+    ///      if the field is the zero address or forge's default sender.
+    function _pinnedDeployer() internal view returns (address) {
+        string memory network = _networkJson();
+        if (!_has(network, ".deployer")) return address(0);
+        address pinned = _addr(network, ".deployer");
+        require(
+            pinned != address(0) && pinned != address(uint160(uint256(keccak256("foundry default caller")))),
+            "network.json's deployer is the zero or forge's default address: fix it, or remove the field"
+        );
+        return pinned;
+    }
+
+    /// @dev The hashes of `input` without its last `tail` bytes, and of those bytes.
+    function _hashSplit(bytes memory input, uint256 tail) internal pure returns (bytes32 code, bytes32 rest) {
+        // SAFETY: the caller checks `tail <= input.length`, so `cut` does not underflow and both ranges lie
+        // within `input`.
+        assembly ("memory-safe") {
+            let start := add(input, 32)
+            let cut := sub(mload(input), tail)
+            code := keccak256(start, cut)
+            rest := keccak256(add(start, cut), tail)
+        }
+    }
+
+    /// @dev The broadcaster and its next nonce, read inside the broadcast that will use them.
+    function _broadcaster() internal returns (address deployer, uint256 nonce) {
+        (, deployer,) = vm.readCallers();
+        nonce = vm.getNonce(deployer);
+    }
+
+    /// @dev Records the deployer and nonce, which fix the CREATE address, so that a rerun can tell a
+    ///      lost broadcast from a pending one. Reverts if `deployed` is not that address.
+    function _recordSender(string memory role, address deployed, address deployer, uint256 nonce) internal {
+        require(vm.computeCreateAddress(deployer, nonce) == deployed, "a deployment is not at its sender's nonce");
+        _put(string.concat(".", role, "Deployer"), vm.toString(deployer));
+        _put(string.concat(".", role, "Nonce"), vm.toString(nonce));
+    }
+
+    function _initcodeHash(string memory name, bytes memory args) internal view returns (bytes32) {
+        return keccak256(_initcode(name, args));
+    }
+
+    function _initcode(string memory name, bytes memory args) internal view returns (bytes memory) {
+        return bytes.concat(vm.getCode(string.concat(name, ".sol:", name)), args);
+    }
+
+    function _recordBuild(string memory role, address deployed, string memory name) internal {
+        if (_inProbe()) revert StepDue();
+        string memory metadataPath = string.concat(_dir(), "/", name, ".metadata.json");
+        vm.writeFile(
+            metadataPath,
+            vm.parseJsonString(vm.readFile(string.concat("out/", name, ".sol/", name, ".json")), ".rawMetadata")
+        );
+        _put(string.concat(".", role, "Commit"), '"pending"');
+        _put(string.concat(".", role, "CodeHash"), vm.toString(deployed.codehash));
+        _put(string.concat(".", role, "Metadata"), string.concat('"', metadataPath, '"'));
     }
 }

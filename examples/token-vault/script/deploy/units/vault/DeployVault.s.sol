@@ -2,13 +2,13 @@
 pragma solidity ^0.8.27;
 
 import {Role, create} from "sprue/Roles.sol";
-import {Recovers, Unit} from "sprue/Unit.sol";
+import {Unit} from "sprue/Unit.sol";
 import {Step} from "sprue/graph/Step.sol";
 import {TOKEN} from "../token/DeployToken.s.sol";
 import {Token} from "../token/Token.sol";
 
 /// @dev The vault is funded once its date (`vault.input.json`'s `openAt`) has passed.
-contract DeployVault is Unit, Recovers {
+contract DeployVault is Unit {
     function steps() external view returns (Step[] memory s) {
         s = new Step[](3);
         s[0] = _step("vault.deploy", this.deploy).needs("token.deploy");

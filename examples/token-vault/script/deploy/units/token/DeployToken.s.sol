@@ -2,7 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {Role, create} from "sprue/Roles.sol";
-import {Recovers, Unit} from "sprue/Unit.sol";
+import {Unit} from "sprue/Unit.sol";
 import {Step} from "sprue/graph/Step.sol";
 
 uint256 constant SUPPLY = 1000;
@@ -12,7 +12,7 @@ function TOKEN() pure returns (Role memory) {
     return create("token", "Token").unit("token").args(abi.encode(SUPPLY));
 }
 
-contract DeployToken is Unit, Recovers {
+contract DeployToken is Unit {
     function steps() external view returns (Step[] memory s) {
         s = new Step[](2);
         s[0] = _step("token.deploy", this.deploy);

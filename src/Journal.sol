@@ -141,7 +141,7 @@ abstract contract Journal is Script, IProbe {
         return IProbe.probe.selector;
     }
 
-    function _inProbe() internal view returns (bool) {
+    function _inProbe() internal view virtual returns (bool) {
         return _probing;
     }
 
@@ -183,7 +183,7 @@ abstract contract Journal is Script, IProbe {
         // saved, and no caller tells a `Due` view from a step that broadcasts. A probe queues no
         // transaction, and the runner checks the step's own command.
         if (
-            !_probing
+            !_inProbe()
                 && (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast) || vm.isContext(VmSafe.ForgeContext.ScriptDryRun))
         ) {
             _requireOutput("records", "FOUNDRY_BROADCAST", "broadcast", _records());
@@ -269,7 +269,7 @@ abstract contract Journal is Script, IProbe {
     function _done(bool sends) internal returns (string memory command) {
         _stepOpen = false;
         _stepEnded();
-        if (_probing) return "";
+        if (_inProbe()) return "";
         if (!sends) console.log("nothing to send");
         else if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) console.log("broadcasting");
         else console.log("simulated: rerun with --broadcast to send");
@@ -374,7 +374,7 @@ abstract contract Journal is Script, IProbe {
     }
 
     function _put(string memory key, string memory value) internal virtual {
-        if (_probing) revert StepDue();
+        if (_inProbe()) revert StepDue();
         string memory p = _path();
         if (!vm.exists(p)) {
             vm.createDir(_dir(), true);
@@ -402,7 +402,7 @@ abstract contract Journal is Script, IProbe {
     ///      or any run on a rehearsal network. `_certify` consults it. True in a probe, which judges the
     ///      step as its send would run, and refuses the write itself.
     function _writing() internal view virtual returns (bool) {
-        return _probing || vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
+        return _inProbe() || vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)
             || vm.isContext(VmSafe.ForgeContext.ScriptResume) || _rehearsal();
     }
 
@@ -507,7 +507,7 @@ abstract contract Journal is Script, IProbe {
         if (!_writing()) return;
         string memory journal = _journal();
         if (_has(journal, ".checked") && _sameIdentity(journal, checked)) return;
-        if (_probing) revert StepDue();
+        if (_inProbe()) revert StepDue();
         vm.writeJson(checked, _path(), ".checked");
     }
 

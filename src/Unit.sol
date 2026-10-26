@@ -47,6 +47,12 @@ abstract contract Unit is Roles, Declares {
         return isRehearsalNetwork(_networkName());
     }
 
+    /// @notice The `recover` step: rebuilds a lost journal from `_roles()`. A unit whose journal holds more than
+    ///         its roles adds it in `_onRecover`.
+    function recover(string calldata network) external returns (string memory) {
+        return _recoverRoles(network);
+    }
+
     function _requireTestChain() internal view {
         require(isTestChain(), "a test-only unit: name a test chain's network");
     }
@@ -119,14 +125,5 @@ abstract contract Unit is Roles, Declares {
             }
         }
         return vm.createFork(url, blockNumber);
-    }
-}
-
-/// @notice A unit's `recover` step, which rebuilds a lost journal from its `_roles()`: `contract X is Unit,
-///         Recovers`. Opt-in, because the recovery code it compiles costs every unit that carries it.
-/// @dev A unit whose journal holds more than its roles adds it in `_onRecover`.
-abstract contract Recovers is Unit {
-    function recover(string calldata network) external returns (string memory) {
-        return _recoverRoles(network);
     }
 }

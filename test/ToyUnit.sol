@@ -36,6 +36,19 @@ abstract contract ToyJournal is Roles, Declares {
         return otherDeployerAllowed;
     }
 
+    /// @dev The engine's test hooks answer through this unit's `_createdIn` and `_sentInput`.
+    function _testHost() internal view override returns (address) {
+        return address(this);
+    }
+
+    function sprueCreatedIn(bytes32 hash, address deployed, bool create2) external returns (uint256) {
+        return _createdIn(hash, deployed, create2);
+    }
+
+    function sprueSentInput(bytes32 hash) external returns (bytes memory) {
+        return _sentInput(hash);
+    }
+
     function simulate() external {
         simulating = true;
     }
