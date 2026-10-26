@@ -110,10 +110,9 @@ abstract contract Roles is Deployment {
 
     /// @dev This unit's roles that the step proved, for `_certificate()`. Cleared when the step ends.
     Proved[] private _proved;
-    bool private _stepOpen;
     /// @dev Counts ended steps, so that `_thisRun` holds one step's addresses only.
     uint256 private _stepCount;
-    /// @dev The address of each of this unit's roles that `_deploy` or `_at` proved in this step, or that
+    /// @dev The address of each of this unit's roles that `_deploy` or `_at` proved in this open step, or that
     ///      `recover` found. A dry run journals nothing, so a later role's `.args` read an earlier role of the
     ///      same step from here.
     mapping(bytes32 => address) private _thisRun;
@@ -165,14 +164,12 @@ abstract contract Roles is Deployment {
     ///      itself (`_certify(c)` does). An early `return` still reaches the tail.
     modifier step(string calldata network) {
         _use(network);
-        _stepOpen = true;
         _;
         if (_stepOpen) _done();
     }
 
     function _stepEnded() internal virtual override {
         super._stepEnded();
-        _stepOpen = false;
         ++_stepCount;
         delete _proved;
     }
@@ -292,7 +289,7 @@ abstract contract Roles is Deployment {
     }
 
     function _proven(Role memory r, address addr) private {
-        if (!_own(r)) return;
+        if (!_own(r) || !_stepOpen) return;
         _thisRun[_runKey(r.name)] = addr;
         if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind));
     }

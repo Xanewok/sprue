@@ -102,6 +102,10 @@ contract RolesToy is ToyJournal {
         _certify(_certificate().withUint("extra", 5));
     }
 
+    function atToyOutsideAStep() external returns (address) {
+        return _at(toy());
+    }
+
     function atToy(string calldata network) external returns (address a) {
         _use(network);
         a = _at(toy());
@@ -281,6 +285,15 @@ contract RolesTest is Test {
         assertEq(vm.getNonce(ops), 1, "a rerun sent");
         assertEq(unit.checks(), 1, "the reuse ran no check");
         assertEq(unit.atToy(network), toy);
+    }
+
+    function test_at_outsideAStep_provesOnEveryCall() public {
+        _network("outside", vm.toString(ops));
+        unit.deploy(network);
+        uint256 checks = unit.checks();
+        unit.atToyOutsideAStep();
+        unit.atToyOutsideAStep();
+        assertEq(unit.checks(), checks + 2, "a call outside a step reused an earlier proof");
     }
 
     function test_probe_judgesADeployStepDue_thenDone() public {

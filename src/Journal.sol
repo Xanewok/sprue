@@ -120,6 +120,8 @@ function withString(Certificate memory c, string memory key, string memory value
 ///      inputs, `<unit>.input.json`, and the network's `network.json` sit beside it.
 abstract contract Journal is Script, IProbe {
     string internal _usedNetwork;
+    /// @dev From `_adopt` to `_done`: what a step learned is valid only inside it.
+    bool internal _stepOpen;
     /// @dev Set only inside `probe`, whose revert clears it.
     bool private _probing;
 
@@ -175,6 +177,7 @@ abstract contract Journal is Script, IProbe {
         rememberProject();
         require(bytes(network).length != 0, string.concat("name the network: a directory under ", _deployments(), "/"));
         _usedNetwork = network;
+        _stepOpen = true;
         // Here and not in `_use`: a step that selects its own forks never calls `_use`. A dry run too, the
         // graph's plan and rehearse included: `--resume` sends a saved dry run when no broadcast was
         // saved, and no caller tells a `Due` view from a step that broadcasts. A probe queues no
@@ -264,6 +267,7 @@ abstract contract Journal is Script, IProbe {
     ///         next, which it returns. The graph owns the order, so a step never names its
     ///         successor.
     function _done(bool sends) internal returns (string memory command) {
+        _stepOpen = false;
         _stepEnded();
         if (_probing) return "";
         if (!sends) console.log("nothing to send");
