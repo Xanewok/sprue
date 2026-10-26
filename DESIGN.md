@@ -107,7 +107,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    writes the record after the run; the unit's `check` journals it. A graph asks a unit whether it answers the probe with a static call, so asking runs
    nothing. Rejected: a certificate of a `check` that marks steps done (it hides drift after the
    certificate, and a changed bind stays done).
-7. **`check` writes nothing but receipts.** A rerun leaves the journal unchanged.
+7. **`check` settles only deployment evidence.** It journals receipts and the `<role>CodeHash` and `<role>Commit` of what it proves, and nothing else; a rerun leaves the journal unchanged.
 8. **A node is a gate, a view, or a predicate on chain state.** A time gate reads a contract's view where
    one exists (movable until reached); a date in an input is only a forecast. The step's own read-only check
    decides due or done; making the contract enforce the condition when the step runs is the unit author's
