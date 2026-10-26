@@ -113,7 +113,7 @@ if pid == 0:
 sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))' "$@"; }
 nonce() { cast nonce "$OPS" --rpc-url "${1:-$RPC}"; }
 now() { cast block latest -f timestamp --rpc-url "${1:-$RPC}"; }
-all_done() { ! grep -Eqv '^(# (done|chain) |deployer )' <<<"$2" || die "$1 left a node not done: $2"; }
+all_done() { ! grep -Eqv '^(# (done|chain|warning) |deployer )' <<<"$2" || die "$1 left a node not done: $2"; }
 # network <name> <chain id> [openAt]: a fresh network of one chain.
 network() {
   rm -rf "deployments/$1"; mkdir -p "deployments/$1"
@@ -270,7 +270,21 @@ scenario_rerun() {
   before=$(fp); out=$(G run rerun vault.check 2>>log)
   [ "$(fp)" = "$before" ] || die "a finished rerun changed state"
   all_done rerun "$out"
-  echo "ok  rerun a finished target changes no block, nonce or journal"
+  # A source edit after the deploy: the plan warns that the vault runs older code.
+  local vault=script/deploy/units/vault/Vault.sol
+  cp "$vault" "$W.vault-src"
+  sed -i.bak 's/^    constructor(address token) {/    function unused() external pure {}\n\n    constructor(address token) {/' "$vault" && rm -f "$vault.bak"
+  grep -q 'function unused' "$vault" || die "rerun: the vault's source was not edited"
+  out=$(G plan rerun vault.check 2>&1) || true
+  local rc=0 ran; ran=$(G run rerun vault.check 2>&1) || rc=$?
+  mv "$W.vault-src" "$vault"
+  grep -q "^# warning vault.json's vault runs code that this build of Vault no longer makes$" <<<"$out" \
+    || die "rerun: the plan did not warn of older code: $out"
+  [ "$rc" != 2 ] && [ "$(grep -c '^# warning ' <<<"$ran")" = 1 ] \
+    || die "rerun: run did not print the warning once and go on (exit $rc): $ran"
+  out=$(G plan rerun vault.check 2>>log)
+  ! grep -q '^# warning ' <<<"$out" || die "rerun: the plan warned of the code it builds: $out"
+  echo "ok  rerun a finished target changes no block, nonce or journal, and a source edit after it warns in the plan"
 }
 
 # The example's own network, as its README runs it: a lost journal is refused with a `recover` command,

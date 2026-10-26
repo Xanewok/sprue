@@ -923,6 +923,8 @@ async function main(argv) {
   // The commands sent since the last plan. One that the next plan holds again made no progress that
   // the plan can see, even when another step of the same plan did.
   let wave = new Set();
+  // A warning repeats in every plan of the run: it is printed once.
+  const warned = new Set();
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
     // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
@@ -963,6 +965,9 @@ async function main(argv) {
         // The step's command follows and would refuse, so it is not sent.
         out(`${line}\n`);
         throw new Exit(3);
+      } else if (line.startsWith("# warning ")) {
+        if (!warned.has(line)) out(`${line}\n`);
+        warned.add(line);
       } else if (line.startsWith("# chain ") || line.startsWith("# done ")) {
         const chain = /^# chain [^ ]+ ([0-9]+) live$/.exec(line);
         if (chain) live.add(chain[1]);

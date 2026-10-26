@@ -149,5 +149,7 @@ A node that a `check` certified stays done while the journal holds `checked`, wh
 unless the unit's input changed since the certificate (its parsed JSON: a formatting edit does not count):
 then the `check` and the nodes it certifies run again.
 A probed step is judged on the chain every time.
+`plan` prints `# warning` for a role whose journaled creation code this build no longer makes, as after a
+source edit: the role keeps its deployment, and the warning says it runs older code.
 After resetting a development chain, delete the network's journals and that chain's records under
 `broadcast/`, or a rehearsal network's whole directory.

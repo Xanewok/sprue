@@ -216,6 +216,31 @@ contract GuardsTest is Test, Declares {
         vm.removeDir(string.concat("deployments/", net), true);
     }
 
+    function test_plan_warnsOfARoleWhoseCreationCodeThisBuildNoLongerMakes() public {
+        CertGraph g = new CertGraph();
+        string memory net = "rehearsal-guards-older";
+        address token = address(new ToyPayload(1));
+        _certificate(net, token, token, token.codehash);
+        string memory journal = string.concat("deployments/", net, "/fixture.json");
+        vm.writeJson('"deployments/x/ToyPayload.metadata.json"', journal, ".tokenMetadata");
+        vm.writeJson(vm.toString(keccak256(vm.getCode("ToyPayload.sol:ToyPayload"))), journal, ".tokenCreationCodeHash");
+        string memory done = "# chain l2 31337 local\n# done fixture.deploy\n# done fixture.check\n";
+        assertEq(g.plan(net, "fixture.check"), done);
+
+        vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
+        assertEq(
+            g.plan(net, "fixture.check"),
+            "# chain l2 31337 local\n# warning fixture.json's token runs code that this build of ToyPayload no longer makes\n# done fixture.deploy\n# done fixture.check\n"
+        );
+        vm.writeJson('"deployments/x/Gone.metadata.json"', journal, ".tokenMetadata");
+        assertTrue(
+            vm.contains(
+                g.plan(net, "fixture.check"), "# warning fixture.json's token runs code that this build of Gone"
+            )
+        );
+        vm.removeDir(string.concat("deployments/", net), true);
+    }
+
     function test_certify_writesNothingOnADryRun() public {
         CertifyUnit unit = new CertifyUnit();
         string memory net = _network("guards-dry");

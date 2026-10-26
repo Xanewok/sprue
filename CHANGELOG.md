@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> no longer makes` for
+each role of the target's units whose journaled creation code differs from this build, after the `# chain`
+lines; `run` prints each warning once and goes on.
+
 Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").
