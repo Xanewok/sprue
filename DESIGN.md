@@ -81,6 +81,11 @@ reverting with `StepDue`, so a step body that catches that revert (a `try`/`catc
 or a journal write) looks done to the probe and is outside what `quiet` judges. A step that sends on a path only
 its own sender takes is judged by the probe as that sender, up to its first send.
 
+The fixture counts sends from accounts without code. A broadcaster that has code (a contract, or an EIP-7702
+delegated account) is outside the count: Foundry's state diff does not mark which accesses are broadcasts, so a
+call from an account with code cannot be told from a nested call. A real `forge script` deploy signs from an
+EOA.
+
 ## Invariants
 
 Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e.sh`).

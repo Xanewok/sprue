@@ -18,7 +18,8 @@ import {ForgeTranscript} from "./ForgeTranscript.sol";
 ///      watched account can fail the nonce reconciliation, and one from any other account is not seen. Each
 ///      watched sender's nonce must move by its entries; the watched senders are the nodes' senders and forge's
 ///      default sender. A body is entered from the graph, not from `--sender`; `quiet` probes it as the sender
-///      too, up to its first send (DESIGN.md, "The steps the fixture judges").
+///      too, up to its first send. A broadcaster that has code is outside the send count: the state diff does not
+///      mark broadcasts, so its call looks like a nested one (DESIGN.md, "The steps the fixture judges").
 abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     Graph private _graph;
     string private _net;
