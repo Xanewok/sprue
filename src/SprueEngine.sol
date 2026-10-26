@@ -188,12 +188,9 @@ interface ISprueEngine {
         string calldata role,
         bytes calldata args
     ) external view;
-    function requireCreateIdentity(
-        Ctx calldata ctx,
-        string calldata journal,
-        string calldata role,
-        bytes calldata args
-    ) external view;
+    function requireCreateIdentity(Ctx calldata ctx, string calldata journal, string calldata role, bytes calldata args)
+        external
+        view;
     function requireCreateRecord(
         Ctx calldata ctx,
         string calldata unit,
@@ -370,23 +367,16 @@ contract SprueEngine is ForgeBroadcasts {
         return _hasRecoverStep();
     }
 
-    function recordReceipt(
-        Ctx calldata,
-        string calldata journal,
-        string calldata role,
-        address deployed,
-        bool create2
-    ) external {
+    function recordReceipt(Ctx calldata, string calldata journal, string calldata role, address deployed, bool create2)
+        external
+    {
         _recordReceipt(journal, role, deployed, create2);
     }
 
-    function findReceipt(
-        Ctx calldata,
-        string calldata journal,
-        string calldata role,
-        address deployed,
-        bool create2
-    ) external returns (bytes32, uint256, string memory) {
+    function findReceipt(Ctx calldata, string calldata journal, string calldata role, address deployed, bool create2)
+        external
+        returns (bytes32, uint256, string memory)
+    {
         return _findReceipt(journal, role, deployed, create2);
     }
 
@@ -533,9 +523,7 @@ contract SprueEngine is ForgeBroadcasts {
         _requireDeployable(sender, strict, allowed);
     }
 
-    function recordIntent(Ctx calldata, string calldata role, string calldata artifact, bytes calldata args)
-        external
-    {
+    function recordIntent(Ctx calldata, string calldata role, string calldata artifact, bytes calldata args) external {
         _recordIntent(role, artifact, args);
     }
 
@@ -556,7 +544,9 @@ contract SprueEngine is ForgeBroadcasts {
     }
 
     function recordDeployment(Ctx calldata, string calldata journal, Deployed calldata d) external returns (uint256) {
-        return _recordDeployment(journal, d.role, d.artifact, d.args, d.addr, d.recorded, d.deployer, d.nonce, d.sent, d.dirty);
+        return _recordDeployment(
+            journal, d.role, d.artifact, d.args, d.addr, d.recorded, d.deployer, d.nonce, d.sent, d.dirty
+        );
     }
 
     function use(Ctx calldata) external returns (string memory) {
@@ -668,7 +658,6 @@ contract SprueEngine is ForgeBroadcasts {
             return (false, 0);
         }
     }
-
 
     ///      sender. An unreadable record is refused, as one that may hold it. A missing records
     ///      directory holds none.

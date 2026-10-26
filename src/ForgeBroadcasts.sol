@@ -12,8 +12,8 @@ interface VmRpcJson {
     function rpcJson(string calldata method, string calldata params) external returns (string memory);
 }
 
-/// @dev The only Solidity reader of forge's `broadcast/` records in this library. They are the evidence a
-///      lost journal is rebuilt from: `broadcast/<script>/<chain id>/<step>-latest.json`, the
+/// @dev What a unit and `SprueEngine` share about forge's `broadcast/` records, which only the engine reads. They
+///      are the evidence a lost journal is rebuilt from: `broadcast/<script>/<chain id>/<step>-latest.json`, the
 ///      timestamped records beside it, and multi-chain records under `broadcast/multi/`, whose runs
 ///      sit in `.deployments[]`. A transaction's hash in a record is only a candidate, because older
 ///      forge versions ordered `transactions[].hash` by the order the sends returned. The receipts
@@ -39,7 +39,6 @@ abstract contract ForgeBroadcasts is Journal {
         /// @dev The current inputs' constructor arguments, set by `_requireCurrent`.
         bytes args;
     }
-
 
     function _endsWith(string memory s, string memory suffix) internal pure returns (bool) {
         bytes memory b = bytes(s);

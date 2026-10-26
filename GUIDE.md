@@ -49,8 +49,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    transactions can change, such as an admin or a proxy's implementation. `.unit("<unit>")` is the role as
    other units read it with `_at`. A role kept in a state variable puts the code its functions reach into
    the unit's creation code too, which can make the graph too large for forge to deploy against a node.
-   List the unit's roles in `_roles()`, in the order its certificate takes them. `contract X is Unit,
-   Recovers` adds a `recover` step that rebuilds a lost journal of those roles.
+   List the unit's roles in `_roles()`, in the order its certificate takes them. Every unit has a `recover`
+   step that rebuilds a lost journal of those roles.
    Write each step as `function deploy(string calldata network) external step(network) { ... }`.
    `_deploy(role)` sends a role or proves its reuse, and `_at(role)` proves it without a send:
 

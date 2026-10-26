@@ -221,7 +221,7 @@ abstract contract Deployment is ForgeBroadcasts {
         if (found.addr == address(0)) return;
         Create memory landed = _engine().requireCurrent(_ctx(false, false), found, artifact, args);
         (found.path, found.record, found.run, found.key, found.args) =
-            (landed.path, landed.record, landed.run, landed.key, landed.args);
+        (landed.path, landed.record, landed.run, landed.key, landed.args);
     }
 
     function _journalRecovered(string memory journal, string[2][] memory roles, Create[] memory found) internal {
@@ -451,8 +451,7 @@ abstract contract Deployment is ForgeBroadcasts {
         address at,
         function(address, bytes memory) internal authenticate
     ) internal returns (bool sent) {
-        (bool journaled, bool landed) =
-            _engine().create2Pre(_ctx(true, false), journal, role, artifact, args, salt, at);
+        (bool journaled, bool landed) = _engine().create2Pre(_ctx(true, false), journal, role, artifact, args, salt, at);
         // An adopted role is proven as a reused one: its initcode does not fix its runtime code or state.
         if (landed) authenticate(at, args);
 
@@ -468,9 +467,11 @@ abstract contract Deployment is ForgeBroadcasts {
 
         if (!_writing()) return sent;
         if (!journaled) _onDeployment(journal, role, args);
-        _engine().create2Record(
-            _ctx(true, false), Deployed(role, artifact, args, at, address(0), address(0), 0, salt, journaled, sent, _dirty())
-        );
+        _engine()
+            .create2Record(
+                _ctx(true, false),
+                Deployed(role, artifact, args, at, address(0), address(0), 0, salt, journaled, sent, _dirty())
+            );
     }
 
     /// @dev `sprue run` sets the variable only for an attended step, and only when its tree had a change at the
@@ -724,5 +725,4 @@ abstract contract Deployment is ForgeBroadcasts {
     function _optInVariable() internal pure virtual returns (string memory) {
         return "UNSAFE_UNEXPECTED_DEPLOYER";
     }
-
 }
