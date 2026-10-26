@@ -63,13 +63,14 @@ function extern(string memory name, string memory key, bytes32 codeHash) pure re
 library RoleLib {
     /// @dev Constructor arguments fixed in the source.
     function args(Role memory r, bytes memory value) internal pure returns (Role memory) {
+        if (r.computed) revert(_twice(r));
         r.fixedArgs = value;
-        r.computed = false;
         return r;
     }
 
     /// @dev Constructor arguments built when used, from the inputs and the roles already deployed.
     function args(Role memory r, function() internal returns (bytes memory) fn) internal pure returns (Role memory) {
+        if (r.fixedArgs.length != 0) revert(_twice(r));
         r.argsFn = fn;
         r.computed = true;
         return r;
@@ -92,6 +93,11 @@ library RoleLib {
 
 function _noArgs() pure returns (bytes memory) {}
 
+/// @dev Neither form may win silently: an author who wrote both meant one.
+function _twice(Role memory r) pure returns (string memory) {
+    return string.concat(r.name, "'s .args is given both as bytes and as a function: keep one");
+}
+
 function _ensureNothing(address, bytes memory) pure {}
 
 /// @dev Guarantees: `_deploy` and `_at` return a role only once its journaled identity gives its address, its
@@ -103,14 +109,13 @@ abstract contract Roles is Deployment {
         string name;
         address addr;
         Kind kind;
+        /// @dev A step may select several forks: a proof holds on its own chain only.
+        uint256 chainId;
     }
 
+    /// @dev This unit's roles that `_deploy` or `_at` proved in the open step, or that `recover` found. A dry
+    ///      run journals nothing, so a later role's `.args` read an earlier role of the same step from here.
     Proved[] private _proved;
-    uint256 private _stepCount;
-    /// @dev The address of each of this unit's roles that `_deploy` or `_at` proved in this open step, or that
-    ///      `recover` found. A dry run journals nothing, so a later role's `.args` read an earlier role of the
-    ///      same step from here.
-    mapping(bytes32 => address) private _thisRun;
     mapping(bytes32 => bool) private _checking;
 
     /// @dev The unit's roles, in the order its certificate lists them and its `recover` journals them.
@@ -136,24 +141,6 @@ abstract contract Roles is Deployment {
         (r[0], r[1], r[2], r[3]) = (a, b, c, d);
     }
 
-    function _list(Role memory a, Role memory b, Role memory c, Role memory d, Role memory e)
-        internal
-        pure
-        returns (Role[] memory r)
-    {
-        r = new Role[](5);
-        (r[0], r[1], r[2], r[3], r[4]) = (a, b, c, d, e);
-    }
-
-    function _list(Role memory a, Role memory b, Role memory c, Role memory d, Role memory e, Role memory f)
-        internal
-        pure
-        returns (Role[] memory r)
-    {
-        r = new Role[](6);
-        (r[0], r[1], r[2], r[3], r[4], r[5]) = (a, b, c, d, e, f);
-    }
-
     /// @dev Ends the step with `_done()` unless the body did, as `_certify` does. An early `return` still
     ///      reaches it.
     modifier step(string calldata network) {
@@ -164,7 +151,6 @@ abstract contract Roles is Deployment {
 
     function _stepEnded() internal virtual override {
         super._stepEnded();
-        ++_stepCount;
         delete _proved;
     }
 
@@ -184,7 +170,7 @@ abstract contract Roles is Deployment {
             _deployRoleCreate2(journal, r.name, r.artifact, a, salt, at, r.ensureFn);
             addr = at;
         }
-        _checking[_runKey(r.name)] = false;
+        _checking[keccak256(bytes(r.name))] = false;
         _proven(r, addr);
     }
 
@@ -193,10 +179,10 @@ abstract contract Roles is Deployment {
     function _at(Role memory r) internal returns (address addr) {
         bool own = _own(r);
         if (own) {
-            addr = _thisRun[_runKey(r.name)];
-            if (addr != address(0)) return addr;
+            uint256 proved = _provedIndex(r.name);
+            if (proved != type(uint256).max) return _proved[proved].addr;
+            _requireDeclared(r);
         }
-        if (own) _requireDeclared(r);
         if (r.kind == Kind.Extern) {
             addr = _requiredAddress(_inputFile(own ? _unit() : r.declaredBy), r.key);
             _requireCode(addr, r.name);
@@ -215,7 +201,7 @@ abstract contract Roles is Deployment {
             _enterCheck(r);
             r.ensureFn(addr, a);
         }
-        _checking[_runKey(r.name)] = false;
+        _checking[keccak256(bytes(r.name))] = false;
         _proven(r, addr);
     }
 
@@ -248,7 +234,7 @@ abstract contract Roles is Deployment {
     }
 
     function _enterCheck(Role memory r) private {
-        bytes32 key = _runKey(r.name);
+        bytes32 key = keccak256(bytes(r.name));
         require(
             !_checking[key],
             string.concat(r.name, "'s .ensure reads ", r.name, " itself: use the address and arguments it is given")
@@ -273,10 +259,6 @@ abstract contract Roles is Deployment {
         return r.computed ? r.argsFn() : r.fixedArgs;
     }
 
-    function _runKey(string memory name) private view returns (bytes32) {
-        return keccak256(abi.encode(_stepCount, block.chainid, name));
-    }
-
     function _create2Input(Role memory r) private view returns (bytes32 salt, address at) {
         Input memory input = _inputFile(_unit());
         salt = vm.parseBytes32(_decided(input, string.concat(r.key, ".salt")));
@@ -285,13 +267,14 @@ abstract contract Roles is Deployment {
 
     function _proven(Role memory r, address addr) private {
         if (!_own(r) || !_stepOpen) return;
-        _thisRun[_runKey(r.name)] = addr;
-        if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind));
+        if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind, block.chainid));
     }
 
     function _provedIndex(string memory name) private view returns (uint256) {
         for (uint256 i; i < _proved.length; ++i) {
-            if (keccak256(bytes(_proved[i].name)) == keccak256(bytes(name))) return i;
+            if (keccak256(bytes(_proved[i].name)) == keccak256(bytes(name)) && _proved[i].chainId == block.chainid) {
+                return i;
+            }
         }
         return type(uint256).max;
     }
@@ -315,13 +298,6 @@ abstract contract Roles is Deployment {
             uint256 at = _provedIndex(declared[i].name);
             require(at != type(uint256).max, string.concat("the step did not prove ", declared[i].name));
             order[n++] = _proved[at];
-        }
-        for (uint256 i; i < _proved.length; ++i) {
-            bool listed;
-            for (uint256 j; j < n && !listed; ++j) {
-                listed = keccak256(bytes(order[j].name)) == keccak256(bytes(_proved[i].name));
-            }
-            if (!listed) order[n++] = _proved[i];
         }
         string memory journal = _journal();
         c = _certificate(order[0].name, order[0].addr);
@@ -358,7 +334,7 @@ abstract contract Roles is Deployment {
             bytes memory a = _argsOf(r);
             found[i] = _createToRecover(journal, r.name, r.artifact, sender, _initcodeHash(r.artifact, a));
             if (found[i].addr == address(0)) continue;
-            _thisRun[_runKey(r.name)] = found[i].addr;
+            _proved.push(Proved(r.name, found[i].addr, Kind.Create, block.chainid));
             _requireCurrent(found[i], r.artifact, a);
         }
         _journalRecovered(journal, names, found);

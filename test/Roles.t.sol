@@ -102,6 +102,26 @@ contract RolesToy is ToyJournal {
         _certify(_certificate().withUint("extra", 5));
     }
 
+    function bothArgs(bool bytesFirst) external pure {
+        Role memory r = create("both", "ToyPayload");
+        if (bytesFirst) r.args(abi.encode(uint256(1))).args(_toyArgs);
+        else r.args(_toyArgs).args(abi.encode(uint256(1)));
+    }
+
+    /// @dev `vm.chainId` stands for a fork switch: no RPC serves a second chain under `forge test`.
+    function atToyOnTwoChains(string calldata network, uint256 other, bool emptyThere)
+        external
+        step(network)
+        returns (address here, address there)
+    {
+        here = _at(toy());
+        _at(toy());
+        vm.chainId(other);
+        if (emptyThere) vm.etch(here, "");
+        there = _at(toy());
+        vm.chainId(31337);
+    }
+
     function atToyOutsideAStep() external returns (address) {
         return _at(toy());
     }
@@ -285,6 +305,33 @@ contract RolesTest is Test {
         assertEq(vm.getNonce(ops), 1, "a rerun sent");
         assertEq(unit.checks(), 1, "the reuse ran no check");
         assertEq(unit.atToy(network), toy);
+    }
+
+    function test_args_refusesBothForms() public {
+        vm.expectRevert(bytes("both's .args is given both as bytes and as a function: keep one"));
+        unit.bothArgs(true);
+        vm.expectRevert(bytes("both's .args is given both as bytes and as a function: keep one"));
+        unit.bothArgs(false);
+    }
+
+    function test_at_provesAgainOnAnotherChainOfTheStep() public {
+        _network("chains", vm.toString(ops));
+        unit.deploy(network);
+        unit.trustTestCreations();
+        uint256 checks = unit.checks();
+        (address here, address there) = unit.atToyOnTwoChains(network, 4242, false);
+        assertEq(there, here, "each chain's address");
+        assertEq(unit.checks(), checks + 2, "one proof for each chain");
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "toy at ",
+                    vm.toString(here),
+                    " has no code: if the RPC lags behind the chain, run again once it shows the deployment"
+                )
+            )
+        );
+        unit.atToyOnTwoChains(network, 4242, true);
     }
 
     function test_at_outsideAStep_provesOnEveryCall() public {
