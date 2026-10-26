@@ -102,9 +102,8 @@ targets and data of a step's transactions can still depend on what it reads.
 The rule of the verifying trace also decides two runs at once. A read is validated only at the commit
 point, the inclusion of the transaction, and only code in the transaction can validate there: a contract's
 own guard, the sender's nonce or a Safe's nonce. forge simulates and sends at the sender's latest nonce, so
-when two runs with one key send a step of one transaction, only one of the two lands. A journal, a
-certificate and sprue's run lock validate nothing on chain: two runs with different keys can both send a
-top-up that each computed from a stale balance.
+when two runs with one key send a step of one transaction, only one of the two lands. A journal and sprue's run lock validate nothing on chain: two runs with different
+keys can both send a top-up that each computed from a stale balance.
 
 ## 3. Modes as handlers of one step
 

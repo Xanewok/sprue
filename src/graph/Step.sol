@@ -33,9 +33,8 @@ enum StepKind {
     Until
 }
 
-/// @dev A step as a unit declares it. A step with `fn` `check` and no `.due` is the certifier (see
-///      `Graph._validateGraph`), so use that name for nothing else. A step with neither `.due` nor
-///      `.doneByCheck`, of a unit that answers `IProbe.probe`, is judged by a probe. `onChain`, `readChains`, `isSlow`
+/// @dev A step as a unit declares it. A step with no `.due` of a unit that answers `IProbe.probe` is judged by
+///      a probe; a step with neither is refused. `onChain`, `readChains`, `isSlow`
 ///      and `dueSelector` stand for `on`, `reads`, `slow` and `due`: solc rejects a member that shares
 ///      a name with a library function attached to the struct.
 struct Step {

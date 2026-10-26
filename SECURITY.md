@@ -42,6 +42,9 @@ end-to-end scenario for each invariant.
   a step that repeats a send from one that does not.
 - A declared role's `.ensure` must check the state that later transactions change.
 - `Due` views must report whether the step still has work.
+- A step that depends on another unit's configuration reads it live, and should declare
+  `.needs("<unit>.check")`: sprue proves another unit's role by its identity and code, and nothing enforces
+  the edge or the read.
 - Key custody, and the contents of `sprue.json` and `network.json`.
 
 ## Limits

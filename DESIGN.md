@@ -67,7 +67,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | A probe sends nothing, writes no journal or build record, and keeps no EVM state; a step is due at its first send or write, and a direct broadcast is refused. | `Probe.t.sol` `test_plan_*` |
 | A production node never depends on a test-only node. | `StepBuilders.t.sol` `test_productionNeverNeedsATestNode` |
 | A malformed pin is refused before any send; under a pin, another key sends a CREATE2 role only with the opt-in, and a rerun that sends nothing passes with any sender. | `CoreUnit.t.sol` `test_pin_*`; `Create2Code.t.sol` `test_deployRoleCreate2_refusesAnotherDeployerThanThePin_beforeTheFactoryCall`, `test_deployRoleCreate2_anotherDeployerThanThePin_sendsWithTheOptIn` |
-| An input date on a step off the default chain is refused . | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
+| An input date on a step off the default chain is refused. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
 | A send builds into `out/`, as `forge config` resolves it. | e2e `scenario_failure` |
@@ -97,10 +97,10 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
    broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.
 6. **Done has three forms, and a step needs one.** A probe: the step itself, run and reverted, is due at
-   its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). The
-   For a node with no step, a predicate (`until`) that anyone may satisfy. Construction refuses a step with
+   its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). For a
+   node with no step, a predicate (`until`) that anyone may satisfy. Construction refuses a step with
    none (`MissingDoneRule`). A `check` is an ordinary probed step: `_endCheck` makes it due only while a
-   deployed role's receipt is unjournaled.
+   deployed role's receipt is unjournaled and findable in the unit's records or on the chain.
    The probe runs under a prank, because forge refuses its broadcast cheatcodes under one: forge keeps the
    transactions of a reverted call in the dry run, which `--resume` would send. It pranks as the step's
    sender, `.by` or the plan's own. A receipt still to journal is not work for a deploy step, since forge

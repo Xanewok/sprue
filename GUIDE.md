@@ -86,7 +86,7 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `_endCheck()` ends a `check` step: it refuses unless the step proved every role of `_roles()`, so a
    `check` calls `_at` for every role, even one it asserts nothing about, and it journals each deployed
    role's receipt. A `check` is done while what it asserts holds: a probe runs it at every plan, and it is
-   due only while a receipt is unrecorded. A role the unit uses must be in `_roles()`. Where
+   due only while a receipt is unrecorded and findable. A role the unit uses must be in `_roles()`. Where
    `network.json` pins a `deployer`, only the pin sends a CREATE role, and only the pin's CREATE roles are
    proven. A CREATE2 role is proven whoever sent
    it, so its `.ensure` checks what its sender decides, such as an owner set from `tx.origin`. Another
