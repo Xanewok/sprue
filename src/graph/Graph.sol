@@ -109,6 +109,9 @@ abstract contract Graph is Script {
     ///         listed here:
     ///         - `# chain <chain> <chain id> <kind>`: a chain of `network.json`. These lines come
     ///           before everything else.
+    ///         - `# warning <text>`: for the person running the plan; it changes nothing, and a reader of
+    ///           the plan ignores it. These lines follow the `# chain` lines, and repeat in every plan while
+    ///           what they report holds.
     ///         - `# done <id>`: the chain or the journal shows the node done. No command follows.
     ///         - `# not before <unix time> [on <rpc>] <id>[, movable until reached]`: the node's date
     ///           has not been reached on that chain (without `on`, the default chain). The command
@@ -125,6 +128,7 @@ abstract contract Graph is Script {
         for (uint256 i; i < header.length; ++i) {
             out = _line(out, header[i]);
         }
+        out = _warnings(out, network, visits, count);
         for (uint256 i; i < count; ++i) {
             Visit memory visit = visits[i];
             Node storage n = _nodes[visit.node];
@@ -699,6 +703,28 @@ abstract contract Graph is Script {
 
     /// @dev The comment lines `plan` opens with. `FileGraph` prints one `# chain` line per chain.
     function _chainLines(string memory) internal view virtual returns (string[] memory) {
+        return new string[](0);
+    }
+
+    function _warnings(string memory out, string memory network, Visit[] memory visits, uint256 count)
+        private
+        view
+        returns (string memory)
+    {
+        string[] memory units = new string[](count);
+        for (uint256 i; i < count; ++i) {
+            units[i] = vm.split(_nodes[visits[i].node].id, ".")[0];
+        }
+        string[] memory warnings = _warningLines(network, units);
+        for (uint256 i; i < warnings.length; ++i) {
+            out = _line(out, string.concat("# warning ", warnings[i]));
+        }
+        return out;
+    }
+
+    /// @dev The text of each `# warning` line for the plan of network `net`, whose nodes belong to `units`
+    ///      (a unit may repeat).
+    function _warningLines(string memory, string[] memory) internal view virtual returns (string[] memory) {
         return new string[](0);
     }
 

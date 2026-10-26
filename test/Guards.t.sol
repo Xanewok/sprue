@@ -216,6 +216,38 @@ contract GuardsTest is Test, Declares {
         vm.removeDir(string.concat("deployments/", net), true);
     }
 
+    function test_plan_warnsOfARoleWhoseCreationCodeThisBuildNoLongerMakes() public {
+        CertGraph g = new CertGraph();
+        string memory net = "rehearsal-guards-older";
+        address token = address(new ToyPayload(1));
+        _certificate(net, token, token, token.codehash);
+        string memory journal = string.concat("deployments/", net, "/fixture.json");
+        vm.writeJson('"deployments/x/ToyPayload.metadata.json"', journal, ".tokenMetadata");
+        vm.writeJson(vm.toString(keccak256(vm.getCode("ToyPayload.sol:ToyPayload"))), journal, ".tokenCreationCodeHash");
+        string memory done = "# chain l2 31337 local\n# done fixture.deploy\n# done fixture.check\n";
+        assertEq(g.plan(net, "fixture.check"), done);
+
+        vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
+        assertEq(
+            g.plan(net, "fixture.check"),
+            "# chain l2 31337 local\n# warning fixture.json's token runs code that this build of ToyPayload no longer makes; it stays deployed, and no step replaces it\n# done fixture.deploy\n# done fixture.check\n"
+        );
+        vm.writeJson('"0x12"', journal, ".tokenCreationCodeHash");
+        assertEq(g.plan(net, "fixture.check"), done, "a malformed hash");
+        vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
+        vm.writeJson("[7]", journal, ".tokenMetadata");
+        assertEq(g.plan(net, "fixture.check"), done, "a metadata path that is not a string");
+        vm.writeJson('"deployments/x/Gone.metadata.json"', journal, ".tokenMetadata");
+        assertTrue(
+            vm.contains(
+                g.plan(net, "fixture.check"), "# warning fixture.json's token runs code that this build of Gone"
+            )
+        );
+        vm.writeFile(journal, vm.replace(vm.readFile(journal), '"tokenCreationCodeHash"', '"tokenCreationCode"'));
+        assertEq(g.plan(net, "fixture.check"), done, "a role without a recorded creation code hash");
+        vm.removeDir(string.concat("deployments/", net), true);
+    }
+
     function test_certify_writesNothingOnADryRun() public {
         CertifyUnit unit = new CertifyUnit();
         string memory net = _network("guards-dry");

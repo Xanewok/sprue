@@ -93,6 +93,91 @@ abstract contract FileGraph is Graph {
         }
     }
 
+    /// @dev One per role whose journaled creation code this build no longer makes: the role keeps its
+    ///      deployment, which a later source edit must not orphan, and a person sees that it runs older code.
+    function _warningLines(string memory net, string[] memory units)
+        internal
+        view
+        override
+        returns (string[] memory lines)
+    {
+        lines = new string[](0);
+        for (uint256 u; u < units.length; ++u) {
+            bool seen;
+            for (uint256 v; v < u && !seen; ++v) {
+                seen = keccak256(bytes(units[v])) == keccak256(bytes(units[u]));
+            }
+            if (!seen) lines = _olderRoles(lines, net, units[u]);
+        }
+    }
+
+    /// @dev `lines` and a line for each role of `unit`'s journal whose code is older than this build.
+    function _olderRoles(string[] memory lines, string memory net, string memory unit)
+        private
+        view
+        returns (string[] memory)
+    {
+        string memory path = string.concat(deploymentsDir(), "/", net, "/", unit, ".json");
+        if (!vm.exists(path)) return lines;
+        string memory journal = vm.readFile(path);
+        // A journal a person edited by hand may not parse: a warning never stops a plan.
+        string[] memory keys;
+        try vm.parseJsonKeys(journal, "$") returns (string[] memory parsed) {
+            keys = parsed;
+        } catch {
+            return lines;
+        }
+        for (uint256 k; k < keys.length; ++k) {
+            uint256 at = vm.indexOf(keys[k], "CreationCodeHash");
+            if (at == type(uint256).max || at + 16 != bytes(keys[k]).length) continue;
+            string memory older = _olderCode(journal, unit, vm.replace(keys[k], "CreationCodeHash", ""));
+            if (bytes(older).length == 0) continue;
+            string[] memory grown = new string[](lines.length + 1);
+            for (uint256 i; i < lines.length; ++i) {
+                grown[i] = lines[i];
+            }
+            grown[lines.length] = older;
+            lines = grown;
+        }
+        return lines;
+    }
+
+    /// @dev Empty unless `role`'s recorded creation code differs from this build's artifact, which the role's
+    ///      `<role>Metadata` file names.
+    function _olderCode(string memory journal, string memory unit, string memory role)
+        private
+        view
+        returns (string memory)
+    {
+        string memory key = string.concat(".", role, "Metadata");
+        if (!vm.keyExistsJson(journal, key)) return "";
+        string memory metadata;
+        bytes32 recorded;
+        try vm.parseJsonString(journal, key) returns (string memory value) {
+            metadata = value;
+        } catch {
+            return "";
+        }
+        try vm.parseJsonBytes32(journal, string.concat(".", role, "CreationCodeHash")) returns (bytes32 value) {
+            recorded = value;
+        } catch {
+            return "";
+        }
+        string[] memory path = vm.split(metadata, "/");
+        string memory artifact = vm.replace(path[path.length - 1], ".metadata.json", "");
+        try vm.getCode(string.concat(artifact, ".sol:", artifact)) returns (bytes memory code) {
+            if (keccak256(code) == recorded) return "";
+        } catch {}
+        return string.concat(
+            unit,
+            ".json's ",
+            role,
+            " runs code that this build of ",
+            artifact,
+            " no longer makes; it stays deployed, and no step replaces it"
+        );
+    }
+
     /// @dev Reverts if the step has no chain to send on, or names a chain that `network.json` lacks.
     ///      A step that creates its own forks needs every chain it reads in `network.json`. Any other
     ///      step's script may skip a read chain that a network omits, such as a local one.
