@@ -228,23 +228,35 @@ contract GuardsTest is Test, Declares {
         assertEq(g.plan(net, "fixture.check"), done);
 
         vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
+        assertEq(g.plan(net, "fixture.check"), done, "a unit whose nodes are all done");
+        string memory warning =
+            "# warning fixture.json's token runs code that this build of ToyPayload does not make; it stays deployed, and no step replaces it\n";
         assertEq(
-            g.plan(net, "fixture.check"),
-            "# chain l2 31337 local\n# warning fixture.json's token runs code that this build of ToyPayload no longer makes; it stays deployed, and no step replaces it\n# done fixture.deploy\n# done fixture.check\n"
+            g.plan(net, "fixture.check", true),
+            string.concat("# chain l2 31337 local\n", warning, "# done fixture.deploy\n# done fixture.check\n")
         );
         vm.writeJson('"0x12"', journal, ".tokenCreationCodeHash");
-        assertEq(g.plan(net, "fixture.check"), done, "a malformed hash");
+        assertEq(g.plan(net, "fixture.check", true), done, "a malformed hash");
         vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
         vm.writeJson("[7]", journal, ".tokenMetadata");
-        assertEq(g.plan(net, "fixture.check"), done, "a metadata path that is not a string");
+        assertEq(g.plan(net, "fixture.check", true), done, "a metadata path that is not a string");
         vm.writeJson('"deployments/x/Gone.metadata.json"', journal, ".tokenMetadata");
         assertTrue(
             vm.contains(
-                g.plan(net, "fixture.check"), "# warning fixture.json's token runs code that this build of Gone"
+                g.plan(net, "fixture.check", true), "# warning fixture.json's token runs code that this build of Gone"
             )
         );
+        vm.writeJson('"deployments/x/ToyPayload.metadata.json"', journal, ".tokenMetadata");
+        vm.writeFile(
+            string.concat("deployments/", net, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"probe"}}}'
+        );
+        vm.writeFile(string.concat("deployments/", net, "/fixture.input.json"), '{"n":2}');
+        vm.writeJson(vm.toString(keccak256(vm.parseJson('{"n":1}'))), journal, ".checked.inputHash");
+        assertTrue(vm.contains(g.plan(net, "fixture.check"), warning), "a unit with a node due");
         vm.writeFile(journal, vm.replace(vm.readFile(journal), '"tokenCreationCodeHash"', '"tokenCreationCode"'));
-        assertEq(g.plan(net, "fixture.check"), done, "a role without a recorded creation code hash");
+        assertFalse(
+            vm.contains(g.plan(net, "fixture.check"), "# warning"), "a role without a recorded creation code hash"
+        );
         vm.removeDir(string.concat("deployments/", net), true);
     }
 

@@ -2,10 +2,11 @@
 
 ## Unreleased
 
-`plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> no longer makes; it
+`plan` prints `# warning <unit>.json's <role> runs code that this build of <artifact> does not make; it
 stays deployed, and no step replaces it` for each role of the target's units whose journaled creation code
-differs from this build, after the `# chain` lines; `run` prints each warning once and goes on. The line
-repeats in every plan while the role runs older code: a tool that reads plan lines must ignore `# warning`.
+differs from this build, after the `# chain` lines, while one of the unit's nodes in the plan is not done;
+`plan --verbose` also prints them for done units. `run` prints each warning once and goes on.
+A tool that reads plan lines must ignore `# warning`.
 
 Roles: a unit declares each contract once, by how its address is made, in an `internal pure` function:
 `create(name, artifact)`, `create2(name, artifact, key)` (the input's `<key>.salt` and `<key>.address`) or

@@ -28,7 +28,7 @@ const WIN = process.platform === "win32";
 // Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
 const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
-const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan <network> <target> | run [flags] <network> <target>
+const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan [--verbose] <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
 
 Flags may appear anywhere after the command.
@@ -36,7 +36,9 @@ Flags may appear anywhere after the command.
   list                      the targets: nodes no other node depends on
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
-  plan <network> <target>   the commands that reach target; reads the default chain's rpc; sends nothing
+  plan [--verbose] <network> <target>
+                            the commands that reach target; reads the default chain's rpc; sends nothing;
+                            --verbose also prints the # warning lines of done units
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -423,14 +425,17 @@ async function main(argv) {
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, dirtyOk = false, keep = false, stopOnly = false;
+  let wait = false, dirtyOk = false, keep = false, stopOnly = false, verbose = false;
   const signers = [], blocks = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
-    if (verb === "plan") pos.push(a);
+    if (a === "--verbose") {
+      if (verb !== "plan") fail(2, "refusing --verbose: only plan takes it");
+      verbose = true;
+    } else if (verb === "plan") pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
     else if (a === "--account" || a === "--ledger" || a === "--trezor") {
       if (rehearsing) fail(2, `refusing ${a}: rehearse sends as each step's sender on its forks, and no key signs`);
@@ -631,7 +636,7 @@ async function main(argv) {
   const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
   const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
   const plan = () =>
-    graph(GRAPH, "PLAN", "plan(string,string)", [network, target, "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
+    graph(GRAPH, "PLAN", verbose ? "plan(string,string,bool)" : "plan(string,string)", [network, target, ...(verbose ? ["true"] : []), "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
   if (verb === "plan") {
     for (const l of await plan()) out(`${l}\n`);
     return 0;

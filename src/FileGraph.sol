@@ -93,8 +93,8 @@ abstract contract FileGraph is Graph {
         }
     }
 
-    /// @dev One per role whose journaled creation code this build no longer makes: the role keeps its
-    ///      deployment, which a later source edit must not orphan, and a person sees that it runs older code.
+    /// @dev One per role whose journaled creation code this build does not make: the role keeps its
+    ///      deployment, which a later source edit must not orphan.
     function _warningLines(string memory net, string[] memory units)
         internal
         view
@@ -174,7 +174,7 @@ abstract contract FileGraph is Graph {
             role,
             " runs code that this build of ",
             artifact,
-            " no longer makes; it stays deployed, and no step replaces it"
+            " does not make; it stays deployed, and no step replaces it"
         );
     }
 
