@@ -334,6 +334,28 @@ contract RolesTest is Test {
         unit.atToyOnTwoChains(network, 4242, true);
     }
 
+    function test_trustTestCreationOf_trustsTheJournaledIntentOfOneRoleOnly() public {
+        _network("trust-one", vm.toString(ops));
+        unit.deployBoth(network);
+        RolesToy later = new RolesToy();
+        later.setTestSender(ops);
+        later.trustTestCreationOf(_journal(), "toy");
+        assertEq(later.atToy(network), vm.parseJsonAddress(_journal(), ".toy"));
+        vm.expectRevert(
+            bytes(
+                "neither roles.json, a broadcast record nor the chain shows the transaction that created second: journal it as secondTx"
+            )
+        );
+        later.check(network);
+    }
+
+    function test_recover_withoutASender_isRefused() public {
+        _network("recover-no-sender", vm.toString(ops));
+        RolesToy unsent = new RolesToy();
+        vm.expectRevert(bytes("pass --sender <deployer>: the sender of the lost deployments"));
+        unsent.recover(network);
+    }
+
     function test_at_outsideAStep_provesOnEveryCall() public {
         _network("outside", vm.toString(ops));
         unit.deploy(network);

@@ -83,7 +83,7 @@ contract WantUnit is ToyUnit {
         return _done();
     }
 
-    /// @dev As `_deployRole` does for a reused role.
+    /// @dev As a deploy step does for a reused role.
     function openOnly(string calldata network) external returns (string memory) {
         _use(network);
         _startBroadcast();

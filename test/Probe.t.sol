@@ -212,12 +212,10 @@ contract ProbeTest is Test, Declares {
 
         unit.deploy(net);
         assertEq(g.plan(net, "toy.deploy"), "# done toy.deploy\n");
-        unit.setTag(2);
+        unit.setRefuseReuse(true);
         assertEq(
             g.plan(net, "toy.deploy"),
-            string.concat(
-                "# cannot reach toy.deploy: the payload's tag differs from the input\n", _command(net, "deploy")
-            )
+            string.concat("# cannot reach toy.deploy: the check refused the reuse\n", _command(net, "deploy"))
         );
     }
 

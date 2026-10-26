@@ -16,7 +16,7 @@ contract MovedToyUnit is ToyJournal {
     function deployOn(string calldata network, uint256 chainId_) external {
         string memory m = _use(network);
         vm.chainId(chainId_);
-        _deployRole(m, "toy", "ToyPayload", abi.encode(uint256(1)), _create, _authenticate);
+        _deployIdentified(m, "toy", "ToyPayload", abi.encode(uint256(1)), _authenticate);
     }
 
     function _create(bytes memory args) private returns (address) {
@@ -59,20 +59,11 @@ contract RecoveringToyUnit is PlainToyUnit {
     }
 }
 
-contract Impostor {
-    uint256 public immutable tag = 1;
-    uint256 public other = 2;
-}
-
-/// @dev Deploys another contract under ToyPayload's artifact name, as a same-named contract does.
+/// @dev Deploys an artifact whose constructor returns other runtime code than the artifact's.
 contract ImpostorToyUnit is ToyJournal {
     function deploy(string calldata network) external {
         string memory m = _use(network);
-        _deployRole(m, "toy", "ToyPayload", abi.encode(uint256(1)), _create, _authenticate);
-    }
-
-    function _create(bytes memory) private returns (address) {
-        return address(new Impostor());
+        _deployIdentified(m, "toy", "OtherRuntime", "", _authenticate);
     }
 
     function _authenticate(address, bytes memory) private pure {}
@@ -143,7 +134,7 @@ contract GuardsTest is Test, Declares {
         return name;
     }
 
-    function test_deployRole_stampsTheSelectedChain() public {
+    function test_deploy_stampsTheSelectedChain() public {
         SelectedChainToyUnit unit = new SelectedChainToyUnit();
         string memory net = _network("guards-selected");
         unit.deployOn(net, 5);
@@ -152,7 +143,7 @@ contract GuardsTest is Test, Declares {
         assertFalse(vm.keyExistsJson(journal, ".mainChainId"));
     }
 
-    function test_deployRole_stampsTheDefaultChainByDefault() public {
+    function test_deploy_stampsTheDefaultChainByDefault() public {
         MovedToyUnit unit = new MovedToyUnit();
         string memory net = _network("guards-default-stamp");
         unit.deployOn(net, 5);
@@ -268,12 +259,12 @@ contract GuardsTest is Test, Declares {
         assertFalse(vm.exists(string.concat(DIR, net, "/toy.json")), "a dry run left a certificate");
     }
 
-    function test_deployRole_refusesACreateThatIsNotTheArtifactAndRecordsNothing() public {
+    function test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing() public {
         ImpostorToyUnit unit = new ImpostorToyUnit();
         string memory net = _network("guards-impostor");
         (bool ok, bytes memory ret) = address(unit).call(abi.encodeCall(unit.deploy, (net)));
         assertFalse(ok);
-        assertTrue(vm.contains(string(ret), " is not ToyPayload.sol:ToyPayload"), string(ret));
+        assertTrue(vm.contains(string(ret), " is not OtherRuntime.sol:OtherRuntime"), string(ret));
         assertFalse(vm.exists(string.concat(DIR, net, "/toy.json")));
     }
 

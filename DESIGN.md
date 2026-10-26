@@ -40,9 +40,9 @@ What sprue relies on and cannot check.
 - One operator and one key per journal, until a pending transaction resolves. The nonce fence reads the
   CREATE addresses of the sender, the pin and every journal's deployers, up to 256 nonces each; it does not
   see a CREATE2 deployment, a CREATE of any other key, or a transaction another key still has pending.
-- The unit author keeps steps idempotent, makes `_authenticate` check the state and arguments of a reused
-  contract (the library checks only code, and with `_requireCreatedFrom` the creation's arguments), and
-  makes `Due` views report real remaining work (SECURITY.md).
+- The unit author keeps steps idempotent, makes a role's `.ensure` check the state of a reused contract
+  (the library proves its identity, code and recorded constructor arguments), and makes `Due` views report
+  real remaining work (SECURITY.md).
 - The terminal check guards against an accident, not an agent: a keystore password file decrypts without a
   person. No agent or CI should hold a key for a public chain.
 - `sprue.json` and `network.json` are the project's to get right; sprue validates their shape, not their meaning.
@@ -53,12 +53,12 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 
 | Invariant | Evidence |
 |---|---|
-| A role is deployed only if its journal lacks it or its recorded deployment can no longer land; a pending intent is resent only as the same transaction. | `CoreUnit.t.sol` `test_deployRole_aPendingIntent_isSentAgainOnlyAsTheSameTransaction`; e2e `scenario_kill` |
-| The intent is journaled before the address; a simulation outside a rehearsal network journals nothing. | `test_deployRole_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment`, `test_deployRole_aSimulationJournalsNothing` |
+| A role is deployed only if its journal lacks it or its recorded deployment can no longer land; a pending intent is resent only as the same transaction. | `CoreUnit.t.sol` `test_deploy_aPendingIntent_isSentAgainOnlyAsTheSameTransaction`; e2e `scenario_kill` |
+| The intent is journaled before the address; a simulation outside a rehearsal network journals nothing. | `test_deploy_journalsTheIntentBeforeTheAddress_andTheHookRunsOnlyForANewDeployment`, `test_deploy_aSimulationJournalsNothing` |
 | A dry run writes no certificate (outside a rehearsal network). | `Guards.t.sol` `test_certify_writesNothingOnADryRun` |
 | A rerun of a finished target changes no block, nonce or journal bytes. | e2e `scenario_rerun`; `test_check_rerunAtALaterBlock_leavesTheJournalByteForByte_andRecertifiesAChangedIdentity`; `CertifyIdentity.t.sol` |
 | The fence refuses when a CREATE of a known deployer has code no journal accounts for, and never on an unfenced chain. | `FenceModel.t.sol` `testFuzz_fence_*` |
-| A deployed contract has the artifact's code, immutables aside, unless the unit overrides `_requireBuild`; a reused one has the journal's code hash. | `test_deployRole_refusesACreateThatIsNotTheArtifactAndRecordsNothing`; `Create2Code.t.sol` |
+| A deployed contract has the artifact's code, immutables aside, unless the unit overrides `_requireBuild`; a reused one has the journal's code hash. | `test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing`; `Create2Code.t.sol` |
 | A declared role is returned only when its address follows from the identity its journal records (deployer and nonce, or factory, salt and initcode hash), its code hash and recorded arguments are the journal's and the declared ones, and its `.ensure` passes; another unit's role, by its identity and code. | `Roles.t.sol` `test_at_*`, `test_create2_*`, `test_extern_*`, `test_check_runsOnEveryReuse_andItsRefusalStopsTheStep` |
 | Where `network.json` pins a deployer, a declared CREATE role was created by the pin or a key of its `formerDeployers`, and only the pin sends one, whatever the opt-in to another key. A CREATE2 role is proven whoever sent it. | `Roles.t.sol` `test_deploy_onAPinnedNetwork_refusesAnotherKey_evenWithTheOptIn`, `test_at_refusesARecordedDeployerOtherThanThePin`, `test_at_acceptsARoleAFormerDeployerCreated_whileOnlyThePinSends`, `test_create2_isProvenWhoeverSentIt`; e2e `scenario_failure` |
 | `recover` journals only one unambiguous, current deployment and writes nothing before every check passes. | `CoreUnit.t.sol` `test_recover_refuses*`, `test_recover_ofACompleteJournal_sendsAndWritesNothing`; e2e `scenario_recover` |
@@ -66,7 +66,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | Every step has a done rule; a target that excludes the certifying `check` of a node it needs is refused, unless the node is done. | `StepBuilders.t.sol` `test_check*`, `test_dueCheckCannotCertifyAncestors`; `Guards.t.sol` `test_plan_refusesATargetThatExcludesTheCertifierOfANodeItNeeds_unlessTheNodeIsDone` |
 | A probe sends nothing, writes no journal or build record, and keeps no EVM state; a step is due at its first send or write, and a direct broadcast is refused. | `Probe.t.sol` `test_plan_*` |
 | A production node never depends on a test-only node. | `StepBuilders.t.sol` `test_productionNeverNeedsATestNode` |
-| A pinned deployer sends every CREATE, unless opted out; a malformed pin is refused before any send. | `CoreUnit.t.sol` `test_pin_*` |
+| A malformed pin is refused before any send; under a pin, another key sends a CREATE2 role only with the opt-in, and a rerun that sends nothing passes with any sender. | `CoreUnit.t.sol` `test_pin_*`; `Create2Code.t.sol` `test_deployRoleCreate2_refusesAnotherDeployerThanThePin_beforeTheFactoryCall`, `test_deployRoleCreate2_anotherDeployerThanThePin_sendsWithTheOptIn` |
 | An input date on a step off the default chain is refused, unless the step is certified done. | `FileGraphChains.t.sol` `test_plan_refusesAnInputDateOnAChainOtherThanTheDefault` |
 | Every fork a step selects serves the chain id `network.json` names. | `CoreChains.t.sol`; e2e `scenario_refuses` |
 | `run` executes only lines in the plan grammar; a `sprue.json` path holds only `A-Z a-z 0-9 _ . / -`. | e2e `scenario_grammar` (`plan-grammar.sh`); `CoreChains.t.sol` `test_project_isRefusedUnlessItIsExactlyTheShape` |
@@ -91,8 +91,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    compiled from the unit's script has `recover(string)`. A stray CREATE2 landing is refused, not adopted.
 4. **Journals are per unit and committed.** Addresses, intent, the code each contract must have, and the
    build metadata. Git is the history. Stamped with the chain id the step last selected.
-5. **A deploy step converges.** `_deployRole` authenticates what it reuses, by the unit's `authenticate` or
-   by its creation (`_requireCreatedFrom`), and sends only a missing role;
+5. **A deploy step converges.** `_deploy(role)` proves what it reuses, by the identity its journal records
+   and the role's `.ensure`, and sends only a missing role;
    `_done` ends a step by printing what it sent, the files to commit and the next `plan` command;
    `_done()` reads what it sent from the broadcaster's nonce on the chain where it first opened its
    broadcast, so a step that sends on one chain cannot report it wrongly. The report only labels the log.
