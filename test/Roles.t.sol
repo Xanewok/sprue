@@ -445,7 +445,7 @@ contract RolesTest is Test {
                     dir,
                     "/network.json's deployer ",
                     vm.toString(ops),
-                    ": only the pin sends a declared CREATE role, whose address follows from its sender; to change keys, pin the new one in a reviewed commit and list the old one in network.json's formerDeployers"
+                    ": only the pin sends a declared CREATE role, whose address follows from its sender: sign as the pin"
                 )
             )
         );
@@ -468,9 +468,7 @@ contract RolesTest is Test {
             string.concat(dir, "/network.json"),
             string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(other), '"}')
         );
-        vm.expectRevert(
-            bytes("toy's recorded deployer is neither network.json's deployer nor one of its formerDeployers")
-        );
+        vm.expectRevert(bytes("toy's recorded deployer is not network.json's deployer"));
         unit.atToy(network);
     }
 
@@ -712,25 +710,27 @@ contract RolesTest is Test {
         unit.atSelfReading(network);
     }
 
-    function test_at_acceptsARoleAFormerDeployerCreated_whileOnlyThePinSends() public {
+    /// @dev A pin's rotation is unsupported, so a network.json written for one is refused, not read in part.
+    function test_pin_aNetworkThatListsFormerDeployers_isRefusedByName() public {
         _network("rotate", vm.toString(ops));
         unit.deploy(network);
-        string memory rotated =
-            string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(other), '"');
-        vm.writeFile(string.concat(dir, "/network.json"), string.concat(rotated, "}"));
-        vm.expectRevert(
-            bytes("toy's recorded deployer is neither network.json's deployer nor one of its formerDeployers")
-        );
-        unit.atToy(network);
-
         vm.writeFile(
             string.concat(dir, "/network.json"),
-            string.concat(rotated, ',"formerDeployers":["', vm.toString(ops), '"]}')
+            string.concat(
+                '{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"',
+                vm.toString(ops),
+                '","formerDeployers":["',
+                vm.toString(other),
+                '"]}'
+            )
         );
-        assertEq(unit.atToy(network), vm.parseJsonAddress(_journal(), ".toy"));
-        vm.expectRevert();
-        unit.deployBoth(network);
-        vm.stopBroadcast();
+        bytes memory refusal = bytes(
+            "network.json lists formerDeployers, which sprue no longer reads: a change of the pin is not supported; remove the field, and a role an earlier key created is refused"
+        );
+        vm.expectRevert(refusal);
+        unit.atToy(network);
+        vm.expectRevert(refusal);
+        unit.deploy(network);
     }
 
     function test_create2_isProvenWhoeverSentIt() public {

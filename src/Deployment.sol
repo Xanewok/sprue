@@ -136,6 +136,11 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      if the field is the zero address or forge's default sender.
     function _pinnedDeployer() internal view returns (address) {
         string memory network = _networkJson();
+        // A pin's rotation is unsupported: a role a former key made would be proven, but no fence scans that key.
+        require(
+            !_has(network, ".formerDeployers"),
+            "network.json lists formerDeployers, which sprue no longer reads: a change of the pin is not supported; remove the field, and a role an earlier key created is refused"
+        );
         if (!_has(network, ".deployer")) return address(0);
         address pinned = _addr(network, ".deployer");
         require(
@@ -997,8 +1002,8 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `role`'s address is the CREATE of its recorded deployer at its recorded nonce, that deployer is
-    ///      the one `network.json` pins or one of its `formerDeployers`, its recorded arguments are `args`, and
-    ///      the transaction that created it sent `args`: the journal's `<role>Tx`, a broadcast record's, the
+    ///      the one `network.json` pins, its recorded arguments are `args`, and the transaction that created
+    ///      it sent `args`: the journal's `<role>Tx`, a broadcast record's, the
     ///      chain's at the recorded nonce, or this run's. On a network that pins no deployer, the recorded
     ///      deployer stands, with a warning: nothing then says whose CREATE the role must be.
     function _requireCreateIdentity(string memory journal, string memory role, bytes memory args) internal {
@@ -1045,7 +1050,7 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev `unit`'s `journal` puts `role` at `addr` by a CREATE of its recorded deployer at its
-    ///      recorded nonce, and that deployer is the pin or a former one, if `network.json` has a pin.
+    ///      recorded nonce, and that deployer is the pin, if `network.json` has a pin.
     function _requireCreateRecord(string memory unit, string memory journal, string memory role, address addr)
         internal
         view
@@ -1062,29 +1067,12 @@ abstract contract Deployment is ForgeBroadcasts {
                 )
             );
         } else {
-            require(
-                deployer == pinned || _isFormerDeployer(deployer),
-                string.concat(
-                    role, "'s recorded deployer is neither network.json's deployer nor one of its formerDeployers"
-                )
-            );
+            require(deployer == pinned, string.concat(role, "'s recorded deployer is not network.json's deployer"));
         }
         require(
             vm.computeCreateAddress(deployer, _uint(journal, string.concat(key, "Nonce"))) == addr,
             string.concat(role, "'s address is not its recorded deployer's CREATE at its recorded nonce")
         );
-    }
-
-    /// @dev Whether `network.json`'s `formerDeployers`, the keys a pin replaced, lists `deployer`: a role one
-    ///      of them created stays proven, though only the pin sends.
-    function _isFormerDeployer(address deployer) internal view returns (bool) {
-        string memory network = _networkJson();
-        if (!_has(network, ".formerDeployers")) return false;
-        address[] memory former = vm.parseJsonAddressArray(network, ".formerDeployers");
-        for (uint256 i; i < former.length; ++i) {
-            if (former[i] == deployer && deployer != address(0)) return true;
-        }
-        return false;
     }
 
     function _requireKey(string memory unit, string memory journal, string memory role, string memory suffix)
@@ -1208,7 +1196,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 _dir(),
                 "/network.json's deployer ",
                 vm.toString(pinned),
-                ": only the pin sends a declared CREATE role, whose address follows from its sender; to change keys, pin the new one in a reviewed commit and list the old one in network.json's formerDeployers"
+                ": only the pin sends a declared CREATE role, whose address follows from its sender: sign as the pin"
             )
         );
         require(

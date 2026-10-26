@@ -35,8 +35,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `<paths.rehearsal>/` and `<paths.rehearsal>-x/`.
 2. Add `deployments/<network>/network.json`, which gives each chain its id and an `rpc` alias from
    `foundry.toml`'s `[rpc_endpoints]`: `{"chains":{"l2":{"id":31337,"rpc":"local"}}}`.
-   `"deployer"` pins the key that sends; `"formerDeployers"` lists keys it replaced, whose roles stay
-   proven.
+   `"deployer"` pins the key that sends. A change of the pin is not supported: a role an earlier key
+   created is refused.
 3. Write one unit per directory under `script/deploy/units/<unit>/`, with the example's
    [`DeployToken.s.sol`](examples/token-vault/script/deploy/units/token/DeployToken.s.sol) and
    [`DeployVault.s.sol`](examples/token-vault/script/deploy/units/vault/DeployVault.s.sol) as templates.
@@ -88,8 +88,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    `_certify()` certifies every role of `_roles()`, and refuses unless the step proved each one, so a
    `check` step calls `_at` for every role, even one it asserts nothing about.
    `_certify(_certificate().with...(...))` adds facts. A role the unit uses must be in `_roles()`. Where
-   `network.json` pins a `deployer`, only the pin sends a CREATE role: to change keys, pin the new one and
-   list the old one in `formerDeployers`, whose roles stay proven. A CREATE2 role is proven whoever sent
+   `network.json` pins a `deployer`, only the pin sends a CREATE role, and only the pin's CREATE roles are
+   proven. A CREATE2 role is proven whoever sent
    it, so its `.ensure` checks what its sender decides, such as an owner set from `tx.origin`. Another
    unit's role comes from `_at(OTHER())`, after `.needs("<unit>.deploy")`, when its code fixes what the
    step reads; from `_checked(OTHER())`, after `.needs("<unit>.check")`, when what that unit configured
