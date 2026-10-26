@@ -33,6 +33,12 @@ longer compiles, and a unit's own `_deploy` or `_at` passed as a function pointe
 `_deployRoleCreate2` role must also have its recorded initcode hash and salt give its address, and its
 recorded arguments be the step's.
 
+Fixed: proving a CREATE role whose journal has no `<role>Tx` read every script's broadcast records, twice,
+so its gas grew with every unit and run: with 24 records of 100 kB one `_at` cost 175M gas, and a probe ran
+out of gas, which `plan` reported as `# cannot reach <step>: 0x`. It now reads only the unit's own script's
+records, `<records>/<script file>/`, for a CREATE only (409k gas there), and searches the chain for a role
+another script created. `Unit._deployScript()` is virtual, for a unit outside `<paths.units>/<unit>/`.
+
 Fixed: `run` stops (exit 5) when its next plan holds a step it just sent. Before, it compared the whole plan,
 so when another step of the same plan turned done, it sent a step again that a lagging RPC still showed as
 due, and the node refused the transaction ("nonce too low").

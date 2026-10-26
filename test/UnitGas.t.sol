@@ -6,6 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {Role, create} from "../src/Roles.sol";
 import {Unit} from "../src/Unit.sol";
 import {Step} from "../src/graph/Step.sol";
+import {RolesToy} from "./Roles.t.sol";
 
 /// @dev A `Unit` on this repository's `sprue.json`, which `ToyJournal` replaces.
 contract GasToy is Unit {
@@ -32,6 +33,11 @@ contract GasToy is Unit {
 
     function _unit() internal pure override returns (string memory) {
         return "gastoy";
+    }
+
+    /// @dev This repository has no `paths.units` directory for it.
+    function _deployScript() internal pure override returns (string memory) {
+        return "test/UnitGas.t.sol";
     }
 }
 
@@ -60,5 +66,48 @@ contract UnitGasTest is Test {
         reader.read(net);
         assertLt(before - gasleft(), 600_000);
         vm.removeDir(dir, true);
+    }
+
+    /// @dev A journal without `toyTx` sends the proof to the broadcast records. Other scripts' records, which
+    ///      grow with every unit and run, must not raise its cost: 24 files of 100 kB cost a probe 31M.
+    function test_at_withoutAJournaledTx_costsUnder1MGasWhateverOtherScriptsRecorded() public {
+        vm.chainId(31337);
+        address ops = makeAddr("ops");
+        string memory net = "roles-gas-records";
+        string memory dir = string.concat("cache/core-test/deployments/", net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(string.concat(dir, "/broadcast/DeployOther.s.sol/31337"), true);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":31337}},"deployer":"', vm.toString(ops), '"}')
+        );
+        RolesToy deployer = new RolesToy();
+        deployer.setTestSender(ops);
+        deployer.deploy(net);
+        string memory receipts = _receipts(250);
+        for (uint256 i; i < 24; ++i) {
+            vm.writeFile(
+                string.concat(dir, "/broadcast/DeployOther.s.sol/31337/run-", vm.toString(i), ".json"), receipts
+            );
+        }
+        RolesToy reader = new RolesToy();
+        reader.setTestSender(ops);
+        reader.trustTestCreations();
+
+        uint256 before = gasleft();
+        reader.atToy(net);
+        assertLt(before - gasleft(), 1_000_000);
+        vm.removeDir(dir, true);
+    }
+
+    /// @dev About 100 kB: `n` receipts of another script's run, none of the role's address.
+    function _receipts(uint256 n) private pure returns (string memory json) {
+        string memory one =
+            '{"transactionHash":"0x1111111111111111111111111111111111111111111111111111111111111111","contractAddress":"0x2222222222222222222222222222222222222222","to":null,"blockNumber":"0x1","logs":[{"address":"0x3333333333333333333333333333333333333333","data":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}]}';
+        json = '{"chain":31337,"transactions":[],"receipts":[';
+        for (uint256 i; i < n; ++i) {
+            json = string.concat(json, i == 0 ? "" : ",", one);
+        }
+        json = string.concat(json, "]}");
     }
 }

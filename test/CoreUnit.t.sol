@@ -26,7 +26,7 @@ contract CoreUnitTest is Test {
     uint256 private constant FREE = 31337;
     string private constant OPT_IN = "CORE_TEST_UNEXPECTED_DEPLOYER";
     string private constant DIRTY = "CORE_TEST_DIRTY_MARK";
-    string private constant SCRIPT = "ToyUnit.s.sol";
+    string private constant SCRIPT = "ToyUnit.sol";
 
     address private ops = makeAddr("ops");
     address private other = makeAddr("other key");
