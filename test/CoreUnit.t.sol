@@ -858,19 +858,20 @@ contract CoreUnitTest is Test {
         unit.recover(network);
         assertFalse(vm.exists(string.concat(dir, "/toy.json")), "recover adopted a CREATE2");
 
-        vm.expectRevert(
-            bytes(
-                string.concat(
-                    "toy.json lacks toy, yet ",
-                    _recordPath(),
-                    " holds a CREATE2 of ToyPayload at ",
-                    vm.toString(addr),
-                    " that landed or may land: restore the journal"
-                )
+        bytes memory stray = bytes(
+            string.concat(
+                "toy.json lacks toy, yet ",
+                _recordPath(),
+                " holds a CREATE2 of ToyPayload at ",
+                vm.toString(addr),
+                " that landed or may land: restore the journal"
             )
         );
+        vm.expectRevert(stray);
         unit.deploy(network);
         vm.stopBroadcast();
+        vm.expectRevert(stray);
+        unit.deploy2(network, bytes32(0), address(0xC2));
     }
 
     /// @dev A second landed `ToyPayload` in the records would refuse any recovery of a role the

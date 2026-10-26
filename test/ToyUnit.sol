@@ -130,6 +130,10 @@ contract ToyUnit is ToyJournal {
         return _done(sent);
     }
 
+    function deploy2(string calldata network, bytes32 salt, address at) external returns (bool) {
+        return _deployRoleCreate2(_use(network), "toy", "ToyPayload", abi.encode(tag), salt, at, _refusable);
+    }
+
     function otherInputUint(string calldata network, string calldata unit, string calldata key)
         external
         returns (uint256)

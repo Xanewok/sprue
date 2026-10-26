@@ -934,6 +934,77 @@ abstract contract Deployment is ForgeBroadcasts {
         );
     }
 
+    /// @dev A unit's deploy step for a role that the factory creates at `at`, the input's address for
+    ///      `salt`. A role that landed and is journaled is proven by its recorded salt and code, then
+    ///      `authenticate`, so a later source edit does not orphan it. Otherwise this build's
+    ///      `artifact` with `args` must land at `at`: an unjournaled role with code there is adopted, and
+    ///      a pending send is resent, since it cannot land anywhere else. `_onDeployment` runs when the
+    ///      role is first journaled. `sent` is whether this run calls the factory.
+    function _deployRoleCreate2(
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args,
+        bytes32 salt,
+        address at,
+        function(address, bytes memory) internal view authenticate
+    ) internal returns (bool sent) {
+        string memory key = string.concat(".", role);
+        bool journaled = _has(journal, key);
+        bool landed = at.code.length != 0;
+        if (journaled) {
+            require(
+                _addr(journal, key) == at,
+                string.concat(
+                    _unit(), ".json's ", role, " is not the input's create2.address: a person must resolve it"
+                )
+            );
+        } else {
+            _requireNoStray(journal, role, artifact, at);
+        }
+        if (journaled && landed) {
+            require(
+                _has(journal, string.concat(key, "Salt"))
+                    && vm.parseJsonBytes32(journal, string.concat(key, "Salt")) == salt,
+                string.concat("the input's create2.salt differs from ", _unit(), ".json's")
+            );
+            _requireRecordedCode(journal, role);
+            authenticate(at, args);
+        } else {
+            // A new salt for a landed role would deploy a second one.
+            require(
+                !landed || vm.computeCreate2Address(salt, _initcodeHash(artifact, args), CREATE2_FACTORY) == at,
+                string.concat(
+                    "the input's create2.address holds a ",
+                    role,
+                    " that another build or input made: restore the journal, and never mine a new salt"
+                )
+            );
+            _requireCreate2Address(salt, artifact, args, at);
+        }
+
+        sent = !landed;
+        if (sent) {
+            _startBroadcast();
+            _requireDeployable();
+            (bool ok,) = CREATE2_FACTORY.call(bytes.concat(salt, _initcode(artifact, args)));
+            require(ok, "the CREATE2 factory call reverted");
+            vm.stopBroadcast();
+            _requireBuild(at, artifact);
+        }
+
+        if (!_writing()) return sent;
+        if (!journaled) {
+            _onDeployment(journal, role, args);
+            _put(string.concat(key, "Salt"), vm.toString(salt));
+            _recordIntent(role, artifact, args);
+            _recordBuild(role, at, artifact);
+            _put(key, vm.toString(at));
+        }
+        if (sent) _recordDirty(role);
+        else _recordCreate2Receipt(_journal(), role, at);
+    }
+
     /// @dev Journals a deployment. If `recorded` is non-zero the role was reused, and only its
     ///      receipt is recorded. Returns the deployer's next unused nonce.
     function _recordDeployment(
@@ -1178,8 +1249,8 @@ abstract contract Deployment is ForgeBroadcasts {
         requireBuild(addr, artifact);
     }
 
-    /// @dev Called only when this run creates a new deployment transaction, simulated or broadcast,
-    ///      before the intent and the address are journaled. The default records the selected chain's
+    /// @dev Called only when this run creates a new deployment transaction, simulated or broadcast, or
+    ///      `_deployRoleCreate2` first journals a role, before the intent and the address are journaled. The default records the selected chain's
     ///      id stamp. An override owns the unit's other writes and their order, and calls `super`
     ///      where the unit should record the chain. It should also drop whatever the replaced
     ///      deployment vouched for.

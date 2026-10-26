@@ -79,6 +79,53 @@ contract Create2CodeTest is Test {
         unit.requireAddress(salt, abi.encode(uint256(4)), expected);
     }
 
+    function test_deployRoleCreate2_sendsOnce_adoptsItsOwnLandedRole_andRefusesAnyOther() public {
+        Create2Unit unit = new Create2Unit();
+        address ops = makeAddr("ops");
+        unit.setTestSender(ops);
+        string memory net = "create2-deploy";
+        string memory dir = string.concat(DIR, net);
+        if (vm.exists(dir)) vm.removeDir(dir, true);
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains": {"main": {"id": 31337}}}');
+        vm.chainId(31337);
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(1));
+        address at = vm.computeCreate2Address(
+            salt, keccak256(bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)))), FACTORY
+        );
+        string memory path = string.concat(dir, "/toy.json");
+
+        assertTrue(unit.deploy2(net, salt, at), "the first run did not send");
+        assertEq(ToyPayload(at).tag(), 1);
+        assertEq(vm.parseJsonAddress(vm.readFile(path), ".toy"), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toySalt"), salt);
+        assertFalse(unit.deploy2(net, salt, at), "a rerun sent");
+
+        unit.setRefuseReuse(true);
+        vm.expectRevert(bytes("the check refused the reuse"));
+        unit.deploy2(net, salt, at);
+        unit.setRefuseReuse(false);
+        vm.expectRevert(bytes("the input's create2.salt differs from toy.json's"));
+        unit.deploy2(net, bytes32(uint256(2)), at);
+        vm.expectRevert(bytes("toy.json's toy is not the input's create2.address: a person must resolve it"));
+        unit.deploy2(net, salt, address(0xBEEF));
+
+        string memory journal = vm.readFile(path);
+        vm.removeFile(path);
+        unit.setTag(2);
+        vm.expectRevert(
+            bytes(
+                "the input's create2.address holds a toy that another build or input made: restore the journal, and never mine a new salt"
+            )
+        );
+        unit.deploy2(net, salt, at);
+        unit.setTag(1);
+        assertFalse(unit.deploy2(net, salt, at), "an adoption sent");
+        assertEq(vm.parseJsonAddress(vm.readFile(path), ".toy"), at);
+        assertEq(vm.parseJsonBytes32(vm.readFile(path), ".toyCodeHash"), vm.parseJsonBytes32(journal, ".toyCodeHash"));
+    }
+
     function test_recordCreate2Receipt_takesOnlyAReceiptOfACallToTheFactory() public {
         Create2Unit unit = new Create2Unit();
         string memory net = "create2-receipt";
