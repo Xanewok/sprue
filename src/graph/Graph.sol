@@ -120,13 +120,11 @@ abstract contract Graph is Script {
     ///           A view or predicate whose file read or JSON parse fails reverts the plan instead.
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
-    ///
-    ///         A unit's `# warning` lines show only while one of its nodes in the plan is not done.
     function plan(string calldata network, string calldata target) external returns (string memory) {
         return _plan(network, target, false);
     }
 
-    /// @notice `plan`, with `allUnits` also warning for the units whose nodes are all done.
+    /// @notice `plan`; `allUnits` also prints the `# warning` lines of units whose nodes are all done.
     function plan(string calldata network, string calldata target, bool allUnits) external returns (string memory) {
         return _plan(network, target, allUnits);
     }

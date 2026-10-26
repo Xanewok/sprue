@@ -38,7 +38,7 @@ Flags may appear anywhere after the command.
   mermaid [target]          a flowchart of the graph, or of what target depends on
   plan [--verbose] <network> <target>
                             the commands that reach target; reads the default chain's rpc; sends nothing;
-                            --verbose also warns for units whose steps are all done
+                            --verbose also prints the # warning lines of done units
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -432,8 +432,10 @@ async function main(argv) {
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
-    if (verb === "plan" && a === "--verbose") verbose = true;
-    else if (verb === "plan") pos.push(a);
+    if (a === "--verbose") {
+      if (verb !== "plan") fail(2, "refusing --verbose: only plan takes it");
+      verbose = true;
+    } else if (verb === "plan") pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
     else if (a === "--account" || a === "--ledger" || a === "--trezor") {
       if (rehearsing) fail(2, `refusing ${a}: rehearse sends as each step's sender on its forks, and no key signs`);

@@ -230,7 +230,7 @@ contract GuardsTest is Test, Declares {
         vm.writeJson(vm.toString(bytes32(uint256(1))), journal, ".tokenCreationCodeHash");
         assertEq(g.plan(net, "fixture.check"), done, "a unit whose nodes are all done");
         string memory warning =
-            "# warning fixture.json's token runs code that this build of ToyPayload no longer makes; it stays deployed, and no step replaces it\n";
+            "# warning fixture.json's token runs code that this build of ToyPayload does not make; it stays deployed, and no step replaces it\n";
         assertEq(
             g.plan(net, "fixture.check", true),
             string.concat("# chain l2 31337 local\n", warning, "# done fixture.deploy\n# done fixture.check\n")
