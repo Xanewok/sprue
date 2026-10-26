@@ -4,7 +4,7 @@ pragma solidity ^0.8.27;
 import {console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, planRpc} from "./Chains.sol";
+import {chainId, chainKind, planRpc} from "./Chains.sol";
 import {requireBuild, requireLost} from "./DeployChecks.sol";
 import {ForgeBroadcasts} from "./ForgeBroadcasts.sol";
 import {Certificate, isRehearsalNetwork, outputsEnv} from "./Journal.sol";
@@ -1322,6 +1322,16 @@ abstract contract Deployment is ForgeBroadcasts {
         address deployer = _addr(journal, string.concat(key, "Deployer"));
         address pinned = _pinnedDeployer();
         if (pinned == address(0)) {
+            require(
+                keccak256(bytes(chainKind(block.chainid))) == keccak256("local") || isRehearsalNetwork(_networkName()),
+                string.concat(
+                    "network.json pins no deployer, so ",
+                    unit,
+                    ".json's deployer cannot prove ",
+                    role,
+                    ": pin the deployer"
+                )
+            );
             console.log(
                 string.concat(
                     "WARNING: network.json pins no deployer, so ", role, " is proven against ", unit, ".json's deployer"
