@@ -45,6 +45,19 @@ contract FoundryFactsRelay {
     }
 }
 
+contract FoundryFactsProber {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function probe(address as_) external {
+        vm.startPrank(as_, as_);
+        address(this).call(abi.encodeCall(this.noop, ()));
+        vm.stopPrank();
+        revert("probed");
+    }
+
+    function noop() external {}
+}
+
 contract FoundryFactsHost {
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
@@ -304,5 +317,24 @@ contract FoundryFactsTest is Test {
         a.touch();
         VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
         assertEq(_access(accesses, VmSafe.AccountAccessKind.Call, address(a)).accessor, DEFAULT_SENDER);
+    }
+
+    /// @dev A fixture that finds sends by their accessor must tell a probe's call to its own unit, which a prank
+    ///      makes a call from the pranked account, from a send: the probe's frame is its parent in the diff.
+    function test_prank_makesAProbesSelfCallACallFromThePrankedAccount() public {
+        FoundryFactsProber prober = new FoundryFactsProber();
+        vm.startStateDiffRecording();
+        address(prober).call(abi.encodeCall(FoundryFactsProber.probe, (sender)));
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        VmSafe.AccountAccess memory probe = _access(accesses, VmSafe.AccountAccessKind.Call, address(prober));
+        assertEq(probe.accessor, address(this));
+        uint256 found;
+        for (uint256 i; i < accesses.length; ++i) {
+            if (accesses[i].account != address(prober) || accesses[i].accessor != sender) continue;
+            ++found;
+            assertTrue(accesses[i].reverted);
+            assertEq(accesses[i].depth, probe.depth + 1);
+        }
+        assertEq(found, 1);
     }
 }

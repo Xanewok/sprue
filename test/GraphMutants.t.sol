@@ -7,6 +7,8 @@ import {RawGraph, RawUnit} from "./RawGraph.sol";
 
 /// @dev Steps that send on a rerun in ways the fixture must see.
 contract GraphMutantsTest is GraphTest {
+    RawGraph private graph;
+
     function setUp() public {
         vm.chainId(31337);
         string memory dir = "deployments/graphtest-source-raw";
@@ -16,7 +18,8 @@ contract GraphMutantsTest is GraphTest {
             string.concat(dir, "/raw.input.json"),
             string.concat('{"operator":"', vm.toString(makeAddr("operator")), '"}')
         );
-        _useGraph(new RawGraph(), "graphtest-source-raw", string.concat("raw-", vm.toString(vm.randomUint())));
+        graph = new RawGraph();
+        _useGraph(graph, "graphtest-source-raw", string.concat("raw-", vm.toString(vm.randomUint())));
     }
 
     function again(string memory node) external {
@@ -44,17 +47,18 @@ contract GraphMutantsTest is GraphTest {
     }
 
     function test_runNode_failsOnASendOutsideTheStepsCall() public {
-        vm.expectRevert(
-            bytes(
-                string.concat(
-                    vm.toString(FIXTURE_SENDER), " sent a different number of transactions than the transcript holds"
-                )
-            )
-        );
+        vm.expectRevert(bytes(string.concat(vm.toString(FIXTURE_SENDER), " sent outside a step's call")));
         this.once("raw.hidden");
     }
 
     function once(string memory node) external {
         runNode(node);
+    }
+
+    function test_quiet_failsOnAnUnnamedSendWhileThePlannerJudges() public {
+        vm.expectRevert(
+            bytes(string.concat(vm.toString(RawUnit(graph.node(0).unit).STRAY()), " sent outside a step's call"))
+        );
+        this.again("raw.unnamed");
     }
 }

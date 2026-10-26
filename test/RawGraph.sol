@@ -14,11 +14,12 @@ contract RawUnit is FixtureUnit {
     FixtureToken public sink = new FixtureToken(0);
 
     function steps() external view returns (Step[] memory s) {
-        s = new Step[](5);
+        s = new Step[](6);
         s[0] = _step("raw.silent", "silent", this.silent.selector).due(this.silentDue.selector);
         s[1] = _step("raw.raw", "raw", this.raw.selector).due(this.rawDue.selector);
         s[2] = _step("raw.stray", "stray", this.stray.selector).due(this.strayDue.selector);
         s[4] = _step("raw.gated", "gated", this.gated.selector).by("raw.operator");
+        s[5] = _step("raw.unnamed", "unnamed", this.unnamed.selector).due(this.unnamedDue.selector);
         s[3] = _step("raw.hidden", "hidden", this.hidden.selector).due(this.hiddenDue.selector);
     }
 
@@ -40,6 +41,15 @@ contract RawUnit is FixtureUnit {
     /// @dev Sends only when entered as the operator, as its command enters it.
     function gated(string calldata network) external step(network) {
         if (msg.sender == _requiredAddress(_unitInput(), "operator")) _send(address(sink), _transfer());
+    }
+
+    function unnamed(string calldata network) external step(network) {}
+
+    /// @dev Sends from an account no node names while the planner judges the step.
+    function unnamedDue(string calldata) external returns (bool) {
+        vm.broadcast(STRAY);
+        address(sink).call(_transfer());
+        return false;
     }
 
     function hidden(string calldata network) external step(network) {}

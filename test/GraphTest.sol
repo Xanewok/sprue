@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {VmSafe} from "forge-std/Vm.sol";
+
 import {deploymentsDir, rehearsalPrefix} from "../src/Chains.sol";
 import {Deployment} from "../src/Deployment.sol";
 import {stageInputs} from "../src/Journal.sol";
 import {Graph, IFixtureHost} from "../src/graph/Graph.sol";
+import {IProbe} from "../src/graph/Step.sol";
 import {ForgeTranscript} from "./ForgeTranscript.sol";
 
 /// @notice Runs a project's real graph in process, under `forge test`, as the graph's commands would
@@ -79,31 +82,58 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         return false;
     }
 
-    function meet(string calldata id) external returns (bool) {
+    /// @dev The test's own act, outside the recording: it is the world's, not the graph's.
+    function meet(string calldata id) external returns (bool met) {
         require(msg.sender == address(_graph), "only the graph asks");
-        return _meet(id);
+        _noSendOutside();
+        met = _meet(id);
+        _recordStart();
     }
 
     function stepping(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
+        _noSendOutside();
         _recordStart();
     }
 
     /// @dev Vouches for each CREATE to every unit, so that a unit reads a role another unit created.
     function stepped(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
-        Created[] memory created = _recordStop();
+        (Sent[] memory sent, Created[] memory created) = _recordDrain();
+        _transcriptAdd(sent);
         for (uint256 i; i < created.length; ++i) {
             for (uint256 u; u < _units.length; ++u) {
                 Deployment(_units[u]).trustTestCreationAt(created[i].at, created[i].initcode);
             }
         }
+        _recordStart();
     }
 
+    /// @dev The recording runs through the whole call: what it holds between steps was sent by a judgment of
+    ///      the planner or by the graph itself, and the graph sends nothing.
     function _run(string memory id, bool alone) private returns (Sent[] memory) {
         _transcriptBegin(_senders());
+        _recordStart();
         require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
+        _noSendOutside();
         return _transcriptEnd();
+    }
+
+    function _noSendOutside() private {
+        (Sent[] memory sent,) = _recordDrain();
+        require(
+            sent.length == 0,
+            string.concat(vm.toString(sent.length == 0 ? address(0) : sent[0].from), " sent outside a step's call")
+        );
+    }
+
+    function _isProbe(VmSafe.AccountAccess memory frame) internal view override returns (bool) {
+        if (frame.accessor != address(_graph) || frame.kind != VmSafe.AccountAccessKind.Call) return false;
+        if (frame.data.length < 4 || bytes4(frame.data) != IProbe.probe.selector) return false;
+        for (uint256 i; i < _units.length; ++i) {
+            if (_units[i] == frame.account) return true;
+        }
+        return false;
     }
 
     function _senders() private view returns (address[] memory who) {

@@ -41,23 +41,48 @@ abstract contract ForgeTranscript is Test {
         vm.startStateDiffRecording();
     }
 
-    /// @dev Ends the recording and appends its sends: every Call and Create whose accessor has no code, a
-    ///      reverted top-level one too. Returns the CREATEs that landed.
-    function _recordStop() internal returns (Created[] memory created) {
+    /// @dev Ends the recording and returns its sends: every Call and Create whose accessor has no code, a
+    ///      reverted top-level one too; and the CREATEs that landed.
+    function _recordDrain() internal returns (Sent[] memory sent, Created[] memory created) {
         VmSafe.AccountAccess[] memory log = vm.stopAndReturnStateDiff();
+        sent = new Sent[](log.length);
         created = new Created[](log.length);
-        uint256 count;
+        uint256 sends;
+        uint256 landed;
         for (uint256 i; i < log.length; ++i) {
             VmSafe.AccountAccess memory a = log[i];
             bool call = a.kind == VmSafe.AccountAccessKind.Call;
             if (!call && a.kind != VmSafe.AccountAccessKind.Create) continue;
-            if (a.accessor.code.length != 0) continue;
-            _sent.push(Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data));
-            if (!call && !a.reverted) created[count++] = Created(a.account, a.data);
+            if (a.accessor.code.length != 0 || _underProbe(log, i)) continue;
+            sent[sends++] = Sent(a.chainInfo.chainId, a.accessor, 0, !call, a.account, a.value, a.data);
+            if (!call && !a.reverted) created[landed++] = Created(a.account, a.data);
         }
-        // SAFETY: `count <= log.length`, so the shortened array lies within its allocation.
+        // SAFETY: `sends` and `landed` are at most `log.length`, so each shortened array lies within its allocation.
         assembly ("memory-safe") {
-            mstore(created, count)
+            mstore(sent, sends)
+            mstore(created, landed)
+        }
+    }
+
+    /// @dev A probe pranks the step's sender and calls the step on its own unit, which the diff names as a
+    ///      call from that sender. Whether `frame` is the graph's probe of a unit.
+    function _isProbe(VmSafe.AccountAccess memory frame) internal view virtual returns (bool);
+
+    /// @dev Whether the call `log[i]` is made directly by a probe: its parent is one.
+    function _underProbe(VmSafe.AccountAccess[] memory log, uint256 i) private view returns (bool) {
+        for (uint256 j = i; j > 0; --j) {
+            VmSafe.AccountAccess memory parent = log[j - 1];
+            if (parent.kind != VmSafe.AccountAccessKind.Call && parent.kind != VmSafe.AccountAccessKind.Create) {
+                continue;
+            }
+            if (parent.depth < log[i].depth) return parent.depth + 1 == log[i].depth && _isProbe(parent);
+        }
+        return false;
+    }
+
+    function _transcriptAdd(Sent[] memory sent) internal {
+        for (uint256 i; i < sent.length; ++i) {
+            _sent.push(sent[i]);
         }
     }
 
