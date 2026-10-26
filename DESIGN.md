@@ -156,7 +156,8 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
     cannot be judged until a dependency lands (an input date not yet reached, or a view or predicate whose
     dependency is not done). `rehearse` simulates the closure in that order on a staged copy of the
     network, warping to each date (`FOUNDRY_BROADCAST=<d>/broadcast FOUNDRY_CACHE_PATH=<d>/cache forge script
-    <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url <rpc> --sender <deployer>`, where `<d>` is
+    <graph> --sig 'rehearse(string,string)' <network> <target> --rpc-url <rpc> --sender <deployer>
+    --disable-block-gas-limit`, where `<d>` is
     `<paths.rehearsal>-rehearse-<network>`); it refuses `--broadcast`, and stops at the first node whose sender is
     another account, since a forge run has one sender and a fork forgets the simulation. A predicate is
     judged after its dependencies and date, and stops the run when unmet.

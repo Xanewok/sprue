@@ -740,7 +740,7 @@ scenario_attended() {
   grep -q "forge script script/deploy/units/vault" <<<"$out" || die "attended: the plan has no vault step: $out"
   # --resume can send the graph's saved simulation, so rehearse keeps both paths under the staged network.
   local staged=deployments/rehearsal-rehearse-$net
-  local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS")
+  local rehearse=(forge script script/deploy/DeployGraph.s.sol --sig 'rehearse(string,string)' "$net" vault.check --rpc-url "$LIVE" --sender "$OPS" --disable-block-gas-limit)
   out=$("${rehearse[@]}" 2>&1) && die "attended: the graph rehearsed without its prefix"
   grep -q 'forge would keep this run.s records in broadcast, not' <<<"$out" || die "attended: a rehearse without the prefix: ${out: -400}"
   out=$(FOUNDRY_BROADCAST=$staged/broadcast FOUNDRY_CACHE_PATH=$staged/cache "${rehearse[@]}" 2>&1) || die "attended: a rehearse with its prefix failed: ${out: -400}"
