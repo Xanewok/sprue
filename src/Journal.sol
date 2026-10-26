@@ -4,7 +4,15 @@ pragma solidity ^0.8.27;
 import {Script, console} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
-import {chainId, chainKind, defaultChain, deploymentsDir, planRpc, rehearsalPrefix} from "./Chains.sol";
+import {
+    chainId,
+    chainKind,
+    defaultChain,
+    deploymentsDir,
+    planRpc,
+    rehearsalPrefix,
+    rememberProject
+} from "./Chains.sol";
 import {cheats} from "./DeployChecks.sol";
 import {IProbe} from "./graph/Step.sol";
 
@@ -164,6 +172,7 @@ abstract contract Journal is Script, IProbe {
     ///      whose environment puts forge's records (on a rehearsal network, also its resume data)
     ///      elsewhere than the network's.
     function _adopt(string memory network) internal {
+        rememberProject();
         require(bytes(network).length != 0, string.concat("name the network: a directory under ", _deployments(), "/"));
         _usedNetwork = network;
         // Here and not in `_use`: a step that selects its own forks never calls `_use`. A dry run too, the

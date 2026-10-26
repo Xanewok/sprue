@@ -144,8 +144,28 @@ function rehearsalPrefixIn(string memory json) pure returns (string memory) {
 ///      malformed policy never opens a send path. An `unrecordedDeploys` reason may not start with
 ///      `0x`: Foundry would read it as bytes. `sprue` validates `paths` itself, because it needs
 ///      them before forge can run; this is the only full check of `chains`.
-function projectJson() view returns (string memory) {
-    return validatedProject(PROJECT_FILE);
+///      A contract that called `rememberProject` skips the check while the file's bytes are the ones it
+///      validated.
+function projectJson() view returns (string memory json) {
+    json = cheats.readFile(PROJECT_FILE);
+    bytes32 slot = PROJECT_CHECKED_SLOT;
+    bytes32 checked;
+    assembly ("memory-safe") {
+        checked := sload(slot)
+    }
+    if (checked != keccak256(bytes(json))) validatedProject(PROJECT_FILE);
+}
+
+/// @dev Where a contract keeps the hash of the `sprue.json` it validated. Each step validates it once:
+///      a full check costs dozens of cheatcodes, and a step reads the file in nearly every journal access.
+bytes32 constant PROJECT_CHECKED_SLOT = keccak256("sprue.project.checked");
+
+function rememberProject() {
+    bytes32 hash = keccak256(bytes(validatedProject(PROJECT_FILE)));
+    bytes32 slot = PROJECT_CHECKED_SLOT;
+    assembly ("memory-safe") {
+        sstore(slot, hash)
+    }
 }
 
 function validatedProject(string memory path) view returns (string memory json) {
