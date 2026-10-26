@@ -124,9 +124,10 @@ judged by their probe. A step that calls `vm.startBroadcast` directly waits unti
 opens a broadcast only when forge has none open, and `_done()` closes it and reports whether the step
 created a transaction, from the broadcaster's nonce.
 
-Fixed: a done node behind a date not yet reached printed `# not before`, from a gate view, or stopped the
-plan, from an input date, so `run` exited 4 or warped the clock for a node with nothing to send. A done
-node now has no date line; only a step still to send waits for its date.
+Fixed: a done step behind a date not yet reached printed `# not before`, from a gate view, or stopped the
+plan, from an input date, so `run` exited 4 or warped the clock for a step with nothing to send. A done
+step now has no date line; only a step still to send waits for its date. A predicate still waits for its
+date even when it holds.
 
 Fixed: `_recordReceipt` finds a CREATE's transaction on the chain, by the journal's deployer and
 nonce, when no broadcast record holds its receipt, as after a killed forge. Before, the role had no

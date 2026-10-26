@@ -708,21 +708,40 @@ contract StepBuildersTest is Test, Declares {
         assertTrue(vm.contains(g.plan("anvil", "fixture.check"), "# not before 100"));
     }
 
-    /// @dev A done check stays done after the date: neither a view's date nor an input date moved past
-    ///      the finished step stops the plan.
-    function test_aDoneStepPrintsNoFutureDate() public {
+    /// @dev A done check stays done after the date: a view's date does not stop the plan.
+    function test_aDoneStepPrintsNoFutureViewDate() public {
         TwoClocks clocks = new TwoClocks();
-        vm.warp(50);
         clocks.pre("");
-        Step[] memory s = new Step[](2);
+        Step[] memory s = new Step[](1);
         s[0] = _step("fixture.notify.0", "notify", TwoClocks.notify.selector)
             .withArg(0)
             .due(TwoClocks.notifyDue.selector)
             .gateView("windowEnd", TwoClocks.windowEnd.selector);
-        s[1] = _step("fixture.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector).notBefore("fixture.openAt");
         ClockGraph g = new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
         assertEq(g.plan("anvil", "fixture.notify.0"), "# done fixture.notify.0\n");
+    }
+
+    /// @dev An input date moved past a finished step does not stop the plan.
+    function test_aDoneStepPrintsNoFutureInputDate() public {
+        TwoClocks clocks = new TwoClocks();
+        vm.warp(50);
+        clocks.pre("");
+        Step[] memory s = new Step[](1);
+        s[0] = _step("fixture.pre", TwoClocks.pre.selector).due(TwoClocks.preDue.selector).notBefore("fixture.openAt");
+        ClockGraph g = new ClockGraph(clocks, Registration(address(clocks), "test/Fixture.s.sol:Fixture"), s);
         assertEq(g.plan("anvil", "fixture.pre"), "# done fixture.pre\n");
+    }
+
+    /// @dev A predicate that holds before its date may not hold at it: its dependents wait for the date.
+    function test_aPredicateThatHoldsBeforeItsDate_waitsForIt() public {
+        Counting counting = new Counting();
+        vm.warp(50);
+        counting.renew();
+        Step[] memory s = new Step[](2);
+        s[0] = _until("fixture.fresh", "fresh", Counting.fresh.selector).notBefore("fixture.time");
+        s[1] = _step("fixture.deploy", Counting.deploy.selector).due(Counting.deployDue.selector).needs("fixture.fresh");
+        BuilderGraph g = new BuilderGraph(Registration(address(counting), unit.script), s);
+        assertEq(g.plan("anvil", "fixture.deploy"), "# not before 100 fixture.fresh\n# then plan again fixture.fresh\n");
     }
 
     function test_rehearse_doesNotWarpAnotherChainToAnInputDate() public {
