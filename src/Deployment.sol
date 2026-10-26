@@ -1001,6 +1001,8 @@ abstract contract Deployment is ForgeBroadcasts {
         }
     }
 
+    string private constant PROVEN = "sprue: creation proven";
+
     /// @dev `role`'s address is the CREATE of its recorded deployer at its recorded nonce, that deployer is
     ///      the one `network.json` pins, its recorded arguments are `args`, and the transaction that created
     ///      it sent `args`: the journal's `<role>Tx`, a broadcast record's, the
@@ -1032,6 +1034,11 @@ abstract contract Deployment is ForgeBroadcasts {
             );
             return;
         }
+        // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
+        // revert and lasts one forge run, or one test. Only a success is kept. It rests on a mined
+        // transaction, which a run treats as final.
+        address proven = address(uint160(uint256(keccak256(abi.encode(block.chainid, addr, hash, keccak256(args))))));
+        if (keccak256(bytes(vm.getLabel(proven))) == keccak256(bytes(PROVEN))) return;
         // The journal's arguments vouch for nothing: an edit can match them to the input while the contract
         // holds what its creation sent.
         require(
@@ -1043,6 +1050,7 @@ abstract contract Deployment is ForgeBroadcasts {
             input.length >= args.length && _sentArgs(input, args.length) == keccak256(args),
             string.concat(role, "'s creation sent other constructor arguments than its input: a person must resolve it")
         );
+        vm.label(proven, PROVEN);
     }
 
     function _sentArgs(bytes memory input, uint256 length) private pure returns (bytes32 rest) {

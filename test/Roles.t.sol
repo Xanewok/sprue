@@ -528,6 +528,23 @@ contract RolesTest is Test {
         fresh.atToy(network);
     }
 
+    /// @dev A proof outlives the reverted state that made it, as a probe's does: the run does not read the
+    ///      creation again, even where the chain would now say otherwise.
+    function test_at_aProofOutlivesARevertOfTheStateThatMadeIt() public {
+        _network("kept", vm.toString(ops));
+        unit.deploy(network);
+        LandedToy fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        uint256 before = vm.snapshotState();
+        address toy = fresh.atToy(network);
+        vm.revertToState(before);
+        fresh.confirm(0);
+        assertEq(fresh.atToy(network), toy);
+    }
+
     function test_check_runsOnEveryReuse_andItsRefusalStopsTheStep() public {
         _network("check", vm.toString(ops));
         unit.deploy(network);
