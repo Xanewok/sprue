@@ -44,6 +44,14 @@ abstract contract ForgeTranscript is Test {
     /// @dev Ends the recording and returns its sends: every Call and Create whose accessor has no code, a
     ///      reverted top-level one too; and the CREATEs that landed.
     function _recordDrain() internal returns (Sent[] memory sent, Created[] memory created) {
+        return this.drainFrame();
+    }
+
+    /// @dev `_recordDrain` in its own call frame: the decoded diff is as large as the run that made it and
+    ///      Solidity never frees memory, so the caller would keep every diff it ever drained, and pay memory gas
+    ///      on all of them. The caller keeps only the sends.
+    function drainFrame() external returns (Sent[] memory sent, Created[] memory created) {
+        require(msg.sender == address(this), "only the transcript drains");
         VmSafe.AccountAccess[] memory log = vm.stopAndReturnStateDiff();
         sent = new Sent[](log.length);
         created = new Created[](log.length);
