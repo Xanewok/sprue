@@ -231,6 +231,90 @@ contract TwinToy is ToyJournal {
     }
 }
 
+/// @dev An extern role fixed at one address, optional, required on a chain the test sets, with the input key defaulted.
+contract AtToy is ToyJournal {
+    address public canonical;
+    bytes32 public externHash;
+    uint256 public requiredChain = 777;
+
+    function setRequired(uint256 chainId) external {
+        requiredChain = chainId;
+    }
+
+    function set(address at_, bytes32 hash) external {
+        (canonical, externHash) = (at_, hash);
+    }
+
+    bool public rejects;
+
+    function setRejects() external {
+        rejects = true;
+    }
+
+    function _reject(address, bytes memory) private pure {
+        revert("ext's ensure rejects");
+    }
+
+    function ext() internal view returns (Role memory r) {
+        r = extern("ext", externHash).at(canonical).optional().requiredOn(requiredChain);
+        if (rejects) r = r.ensure(_reject);
+    }
+
+    function absentThenPresent(string calldata network, string calldata inputPath, string calldata input)
+        external
+        returns (address, address)
+    {
+        _use(network);
+        address first = _at(ext());
+        vm.etch(canonical, externCode);
+        vm.writeFile(inputPath, input);
+        address second = _at(ext());
+        _done(false);
+        return (first, second);
+    }
+
+    bytes public externCode;
+
+    function setCode(bytes calldata code) external {
+        externCode = code;
+    }
+
+    function atExt(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(ext());
+        _done(false);
+    }
+
+    function atExtTwice(string calldata network, bytes calldata codeBetween) external returns (address, address) {
+        _use(network);
+        address first = _at(ext());
+        vm.etch(canonical, codeBetween);
+        address second = _at(ext());
+        _done(false);
+        return (first, second);
+    }
+
+    function endAfter(string calldata network, bytes calldata codeBetween) external returns (string memory) {
+        _use(network);
+        _at(ext());
+        vm.etch(canonical, codeBetween);
+        return _endCheck();
+    }
+
+    function readOther(string calldata network) external returns (address) {
+        _use(network);
+        return _atOther(ext().unit("at"));
+    }
+
+    function _roles() internal view override returns (Role[] memory) {
+        return _list(ext());
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "at";
+    }
+}
+
 /// @dev Another unit, which reads `TOY()` from the roles unit's journal.
 contract ReaderToy is ToyJournal {
     function read(string calldata network) external returns (address a) {
@@ -808,6 +892,191 @@ contract RolesTest is Test {
             )
         );
         reader.readExt(network, ext.codehash);
+    }
+
+    // ==== Extern roles with a canonical address ====
+
+    function _atInput(string memory value) private {
+        vm.writeFile(string.concat(dir, "/at.input.json"), string.concat('{"ext":', value, "}"));
+    }
+
+    function _atFixture() private returns (AtToy t, address ext) {
+        t = new AtToy();
+        ext = address(new ToyPayload(3));
+        t.set(ext, ext.codehash);
+    }
+
+    function test_extern_at_isTheInputsAddressWhenItIsTheCanonicalOne_underTheDefaultKey() public {
+        _network("extern-at", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        assertEq(t.atExt(network), ext);
+        assertEq(t.readOther(network), ext);
+    }
+
+    function test_extern_at_refusesAnotherAddress_evenWithThePinnedCode() public {
+        _network("extern-at-other", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        address clone = makeAddr("clone");
+        vm.etch(clone, ext.code);
+        _atInput(string.concat('"', vm.toString(clone), '"'));
+        bytes memory reason =
+            bytes(string.concat("ext's input names ", vm.toString(clone), ", not its canonical ", vm.toString(ext)));
+        vm.expectRevert(reason);
+        t.atExt(network);
+        vm.expectRevert(reason);
+        t.readOther(network);
+    }
+
+    function test_extern_at_keepsTheCodeHashCheck() public {
+        _network("extern-at-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        t.set(ext, bytes32(uint256(1)));
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        t.atExt(network);
+    }
+
+    function test_extern_optional_absentIsAZeroAddress_whileTheCanonicalAddressHoldsNoCode() public {
+        _network("extern-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+        assertEq(t.readOther(network), address(0));
+    }
+
+    function test_extern_optional_refusesAbsenceOnceCodeAppears_onEveryRead() public {
+        _network("extern-absent-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+
+        vm.etch(ext, hex"00");
+        bytes memory reason = bytes(
+            string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+        );
+        vm.expectRevert(reason);
+        t.atExt(network);
+        vm.expectRevert(reason);
+        t.readOther(network);
+    }
+
+    function test_extern_requiredOn_refusesAbsenceOnThatChain_only() public {
+        _network("extern-required", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        assertEq(t.atExt(network), address(0));
+        t.setRequired(31337);
+        vm.expectRevert(bytes("ext is required on chain 31337: name it in the input"));
+        t.atExt(network);
+        vm.expectRevert(bytes("ext is required on chain 31337: name it in the input"));
+        t.readOther(network);
+    }
+
+    function test_extern_at_refusesAnEarlierProof_whenTheCodeAppearsInTheSameStep() public {
+        _network("extern-twice-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(
+            bytes(
+                string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+            )
+        );
+        t.atExtTwice(network, hex"00");
+    }
+
+    function test_extern_at_refusesAnEarlierProof_whenThePinnedCodeChangesInTheSameStep() public {
+        _network("extern-twice-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        t.atExtTwice(network, hex"00");
+    }
+
+    function test_extern_at_sameStepReadsAgree_whenNothingChanges() public {
+        _network("extern-twice-same", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        (address a, address b) = t.atExtTwice(network, ext.code);
+        assertEq(a, ext);
+        assertEq(b, ext);
+    }
+
+    function test_extern_endCheck_refusesAStaleAbsence() public {
+        _network("extern-end-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(
+            bytes(
+                string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+            )
+        );
+        t.endAfter(network, hex"00");
+    }
+
+    function test_extern_at_runsEnsureOnTheFirstPresentReadOfAStep() public {
+        _network("extern-ensure-transition", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        t.setCode(ext.code);
+        t.setRejects();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(bytes("ext's ensure rejects"));
+        t.absentThenPresent(
+            network, string.concat(dir, "/at.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}')
+        );
+    }
+
+    function test_extern_at_refusesTheZeroAddress() public {
+        vm.expectRevert(bytes("ext's .at is the zero address"));
+        this.buildAtZero();
+    }
+
+    function buildAtZero() external pure {
+        extern("ext", bytes32(0)).at(address(0));
+    }
+
+    function test_extern_requiredOn_accumulates() public {
+        Role memory r = extern("ext", bytes32(0)).at(address(1)).optional().requiredOn(5).requiredOn(6);
+        assertEq(r.requiredChains.length, 2);
+        assertEq(r.requiredChains[0], 5);
+        assertEq(r.requiredChains[1], 6);
+    }
+
+    function test_extern_requiredOn_acceptsAPresentInput() public {
+        _network("extern-required-present", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        t.setRequired(31337);
+        assertEq(t.atExt(network), ext);
+    }
+
+    function test_extern_builders_refuseWhatTheyCannotMean() public {
+        Role memory r = extern("ext", bytes32(0));
+        assertEq(r.key, "ext");
+        vm.expectRevert(bytes("ext's .optional needs .at: absence is proven at one address"));
+        this.buildOptional();
+        vm.expectRevert(bytes("ext's .requiredOn needs .optional first"));
+        this.buildRequiredOn();
+        vm.expectRevert(bytes("t's .at is for an extern role"));
+        this.buildAtOnCreate();
+    }
+
+    function buildOptional() external pure {
+        extern("ext", bytes32(0)).optional();
+    }
+
+    function buildRequiredOn() external pure {
+        extern("ext", bytes32(0)).requiredOn(1);
+    }
+
+    function buildAtOnCreate() external pure {
+        create("t", "ToyPayload").at(address(1));
     }
 
     // ==== Recovery ====

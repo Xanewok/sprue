@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Added: an `extern` role takes `.at(address)` (the input may name only that address), `.optional()` (the input
+may say `"absent"`; `_at` returns the zero address after proving, on every read, that the `.at` address holds
+no code) and `.requiredOn(chainId)` (no `"absent"` on that chain), and `extern(name, codeHash)` takes the
+name as the input key.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with
