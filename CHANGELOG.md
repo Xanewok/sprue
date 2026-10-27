@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Another unit's CREATE or CREATE2 role read with `_at` is now proven as its unit proves it: its journaled
+arguments are the builder's (run as that unit) or, with no builder, its journaled ones, and the creation
+sent them. A CREATE2 role's arguments are tied to its recorded initcode hash, for own roles too. `_atOther`
+still proves identity and code only. A refusal that was not one before: another unit's role whose creation
+no transaction shows, or whose arguments differ. Costs two RPC calls per role, once per step and chain.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with

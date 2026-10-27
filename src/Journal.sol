@@ -80,6 +80,8 @@ abstract contract Journal is Script, IProbe {
     bool internal _stepOpen;
     /// @dev Set only inside `probe`, whose revert clears it.
     bool private _probing;
+    /// @dev The unit whose files `_journal` and `_unitInput` read while `_argsOfOther` runs its role's builder.
+    string internal _asUnit;
 
     /// @dev The step's first broadcast (`_startBroadcast`) or journal write (`_put`) reverts
     ///      with `StepDue`. While the prank is active forge refuses `vm.startBroadcast` and
@@ -253,7 +255,7 @@ abstract contract Journal is Script, IProbe {
 
     /// @dev The unit's own parameters, `_deployments()/<network>/<unit>.input.json`.
     function _unitInput() internal view returns (string memory) {
-        return vm.readFile(inputPath(_deployments(), _networkName(), _unit()));
+        return vm.readFile(inputPath(_deployments(), _networkName(), _subject()));
     }
 
     /// @dev `unit`'s input file on this network, for the readers below, whose refusals then name it.
@@ -323,9 +325,14 @@ abstract contract Journal is Script, IProbe {
         return string.concat(_dir(), "/", _unit(), ".json");
     }
 
+    /// @dev The unit a builder reads as its own: the role's, while another unit's builder runs.
+    function _subject() internal view returns (string memory) {
+        return bytes(_asUnit).length != 0 ? _asUnit : _unit();
+    }
+
     /// @dev A missing journal reads as empty; the first `_put` creates it.
     function _journal() internal view returns (string memory) {
-        string memory p = _path();
+        string memory p = string.concat(_dir(), "/", _subject(), ".json");
         return vm.exists(p) ? vm.readFile(p) : "{}";
     }
 

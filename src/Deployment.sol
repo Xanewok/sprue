@@ -857,7 +857,8 @@ abstract contract Deployment is ForgeBroadcasts {
         }
         if (journaled && landed) {
             _requireLandedCode(journal, role, true);
-            _requireCreate2Record(journal, role, args, true);
+            _requireCreate2Record(journal, role);
+            _requireCreate2Args(_unit(), journal, role, artifact, args);
         } else {
             // A new salt for a landed role would deploy a second one.
             require(
@@ -1007,13 +1008,20 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      chain's at the recorded nonce, or this run's. On a network that pins no deployer, the recorded
     ///      deployer stands, with a warning: nothing then says whose CREATE the role must be.
     function _requireCreateIdentity(string memory journal, string memory role, bytes memory args) internal {
+        _requireCreateRecord(_unit(), journal, role, _addr(journal, string.concat(".", role)));
+        _requireCreatedWith(_unit(), journal, role, args);
+    }
+
+    /// @dev `_requireCreateIdentity` after `_requireCreateRecord`, for `unit`'s journal.
+    function _requireCreatedWith(string memory unit, string memory journal, string memory role, bytes memory args)
+        internal
+    {
         string memory key = string.concat(".", role);
         address addr = _addr(journal, key);
-        _requireCreateRecord(_unit(), journal, role, addr);
-        _requireKey(_unit(), journal, role, "Args");
+        _requireKey(unit, journal, role, "Args");
         require(
             keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
-            string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
+            string.concat(role, "'s constructor arguments differ from ", unit, ".json")
         );
         if (_createdThisRun[_deployment(addr)]) return;
         bytes32 hash = _createTx(journal, role);
@@ -1022,7 +1030,7 @@ abstract contract Deployment is ForgeBroadcasts {
                 _testCreationsTrusted,
                 string.concat(
                     "neither ",
-                    _unit(),
+                    unit,
                     ".json, a broadcast record nor the chain shows the transaction that created ",
                     role,
                     ": journal it as ",
@@ -1036,7 +1044,7 @@ abstract contract Deployment is ForgeBroadcasts {
         // holds what its creation sent.
         require(
             _createdIn(hash, addr, false) != 0,
-            string.concat(role, "Tx in ", _unit(), ".json did not create ", role, ": a person must resolve it")
+            string.concat(role, "Tx in ", unit, ".json did not create ", role, ": a person must resolve it")
         );
         bytes memory input = _sentInput(hash);
         require(
@@ -1083,12 +1091,9 @@ abstract contract Deployment is ForgeBroadcasts {
     }
 
     /// @dev The factory puts `role`, under the salt and initcode hash `journal` records, at the address it
-    ///      records, and, with `withArgs`, the recorded arguments are `args`. Against the recorded initcode
-    ///      hash, not this build's, so that a later source edit does not orphan the role.
-    function _requireCreate2Record(string memory journal, string memory role, bytes memory args, bool withArgs)
-        internal
-        view
-    {
+    ///      records. Against the recorded initcode hash, not this build's, so that a later source edit does
+    ///      not orphan the role.
+    function _requireCreate2Record(string memory journal, string memory role) internal view {
         string memory key = string.concat(".", role);
         require(
             _has(journal, string.concat(key, "Salt")) && _has(journal, string.concat(key, "InitcodeHash"))
@@ -1099,12 +1104,34 @@ abstract contract Deployment is ForgeBroadcasts {
                 ) == _addr(journal, key),
             string.concat(role, "'s address is not the CREATE2 factory's for its recorded salt and initcode")
         );
-        if (!withArgs) return;
-        _requireKey(_unit(), journal, role, "Args");
+    }
+
+    /// @dev `unit`'s journaled arguments of the CREATE2 role are `args`, and `args` are what its initcode hash
+    ///      commits to: the hash of `artifact`'s creation code with them, else, where a source edit changed
+    ///      that code, the tail of the factory call that created the role.
+    function _requireCreate2Args(
+        string memory unit,
+        string memory journal,
+        string memory role,
+        string memory artifact,
+        bytes memory args
+    ) internal {
+        string memory key = string.concat(".", role);
+        _requireKey(unit, journal, role, "Args");
         require(
             keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
-            string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
+            string.concat(role, "'s constructor arguments differ from ", unit, ".json")
         );
+        if (_initcodeHash(artifact, args) == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))) return;
+        string memory refusal = string.concat(
+            role,
+            "'s constructor arguments are not the ones its recorded initcode hash commits to: a person must resolve it"
+        );
+        require(_has(journal, string.concat(key, "Tx")), refusal);
+        bytes32 hash = vm.parseJsonBytes32(journal, string.concat(key, "Tx"));
+        require(_createdIn(hash, _addr(journal, key), true) != 0, refusal);
+        bytes memory input = _sentInput(hash);
+        require(input.length >= 32 + args.length && _sentArgs(input, args.length) == keccak256(args), refusal);
     }
 
     /// @dev The new contract's code must be the artifact's, with immutables read back from it. Override

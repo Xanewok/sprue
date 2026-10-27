@@ -101,9 +101,9 @@ function _twice(Role memory r) pure returns (string memory) {
 function _ensureNothing(address, bytes memory) pure {}
 
 /// @dev Guarantees: `_deploy` and `_at` return a role only once its journaled identity gives its address, its
-///      code hash is the journaled one, and, for the unit's own role, its journaled arguments are the declared
-///      ones and its `.ensure` passes. Relies on: the journaled arguments, which no step re-reads from the
-///      creation transaction.
+///      code hash is the journaled one, its journaled arguments are the declared ones (another unit's role: those
+///      its builder gives, else its journaled ones) and the creation sent them, and, for the unit's own role,
+///      its `.ensure` passes.
 abstract contract Roles is Deployment {
     struct Proved {
         string name;
@@ -112,6 +112,16 @@ abstract contract Roles is Deployment {
         /// @dev A step may select several forks: a proof holds on its own chain only.
         uint256 chainId;
     }
+
+    /// @dev Another unit's roles that `_at` proved in the open step, with the arguments proved.
+    struct ProvedOther {
+        string unitName;
+        string name;
+        bytes32 argsHash;
+        uint256 chainId;
+    }
+
+    ProvedOther[] private _provedOther;
 
     /// @dev This unit's roles that `_deploy` or `_at` proved in the open step, or that `recover` found. A dry
     ///      run journals nothing, so a later role's `.args` read an earlier role of the same step from here.
@@ -152,6 +162,7 @@ abstract contract Roles is Deployment {
     function _stepEnded() internal virtual override {
         super._stepEnded();
         delete _proved;
+        delete _provedOther;
     }
 
     /// @dev Deploys `r`, or proves its reuse, and returns its address. A step that deploys several roles
@@ -174,10 +185,10 @@ abstract contract Roles is Deployment {
         _proven(r, addr);
     }
 
-    /// @dev `r`'s address, proven, without a send. For another unit's role (`.unit(unitName)`), its arguments
-    ///      and `.ensure` are its unit's to prove, so only its identity and code are.
+    /// @dev `r`'s address, proven, without a send. Another unit's role (`.unit(unitName)`) is proven as that
+    ///      unit proves it, but for its `.ensure`, which is its unit's to run: see `_atOtherProved`.
     function _at(Role memory r) internal returns (address addr) {
-        if (!_own(r)) return _atOther(r);
+        if (!_own(r)) return _atOtherProved(r);
         uint256 proved = _provedIndex(r.name);
         if (proved != type(uint256).max) return _proved[proved].addr;
         _requireDeclared(r);
@@ -191,8 +202,12 @@ abstract contract Roles is Deployment {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
             addr = _requireLandedCode(journal, r.name, r.kind == Kind.Create2);
-            if (r.kind == Kind.Create) _requireCreateIdentity(journal, r.name, a);
-            else _requireCreate2Record(journal, r.name, a, true);
+            if (r.kind == Kind.Create) {
+                _requireCreateIdentity(journal, r.name, a);
+            } else {
+                _requireCreate2Record(journal, r.name);
+                _requireCreate2Args(_unit(), journal, r.name, r.artifact, a);
+            }
             _enterCheck(r);
             r.ensureFn(addr, a);
         }
@@ -200,8 +215,8 @@ abstract contract Roles is Deployment {
         _proven(r, addr);
     }
 
-    /// @dev Another unit's role, proven as `_at` proves it, and readable in a view: what the role's code fixes
-    ///      is proven here, and what its unit configured after the deploy is for the step to read.
+    /// @dev Another unit's role by its journaled identity and code, readable in a view. It proves no
+    ///      arguments: `_at` does, and so should a step that reads what the role's constructor fixed.
     function _atOther(Role memory r) internal view returns (address addr) {
         if (r.kind == Kind.Extern) {
             addr = _requiredAddress(_inputFile(r.declaredBy), r.key);
@@ -220,7 +235,44 @@ abstract contract Roles is Deployment {
             string.concat(r.name, "'s code differs from ", r.declaredBy, ".json")
         );
         if (r.kind == Kind.Create) _requireCreateRecord(r.declaredBy, journal, r.name, addr);
-        else _requireCreate2Record(journal, r.name, "", false);
+        else _requireCreate2Record(journal, r.name);
+    }
+
+    /// @dev `_atOther`, and for a CREATE or CREATE2 role its arguments: `r`'s builder gives them, run as its
+    ///      unit (`_journal` and `_unitInput` read that unit's files), or, with none, the journaled ones. They
+    ///      must be the journal's and what the creation sent (a CREATE role's transaction, a CREATE2 role's
+    ///      initcode hash). What its unit configured after the deploy, its `.ensure` and its constructor's
+    ///      children are for the step to read. A proof costs two RPC calls, once per step and chain.
+    function _atOtherProved(Role memory r) private returns (address addr) {
+        addr = _atOther(r);
+        if (r.kind == Kind.Extern) return addr;
+        string memory journal = _journalOf(r.declaredBy);
+        bytes memory a;
+        if (r.computed || r.fixedArgs.length != 0) {
+            _asUnit = r.declaredBy;
+            a = _argsOf(r);
+            delete _asUnit;
+        } else {
+            _requireKey(r.declaredBy, journal, r.name, "Args");
+            a = vm.parseJsonBytes(journal, string.concat(".", r.name, "Args"));
+        }
+        uint256 proved = _provedOtherIndex(r, keccak256(a));
+        if (proved != type(uint256).max) return addr;
+        if (r.kind == Kind.Create) _requireCreatedWith(r.declaredBy, journal, r.name, a);
+        else _requireCreate2Args(r.declaredBy, journal, r.name, r.artifact, a);
+        if (_stepOpen) _provedOther.push(ProvedOther(r.declaredBy, r.name, keccak256(a), block.chainid));
+    }
+
+    function _provedOtherIndex(Role memory r, bytes32 argsHash) private view returns (uint256) {
+        for (uint256 i; i < _provedOther.length; ++i) {
+            ProvedOther memory p = _provedOther[i];
+            if (
+                keccak256(bytes(p.unitName)) == keccak256(bytes(r.declaredBy))
+                    && keccak256(bytes(p.name)) == keccak256(bytes(r.name)) && p.argsHash == argsHash
+                    && p.chainId == block.chainid
+            ) return i;
+        }
+        return type(uint256).max;
     }
 
     function _enterCheck(Role memory r) private {

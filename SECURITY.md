@@ -56,7 +56,7 @@ end-to-end scenario for each invariant.
   broadcast records, or the chain, through an RPC that serves the deployer's nonce at past blocks. Where
   none shows it, the proof refuses, in a test too unless the test calls `trustTestCreations()`. A role that
   the same unit created in this run passes without one, since a simulation's deployment has no
-  transaction; another unit proving it is refused.
+  transaction; another unit proving it with `_at` is refused. `_atOther` proves identity and code only.
 - Chains in `chains.local` and `chains.test`, and a chain that `chains.unrecordedDeploys` lists, have no
   nonce fence. Losing a journal and its broadcast records there can deploy a role twice.
 - A change of the pin is not supported. A CREATE role is proven only as the pin's CREATE, so after a

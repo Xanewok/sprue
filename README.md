@@ -51,9 +51,10 @@ Three layers own different kinds of correctness.
   - A role that `_deploy` or `_at` returns is proven against the chain. A CREATE role must
     be its recorded deployer's CREATE at its recorded nonce, and its creation transaction must have sent
     the declared constructor arguments. A CREATE2 role must be the factory's address for its journaled salt
-    and initcode hash. An extern role must have its pinned code hash. Two gaps remain: a CREATE2 role's
-    arguments are compared with its journal only, and another unit's role is proven by its identity and
-    code, not its arguments. An address that a step uses without a role is not checked.
+    and initcode hash, and its arguments must be the ones that hash commits to. Another unit's role, read
+    with `_at`, is proven the same way, with the arguments its builder gives or, with none, its journaled
+    ones. An extern role must have its pinned code hash. An address that a step uses without a role is not
+    checked.
   - A second run of a finished deployment sends nothing, unless the chain or its inputs changed in between.
 - **Preflight checks** are everything else sprue checks: a role's `.ensure` check of a deployed contract's
   state and the assertions a unit's steps make about the protocol. They refuse early with a clear message,

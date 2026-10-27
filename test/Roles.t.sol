@@ -166,8 +166,14 @@ contract KindsToy is ToyJournal {
         externHash = hash;
     }
 
-    function hook() internal pure returns (Role memory) {
-        return create2("hook", "ToyPayload", "create2").args(abi.encode(uint256(7)));
+    uint256 public hookTag = 7;
+
+    function setHookTag(uint256 tag) external {
+        hookTag = tag;
+    }
+
+    function hook() internal view returns (Role memory) {
+        return create2("hook", "ToyPayload", "create2").args(abi.encode(hookTag));
     }
 
     function ext() internal view returns (Role memory) {
@@ -239,14 +245,55 @@ contract ReaderToy is ToyJournal {
         _done(false);
     }
 
+    function readWith(string calldata network, bytes calldata args) external returns (address a) {
+        _use(network);
+        a = _at(TOY().args(args));
+        _done(false);
+    }
+
+    /// @dev The builder reads the roles unit's journal as its own.
+    function readBuilt(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(TOY().args(_journaledArgs));
+        _done(false);
+    }
+
+    function readHook(string calldata network, bytes calldata args) external returns (address a) {
+        _use(network);
+        a = _at(create2("hook", "ToyPayload", "create2").args(args).unit("kinds"));
+        _done(false);
+    }
+
     function readExt(string calldata network, bytes32 pinned) external returns (address a) {
         _use(network);
         a = _at(extern("ext", "ext", pinned).unit("kinds"));
         _done(false);
     }
 
+    function _journaledArgs() private view returns (bytes memory) {
+        return vm.parseJsonBytes(_journal(), ".toyArgs");
+    }
+
     function _unit() internal pure override returns (string memory) {
         return "reader";
+    }
+}
+
+/// @dev `ReaderToy` on a chain where `confirmed` created the role and `sent` is its transaction's input.
+contract LandedReader is ReaderToy {
+    bytes32 public confirmed;
+    bytes public sent;
+
+    function confirm(bytes32 hash, bytes calldata input) external {
+        (confirmed, sent) = (hash, input);
+    }
+
+    function _createdIn(bytes32 hash, address, bool) internal view override returns (uint256) {
+        return hash == confirmed ? 5 : 0;
+    }
+
+    function _sentInput(bytes32) internal view override returns (bytes memory) {
+        return sent;
     }
 }
 
@@ -654,6 +701,7 @@ contract RolesTest is Test {
         _network("reader", vm.toString(ops));
         unit.deploy(network);
         ReaderToy reader = new ReaderToy();
+        reader.trustTestCreations();
         assertEq(reader.read(network), vm.parseJsonAddress(_journal(), ".toy"));
 
         _set(".toyNonce", "3");
@@ -665,6 +713,7 @@ contract RolesTest is Test {
         _network("reader-code", vm.toString(ops));
         unit.deploy(network);
         ReaderToy reader = new ReaderToy();
+        reader.trustTestCreations();
         address toy = vm.parseJsonAddress(_journal(), ".toy");
 
         vm.etch(toy, bytes.concat(toy.code, hex"00"));
@@ -682,6 +731,136 @@ contract RolesTest is Test {
             )
         );
         reader.read(network);
+    }
+
+    function test_at_anotherUnitsRole_isRefusedWhenNoTransactionShowsItCreated() public {
+        _network("reader-unshown", vm.toString(ops));
+        unit.deploy(network);
+        ReaderToy reader = new ReaderToy();
+        vm.expectRevert(
+            bytes(
+                "neither roles.json, a broadcast record nor the chain shows the transaction that created toy: journal it as toyTx"
+            )
+        );
+        reader.read(network);
+    }
+
+    /// @dev The journal's arguments, edited to another consistent set, do not pass for what the creation sent.
+    function test_at_anotherUnitsRole_isRefusedWhenItsJournaledArgumentsAreNotTheCreations() public {
+        _network("reader-sent", vm.toString(ops));
+        unit.deploy(network);
+        LandedReader reader = new LandedReader();
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        reader.confirm(hash, bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1))));
+        assertEq(reader.read(network), vm.parseJsonAddress(_journal(), ".toy"));
+
+        _set(".toyArgs", vm.toString(abi.encode(uint256(2))));
+        vm.expectRevert(
+            bytes("toy's creation sent other constructor arguments than its input: a person must resolve it")
+        );
+        reader.read(network);
+    }
+
+    function test_at_anotherUnitsRole_isRefusedWhenItsJournaledArgumentsAreNotTheBuilders() public {
+        _network("reader-builder", vm.toString(ops));
+        unit.deploy(network);
+        ReaderToy reader = new ReaderToy();
+        reader.trustTestCreations();
+        address toy = vm.parseJsonAddress(_journal(), ".toy");
+        assertEq(reader.readWith(network, abi.encode(uint256(1))), toy);
+
+        vm.expectRevert(bytes("toy's constructor arguments differ from roles.json"));
+        reader.readWith(network, abi.encode(uint256(2)));
+    }
+
+    function test_at_anotherUnitsBuilder_runsAsItsUnit() public {
+        _network("reader-as", vm.toString(ops));
+        unit.deploy(network);
+        ReaderToy reader = new ReaderToy();
+        reader.trustTestCreations();
+        assertEq(reader.readBuilt(network), vm.parseJsonAddress(_journal(), ".toy"));
+    }
+
+    function test_at_anotherUnitsCreate2Role_isRefusedWhenItsArgumentsAreNotItsInitcodeHashs() public {
+        _network("reader-create2", vm.toString(ops));
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(5));
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
+        vm.writeFile(
+            string.concat(dir, "/kinds.input.json"),
+            string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
+        );
+        kinds.deployHook(network);
+        ReaderToy reader = new ReaderToy();
+        assertEq(reader.readHook(network, abi.encode(uint256(7))), at);
+
+        _setIn("kinds", ".hookArgs", string.concat('"', vm.toString(abi.encode(uint256(8))), '"'));
+        vm.expectRevert(
+            bytes(
+                "hook's constructor arguments are not the ones its recorded initcode hash commits to: a person must resolve it"
+            )
+        );
+        reader.readHook(network, abi.encode(uint256(8)));
+    }
+
+    function test_at_aCreate2Role_isRefusedWhenItsArgumentsAreNotItsInitcodeHashs() public {
+        _network("create2-tie", vm.toString(ops));
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(5));
+        bytes memory initcode = bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(initcode), FACTORY);
+        vm.writeFile(
+            string.concat(dir, "/kinds.input.json"),
+            string.concat('{"create2":{"salt":"', vm.toString(salt), '","address":"', vm.toString(at), '"}}')
+        );
+        kinds.deployHook(network);
+        kinds.setHookTag(8);
+        _setIn("kinds", ".hookArgs", string.concat('"', vm.toString(abi.encode(uint256(8))), '"'));
+        vm.expectRevert(
+            bytes(
+                "hook's constructor arguments are not the ones its recorded initcode hash commits to: a person must resolve it"
+            )
+        );
+        kinds.atHook(network);
+    }
+
+    /// @dev A source edit changes the creation code: the factory call shows the arguments instead.
+    function test_at_aCreate2Role_ofAnEditedBuild_isProvenByItsFactoryCall() public {
+        _network("create2-edited", vm.toString(ops));
+        vm.etch(FACTORY, FACTORY_CODE);
+        bytes32 salt = bytes32(uint256(5));
+        bytes memory old = bytes.concat(hex"aabb", abi.encode(uint256(7)));
+        address at = vm.computeCreate2Address(salt, keccak256(old), FACTORY);
+        vm.etch(at, address(new ToyPayload(7)).code);
+        string memory j = string.concat(
+            '{"hook":"',
+            vm.toString(at),
+            '","hookSalt":"',
+            vm.toString(salt),
+            '","hookInitcodeHash":"',
+            vm.toString(keccak256(old)),
+            '","hookCodeHash":"',
+            vm.toString(at.codehash),
+            '","hookArgs":"',
+            vm.toString(abi.encode(uint256(7))),
+            '","hookTx":"',
+            vm.toString(keccak256("the hook's creation")),
+            '","mainChainId":31337}'
+        );
+        vm.writeFile(string.concat(dir, "/kinds.json"), j);
+        LandedReader reader = new LandedReader();
+        reader.confirm(keccak256("the hook's creation"), bytes.concat(salt, old));
+        assertEq(reader.readHook(network, abi.encode(uint256(7))), at);
+
+        reader.confirm(keccak256("the hook's creation"), bytes.concat(salt, hex"aabb", abi.encode(uint256(9))));
+        vm.expectRevert(
+            bytes(
+                "hook's constructor arguments are not the ones its recorded initcode hash commits to: a person must resolve it"
+            )
+        );
+        reader.readHook(network, abi.encode(uint256(7)));
     }
 
     function test_at_anotherUnitsExternRole_isTheInputsAddressWithThePinnedCode() public {
