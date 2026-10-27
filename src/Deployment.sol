@@ -1144,12 +1144,17 @@ abstract contract Deployment is ForgeBroadcasts {
     ///      beside the journal because `out/` is usually git-ignored.
     function _recordBuild(string memory role, address deployed, string memory name) internal {
         if (_inProbe()) revert StepDue();
+        _put(string.concat(".", role, "Commit"), '"pending"');
+        _recordCode(role, deployed, name);
+    }
+
+    /// @dev `_recordBuild` without the commit, for code that another role's creation made.
+    function _recordCode(string memory role, address deployed, string memory name) internal {
         string memory metadataPath = string.concat(_dir(), "/", name, ".metadata.json");
         vm.writeFile(
             metadataPath,
             vm.parseJsonString(vm.readFile(string.concat("out/", name, ".sol/", name, ".json")), ".rawMetadata")
         );
-        _put(string.concat(".", role, "Commit"), '"pending"');
         _put(string.concat(".", role, "CodeHash"), vm.toString(deployed.codehash));
         _put(string.concat(".", role, "Metadata"), string.concat('"', metadataPath, '"'));
     }

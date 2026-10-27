@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.27;
 
+import {requireBuild} from "./DeployChecks.sol";
 import {Deployment} from "./Deployment.sol";
 import {Input} from "./Journal.sol";
 
@@ -8,7 +9,8 @@ import {Input} from "./Journal.sol";
 enum Kind {
     Create,
     Create2,
-    Extern
+    Extern,
+    Child
 }
 
 /// @dev A contract a unit deploys or reads, declared once. Fields are named apart from the builders:
@@ -20,7 +22,10 @@ struct Role {
     string artifact;
     Kind kind;
     /// @dev `create2`: the input key that holds `salt` and `address`. `extern`: the input key of the address.
+    ///      `child`: the parent's getter; empty for a `runtime`.
     string key;
+    /// @dev `child` and `runtime` only: the role whose creation made this one.
+    string parent;
     /// @dev `extern` only.
     bytes32 codeHash;
     bool computed;
@@ -57,6 +62,26 @@ function extern(string memory name, string memory key, bytes32 codeHash) pure re
     r.codeHash = codeHash;
     r.argsFn = _noArgs;
     r.ensureFn = _ensureNothing;
+}
+
+/// @dev A contract that `parent`'s constructor creates, at the address `parent`'s `getter` (such as `"HOOK()"`)
+///      returns. The parent's code must fix that address: an immutable, or storage only its constructor writes.
+///      A `check` records it as the unit records its own roles, with the parent's commit.
+function child(string memory name, string memory artifact, Role memory parent, string memory getter)
+    pure
+    returns (Role memory r)
+{
+    r = create(name, artifact);
+    r.kind = Kind.Child;
+    r.key = getter;
+    r.parent = parent.name;
+}
+
+/// @dev The code `parent`'s constructor returned in place of its own: `artifact`'s runtime, perhaps with data
+///      after it, at `parent`'s address. `parent` keeps the build that created it, and this role names the
+///      program the address runs.
+function runtime(string memory name, string memory artifact, Role memory parent) pure returns (Role memory r) {
+    r = child(name, artifact, parent, "");
 }
 
 /// @dev Each builder edits the memory struct it is given and returns that same struct.
@@ -159,6 +184,7 @@ abstract contract Roles is Deployment {
     function _deploy(Role memory r) internal returns (address addr) {
         require(_own(r), string.concat(r.name, " is ", r.declaredBy, "'s role: read it with _at"));
         require(r.kind != Kind.Extern, string.concat(r.name, " is extern: read it with _at"));
+        require(r.kind != Kind.Child, string.concat(r.name, " is ", r.parent, "'s: deploy ", r.parent));
         _requireDeclared(r);
         string memory journal = _journal();
         bytes memory a = _argsOf(r);
@@ -172,6 +198,8 @@ abstract contract Roles is Deployment {
         }
         _checking[keccak256(bytes(r.name))] = false;
         _proven(r, addr);
+        // So that a reader finds the children as soon as the parent; `check` journals those of an older record.
+        if (_writing() && !_inProbe()) _recordChildren(r.name);
     }
 
     /// @dev `r`'s address, proven, without a send. For another unit's role (`.unit(unitName)`), its arguments
@@ -187,6 +215,8 @@ abstract contract Roles is Deployment {
             require(addr.codehash == r.codeHash, string.concat(r.name, "'s code is not the code its role pins"));
             _enterCheck(r);
             r.ensureFn(addr, "");
+        } else if (r.kind == Kind.Child) {
+            return _proveChild(r, _journal());
         } else {
             string memory journal = _journal();
             bytes memory a = _argsOf(r);
@@ -212,6 +242,21 @@ abstract contract Roles is Deployment {
         string memory journal = _journalOf(r.declaredBy);
         string memory key = string.concat(".", r.name);
         require(_has(journal, key), string.concat(r.declaredBy, ".json records no ", r.name));
+        if (r.kind == Kind.Child) {
+            // The parent's code fixes the child's address, so a proven parent proves where the child is.
+            string memory parentKey = string.concat(".", r.parent);
+            require(_has(journal, parentKey), string.concat(r.declaredBy, ".json records no ", r.parent));
+            address parent = _addr(journal, parentKey);
+            _requireCode(parent, r.parent);
+            require(
+                _has(journal, string.concat(parentKey, "CodeHash"))
+                    && parent.codehash == vm.parseJsonBytes32(journal, string.concat(parentKey, "CodeHash")),
+                string.concat(r.parent, "'s code differs from ", r.declaredBy, ".json")
+            );
+            addr = _childOf(r, parent);
+            _requireChild(journal, r, addr);
+            return addr;
+        }
         addr = _addr(journal, key);
         _requireCode(addr, r.name);
         require(
@@ -234,11 +279,142 @@ abstract contract Roles is Deployment {
 
     /// @dev `recover` and `_endCheck` take the roles from `_roles()`, so a role the unit uses must be there.
     function _requireDeclared(Role memory r) private view {
+        _declared(r.name);
+    }
+
+    function _declared(string memory name) private view returns (Role memory) {
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
-            if (keccak256(bytes(declared[i].name)) == keccak256(bytes(r.name))) return;
+            if (keccak256(bytes(declared[i].name)) == keccak256(bytes(name))) return declared[i];
         }
-        revert(string.concat(r.name, " is not in ", _unit(), "'s _roles(): declare it there"));
+        revert(string.concat(name, " is not in ", _unit(), "'s _roles(): declare it there"));
+    }
+
+    /// @dev `r`'s address given its parent's.
+    function _childOf(Role memory r, address parent) private view returns (address) {
+        if (bytes(r.key).length == 0) return parent;
+        (bool ok, bytes memory ret) = parent.staticcall(abi.encodeWithSignature(r.key));
+        require(ok && ret.length == 32, string.concat(r.parent, ".", r.key, " returns no address"));
+        return abi.decode(ret, (address));
+    }
+
+    /// @dev A child's record, once written, must still describe the address its parent names; its code hash
+    ///      then stands for the artifact check the record was written after.
+    function _requireChild(string memory journal, Role memory r, address addr) private view {
+        string memory key = string.concat(".", r.name);
+        if (_has(journal, key)) {
+            require(
+                _addr(journal, key) == addr
+                    && addr.codehash == vm.parseJsonBytes32(journal, string.concat(key, "CodeHash")),
+                string.concat(r.name, " is no longer the contract the journal records: a person must resolve it")
+            );
+            return;
+        }
+        _requireCode(addr, r.name);
+        // An artifact is large, and a step that proves a parent has read the parent's already.
+        uint256 mark = _freeMemory();
+        if (bytes(r.key).length != 0) {
+            requireBuild(addr, r.artifact);
+        } else {
+            bytes memory program = vm.getDeployedCode(string.concat(r.artifact, ".sol:", r.artifact));
+            bytes memory live = addr.code;
+            require(
+                live.length >= program.length && keccak256(program) == _prefixHash(live, program.length),
+                string.concat(r.parent, "'s code does not start with ", r.artifact, "'s program")
+            );
+        }
+        _releaseMemory(mark);
+    }
+
+    function _prefixHash(bytes memory b, uint256 length) private pure returns (bytes32 h) {
+        assembly ("memory-safe") {
+            h := keccak256(add(b, 0x20), length)
+        }
+    }
+
+    /// @dev A `runtime`'s parent runs the runtime's program, not its artifact's: the runtime's proof checks the
+    ///      code instead.
+    function _requireBuild(address addr, string memory artifact) internal view virtual override {
+        Role[] memory declared = _roles();
+        for (uint256 i; i < declared.length; ++i) {
+            Role memory r = declared[i];
+            if (r.kind != Kind.Child || bytes(r.key).length != 0 || !_own(r)) continue;
+            if (keccak256(bytes(_declared(r.parent).artifact)) == keccak256(bytes(artifact))) return;
+        }
+        super._requireBuild(addr, artifact);
+    }
+
+    function _requireCreatedDeclared(string memory role, address deployed, address[] memory created)
+        internal
+        view
+        override
+    {
+        Role[] memory declared = _roles();
+        for (uint256 i; i < created.length; ++i) {
+            if (created[i] == deployed || _covers(declared, role, deployed, created[i])) continue;
+            revert(
+                string.concat(
+                    role,
+                    "'s creation also created ",
+                    vm.toString(created[i]),
+                    ": declare it in _roles() as child(name, artifact, ",
+                    role,
+                    ", getter)"
+                )
+            );
+        }
+    }
+
+    /// @dev Whether a child of `parent` (at `parentAddr`), or a child of one, is at `addr`.
+    function _covers(Role[] memory declared, string memory parent, address parentAddr, address addr)
+        private
+        view
+        returns (bool)
+    {
+        for (uint256 i; i < declared.length; ++i) {
+            Role memory r = declared[i];
+            if (r.kind != Kind.Child || bytes(r.key).length == 0 || !_own(r)) continue;
+            if (keccak256(bytes(r.parent)) != keccak256(bytes(parent))) continue;
+            address at = _childOf(r, parentAddr);
+            if (at == addr || _covers(declared, r.name, at, addr)) return true;
+        }
+        return false;
+    }
+
+    function _proveChild(Role memory r, string memory journal) private returns (address addr) {
+        addr = _childOf(r, _at(_declared(r.parent)));
+        _requireChild(journal, r, addr);
+        _enterCheck(r);
+        r.ensureFn(addr, "");
+        _checking[keccak256(bytes(r.name))] = false;
+        _proven(r, addr);
+    }
+
+    /// @dev Proves each child of `parent` (of any role, if empty), and journals each one the journal lacks. One
+    ///      read of the journal for all: a step may hold much memory by now, so a large journal costs much gas
+    ///      with each read.
+    function _recordChildren(string memory parent) private {
+        uint256 mark = _freeMemory();
+        string memory journal = _journal();
+        Role[] memory declared = _roles();
+        for (uint256 i; i < declared.length; ++i) {
+            Role memory r = declared[i];
+            if (!_own(r) || r.kind != Kind.Child) continue;
+            if (bytes(parent).length != 0 && keccak256(bytes(r.parent)) != keccak256(bytes(parent))) continue;
+            bool recorded = _has(journal, string.concat(".", r.name));
+            // A probe only needs to know the record is due; the run that writes it checks the code.
+            if (_inProbe() && !recorded) revert StepDue();
+            uint256 proved = _provedIndex(r.name);
+            address addr = proved == type(uint256).max ? _proveChild(r, journal) : _proved[proved].addr;
+            if (!recorded) _recordChild(r, addr);
+        }
+        _releaseMemory(mark);
+    }
+
+    /// @dev No commit of its own: the parent's build made it.
+    function _recordChild(Role memory r, address addr) private {
+        _recordCode(r.name, addr, r.artifact);
+        _put(string.concat(".", r.name), vm.toString(addr));
     }
 
     function _own(Role memory r) private pure returns (bool) {
@@ -277,18 +453,19 @@ abstract contract Roles is Deployment {
         string memory journal = _journal();
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
-            if (!_own(declared[i])) continue;
+            if (!_own(declared[i]) || declared[i].kind == Kind.Child) continue;
             require(
                 _provedIndex(declared[i].name) != type(uint256).max,
                 string.concat("the step did not prove ", declared[i].name)
             );
         }
         for (uint256 i; i < declared.length; ++i) {
-            if (!_own(declared[i])) continue;
+            if (!_own(declared[i]) || declared[i].kind == Kind.Child) continue;
             Proved memory p = _proved[_provedIndex(declared[i].name)];
             if (p.kind == Kind.Extern) continue;
             _requireReceipt(journal, p.name, p.addr, p.kind == Kind.Create2);
         }
+        _recordChildren("");
         return _done(false);
     }
 
@@ -322,6 +499,12 @@ abstract contract Roles is Deployment {
             _requireCurrent(found[i], r.artifact, a);
         }
         _journalRecovered(journal, names, found);
+        journal = _journal();
+        for (uint256 i; i < rs.length; ++i) {
+            Role memory r = rs[i];
+            if (r.kind != Kind.Child || !_own(r) || _has(journal, string.concat(".", r.name))) continue;
+            if (_has(journal, string.concat(".", r.parent))) _recordChild(r, _at(r));
+        }
         _onRecover(journal);
         return _done(false);
     }

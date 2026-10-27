@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Roles a constructor creates: `child(name, artifact, parent, getter)` is a contract at the address the
+parent's getter returns, and `runtime(name, artifact, parent)` the program a parent's constructor returned
+in place of its own, at the parent's address. Each is journaled with `<name>`, `<name>CodeHash` and
+`<name>Metadata` as soon as its parent is, or by the next `check` for a parent journaled earlier, and has no
+commit of its own. `_at` and another unit's `_at` read them. A `runtime`'s parent needs no `_requireBuild`
+override. Breaking: a step refuses to journal a receipt while forge's broadcast record of that creation
+lists a contract that no declared `child` is at, so a unit whose constructors create contracts declares them.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with

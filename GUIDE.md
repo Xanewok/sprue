@@ -8,8 +8,8 @@ How to set up and operate sprue. The [README](README.md) says what sprue is and 
 
 - **Unit**: a Forge script `Deploy<Name>.s.sol` that inherits `Unit` and holds the steps for a few
   related contracts. Each contract it deploys or reads is a **role**, declared once by how its address
-  is made (`create`, `create2`, `extern`) and named by a string such as `"token"`; the journal keeps its
-  facts under `<role>*` keys (`token`, `tokenNonce`, `tokenTx`).
+  is made (`create`, `create2`, `extern`, `child`, `runtime`) and named by a string such as `"token"`;
+  the journal keeps its facts under `<role>*` keys (`token`, `tokenNonce`, `tokenTx`).
 - **Journal**: `deployments/<network>/<unit>.json`, committed: each role's address, deployer, nonce
   and code hash, and the path of its build metadata file beside it.
 - **Step**: an external function of a unit that takes the network name (and an index, for a step per
@@ -41,7 +41,13 @@ then differ from the commit, the build is not the commit's, and an attended `run
    Declare each role once, in an `internal pure` function: `create(name, artifact)` for a CREATE by the
    deployer, `create2(name, artifact, key)` for a CREATE2 at the address that `<unit>.input.json` gives
    under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
-   not deploy, at the input's `<key>`. `artifact` is a contract's name, in a source file of the same name.
+   not deploy, at the input's `<key>`. A contract that a role's constructor creates is
+   `child(name, artifact, parent, getter)`, at the address the parent's `getter` (such as `"HOOK()"`)
+   returns; the parent's code must fix it, as an immutable does. A constructor that returns another
+   program's runtime in place of its own makes `runtime(name, artifact, parent)`, at the parent's address.
+   Both are journaled with an address, code hash and metadata, when the parent is and by `check` for an
+   older record. A step refuses to journal a creation's receipt while its broadcast record lists a
+   contract that no `child` names. `artifact` is a contract's name, in a source file of the same name.
    `.args(...)` gives the constructor arguments, as bytes or as a function that builds them from the
    inputs and other roles. `.ensure(fn)` runs `fn(address, args)` on every proof, and reverts on what later
    transactions can change, such as an admin or a proxy's implementation. `.unit("<unit>")` is the role as
