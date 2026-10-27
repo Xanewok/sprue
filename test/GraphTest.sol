@@ -85,18 +85,28 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     ///      body from the graph, the probe as the step's sender, so a body that branches on `msg.sender` fails the
     ///      probe. The probe sees only what the body does before its first send, and a body that catches the
     ///      probe's `StepDue` revert is outside what it judges (DESIGN.md, "The steps the fixture judges").
+    ///      The planner judges the closure once before the reruns and once after, so a rerun that undoes another
+    ///      step's work fails too.
     function quiet(string memory target) internal {
         bool[] memory needed = _closure(target);
+        Graph.Status[] memory verdicts = _judge(target);
         for (uint256 i; i < needed.length; ++i) {
-            if (!needed[i]) continue;
             Graph.Node memory n = _graph.node(i);
-            if (bytes(n.step).length == 0) continue;
-            require(_judge(n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
+            if (!needed[i] || bytes(n.step).length == 0) continue;
+            require(verdicts[i] == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
             require(runNode(n.id).length == 0, string.concat(n.id, " sends on a rerun"));
             require(
                 !_dueAs(n.unit, _graph.stepCalldata(_net, n.id), _graph.fixtureSender(_net, n.id)),
                 string.concat(n.id, " would send as its sender")
             );
+        }
+        verdicts = _judge(target);
+        for (uint256 i; i < needed.length; ++i) {
+            if (needed[i] && bytes(_graph.node(i).step).length != 0) {
+                require(
+                    verdicts[i] == Graph.Status.Done, string.concat(_graph.node(i).id, " is not done after the reruns")
+                );
+            }
         }
     }
 
@@ -155,10 +165,10 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     }
 
     /// @dev The planner's verdict, with the senders' nonces and the recording watching the judgment.
-    function _judge(string memory id) private exclusive returns (Graph.Status verdict) {
+    function _judge(string memory id) private exclusive returns (Graph.Status[] memory verdicts) {
         _transcriptBegin(_senders(_closure(id)));
         _recordStart();
-        verdict = _graph.status(_net, id);
+        verdicts = _graph.statuses(_net, id);
         _noSendOutside();
         _transcriptEnd();
     }

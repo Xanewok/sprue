@@ -14,7 +14,7 @@ contract RawUnit is FixtureUnit {
     FixtureToken public sink = new FixtureToken(0);
 
     function steps() external view returns (Step[] memory s) {
-        s = new Step[](10);
+        s = new Step[](12);
         s[0] = _step("raw.silent", "silent", this.silent.selector).due(this.silentDue.selector);
         s[1] = _step("raw.raw", "raw", this.raw.selector).due(this.rawDue.selector);
         s[2] = _step("raw.stray", "stray", this.stray.selector).due(this.strayDue.selector);
@@ -25,6 +25,8 @@ contract RawUnit is FixtureUnit {
             _step("raw.explicit", "explicit", this.explicit.selector).due(this.explicitDue.selector).by("raw.operator");
         s[8] = _until("raw.gate", "gateOpen", this.gateOpen.selector);
         s[9] = _step("raw.reenter", "reenter", this.reenter.selector).due(this.reenterDue.selector);
+        s[10] = _step("raw.spoil", "spoil", this.spoil.selector).due(this.spoilDue.selector);
+        s[11] = _step("raw.victim", "victim", this.victim.selector).due(this.victimDue.selector).needs("raw.spoil");
         s[3] = _step("raw.hidden", "hidden", this.hidden.selector).due(this.hiddenDue.selector);
     }
 
@@ -116,6 +118,23 @@ contract RawUnit is FixtureUnit {
             address(sink).call(_transfer());
         }
         return false;
+    }
+
+    bool private spoiled;
+
+    /// @dev Sends nothing, yet its rerun makes `victim` due.
+    function spoil(string calldata network) external step(network) {
+        spoiled = true;
+    }
+
+    function spoilDue(string calldata) external pure returns (bool) {
+        return false;
+    }
+
+    function victim(string calldata network) external step(network) {}
+
+    function victimDue(string calldata) external view returns (bool) {
+        return spoiled;
     }
 
     function hidden(string calldata network) external step(network) {}

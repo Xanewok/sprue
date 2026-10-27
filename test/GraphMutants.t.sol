@@ -37,6 +37,11 @@ contract GraphMutantsTest is GraphTest {
         this.again("raw.raw");
     }
 
+    function test_quiet_failsOnARerunThatMakesALaterStepDue() public {
+        vm.expectRevert("raw.victim is not done after the reruns");
+        this.again("raw.victim");
+    }
+
     function test_quiet_failsOnARawSendWhoseCalldataStartsLikeAProbe() public {
         vm.expectRevert("raw.stray sends on a rerun");
         this.again("raw.stray");

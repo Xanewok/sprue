@@ -293,16 +293,25 @@ abstract contract Graph is Script {
     /// @notice The verdict `plan` reaches for `id` with its needs in the order, as `_walk` judges it.
     ///         `NotJudged` when the plan stops before `id`.
     function status(string calldata network, string calldata id) external returns (Status) {
+        return _verdicts(network, id)[_index(id)];
+    }
+
+    /// @notice `status` of `id` and of every node it needs, by node index, from one walk. `NotJudged` for a
+    ///         node outside that closure and for one the plan stops before.
+    function statuses(string calldata network, string calldata id) external returns (Status[] memory) {
+        return _verdicts(network, id);
+    }
+
+    function _verdicts(string memory network, string memory id) private returns (Status[] memory verdicts) {
         _home = _fork(type(uint256).max);
         // A test judges steps as `fixtureRun` sends them.
         if (vm.isContext(VmSafe.ForgeContext.TestGroup)) _fixture = msg.sender;
         (Visit[] memory visits, uint256 count) = _walk(network, id, new bool[](_nodes.length), false);
         _fixture = address(0);
-        uint256 at = _index(id);
+        verdicts = new Status[](_nodes.length);
         for (uint256 i; i < count; ++i) {
-            if (visits[i].node == at) return visits[i].status;
+            verdicts[visits[i].node] = visits[i].status;
         }
-        return Status.NotJudged;
     }
 
     /// @notice The calldata of the command `plan` prints for `id`.
