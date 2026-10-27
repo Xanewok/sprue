@@ -1016,6 +1016,18 @@ abstract contract Deployment is ForgeBroadcasts {
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
         );
         if (_createdThisRun[_deployment(addr)]) return;
+        // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
+        // revert and lasts one forge run, or one test. It names the block the creation landed in, and holds
+        // only while the selected chain has that block: a block's hash commits to its transactions, so
+        // another history of the chain, or a reorg that replaced the block, proves the creation again. The
+        // record check above made `addr` its deployer's CREATE at its nonce, which one transaction of a
+        // history makes, so the key needs no transaction hash.
+        address proven = address(uint160(uint256(keccak256(abi.encode(block.chainid, addr, keccak256(args))))));
+        string memory kept = vm.getLabel(proven);
+        if (bytes(kept).length == 130) {
+            (uint256 number, bytes32 blockHash) = abi.decode(vm.parseBytes(kept), (uint256, bytes32));
+            if (blockHash != 0 && _blockHash(number) == blockHash) return;
+        }
         bytes32 hash = _createTx(journal, role);
         if (hash == 0) {
             require(
@@ -1034,8 +1046,9 @@ abstract contract Deployment is ForgeBroadcasts {
         }
         // The journal's arguments vouch for nothing: an edit can match them to the input while the contract
         // holds what its creation sent.
+        (uint256 landed, bytes32 landedHash) = _creationBlock(hash, addr, false);
         require(
-            _createdIn(hash, addr, false) != 0,
+            landed != 0,
             string.concat(role, "Tx in ", _unit(), ".json did not create ", role, ": a person must resolve it")
         );
         bytes memory input = _sentInput(hash);
@@ -1043,6 +1056,7 @@ abstract contract Deployment is ForgeBroadcasts {
             input.length >= args.length && _sentArgs(input, args.length) == keccak256(args),
             string.concat(role, "'s creation sent other constructor arguments than its input: a person must resolve it")
         );
+        vm.label(proven, vm.toString(abi.encode(landed, landedHash)));
     }
 
     function _sentArgs(bytes memory input, uint256 length) private pure returns (bytes32 rest) {

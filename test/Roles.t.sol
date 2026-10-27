@@ -250,7 +250,8 @@ contract ReaderToy is ToyJournal {
     }
 }
 
-/// @dev The chain as a test confirms it: `confirmed` created the toy, and sent the toy's initcode.
+/// @dev The chain as a test confirms it: `confirmed` created the toy, and sent the toy's initcode; `history`
+///      names the chain's blocks.
 contract LandedToy is RolesToy {
     bytes32 public confirmed;
 
@@ -258,12 +259,32 @@ contract LandedToy is RolesToy {
         confirmed = hash;
     }
 
-    function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
-        return hash == confirmed && !create2 ? 5 : 0;
+    /// @dev A reorg right after the receipt is read, when `reorgAfterReceipt` is set.
+    function _creationBlock(bytes32 hash, address, bool create2) internal override returns (uint256, bytes32) {
+        if (hash != confirmed || create2) return (0, 0);
+        bytes32 blockHash = _blockHash(5);
+        if (reorgAfterReceipt) history = "reorged";
+        return (5, blockHash);
+    }
+
+    bool public reorgAfterReceipt;
+
+    function setReorgAfterReceipt(bool reorg) external {
+        reorgAfterReceipt = reorg;
     }
 
     function _sentInput(bytes32) internal view override returns (bytes memory) {
         return bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)));
+    }
+
+    bytes32 public history;
+
+    function setHistory(bytes32 history_) external {
+        history = history_;
+    }
+
+    function _blockHash(uint256 number) internal view override returns (bytes32) {
+        return keccak256(abi.encode(history, number));
     }
 }
 
@@ -525,6 +546,85 @@ contract RolesTest is Test {
         vm.expectRevert(
             bytes("toy's creation sent other constructor arguments than its input: a person must resolve it")
         );
+        fresh.atToy(network);
+    }
+
+    /// @dev A proof outlives the reverted state that made it, as a probe's does: the run does not read the
+    ///      creation again, even where the chain would now say otherwise.
+    function test_at_aProofOutlivesARevertOfTheStateThatMadeIt() public {
+        _network("kept", vm.toString(ops));
+        unit.deploy(network);
+        LandedToy fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        uint256 before = vm.snapshotState();
+        address toy = fresh.atToy(network);
+        vm.revertToState(before);
+        fresh.confirm(0);
+        assertEq(fresh.atToy(network), toy);
+    }
+
+    function _provenOnce(string memory name) private returns (LandedToy fresh, address toy) {
+        _network(name, vm.toString(ops));
+        unit.deploy(network);
+        fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        toy = fresh.atToy(network);
+        fresh.confirm(0);
+    }
+
+    /// @dev A kept proof is the address's: another address the chain shows no creation of is refused.
+    function test_at_aKeptProofCoversNoOtherAddress() public {
+        (LandedToy fresh, address toy) = _provenOnce("kept-addr");
+        address second = vm.computeCreateAddress(ops, 1);
+        vm.etch(second, toy.code);
+        _set(".toy", vm.toString(second));
+        _set(".toyNonce", "1");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A kept proof is the chain's: the same address on another chain id is proven again.
+    function test_at_aKeptProofCoversNoOtherChain() public {
+        (LandedToy fresh,) = _provenOnce("kept-chain");
+        vm.chainId(5);
+        vm.writeFile(
+            string.concat(dir, "/network.json"),
+            string.concat('{"chains":{"main":{"rpc":"main","id":5}},"deployer":"', vm.toString(ops), '"}')
+        );
+        _set(".mainChainId", "5");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A kept proof holds only on the history that showed it: another history of the same chain id, or a
+    ///      reorg of the creation's block, proves the creation again.
+    function test_at_aKeptProofHoldsOnlyOnTheHistoryThatShowedIt() public {
+        (LandedToy fresh, address toy) = _provenOnce("kept-history");
+        assertEq(fresh.atToy(network), toy);
+        fresh.setHistory("another");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A kept proof names the block of the receipt it checked: a reorg after that read leaves it unused.
+    function test_at_aKeptProofNamesTheBlockOfTheReceiptItChecked() public {
+        _network("kept-receipt", vm.toString(ops));
+        unit.deploy(network);
+        LandedToy fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        fresh.setReorgAfterReceipt(true);
+        fresh.atToy(network);
+        fresh.confirm(0);
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
         fresh.atToy(network);
     }
 

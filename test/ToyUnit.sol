@@ -183,8 +183,14 @@ contract ToyUnit is ToyJournal {
         _requireNoStray(_use(network), "toy", "ToyPayload", adopted);
     }
 
-    function _createdIn(bytes32 hash, address, bool create2) internal view virtual override returns (uint256) {
-        return confirmed[hash] && !create2 ? 5 : 0;
+    function _creationBlock(bytes32 hash, address, bool create2)
+        internal
+        view
+        virtual
+        override
+        returns (uint256, bytes32)
+    {
+        if (confirmed[hash] && !create2) return (5, 0);
     }
 
     /// @dev Unless a test chose an input, the journal's intent was sent.
