@@ -2,6 +2,7 @@
 pragma solidity ^0.8.27;
 
 import {console} from "forge-std/console.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 
 import {
     chainAlias,
@@ -13,7 +14,7 @@ import {
     noRpc,
     rehearsalPrefix
 } from "./Chains.sol";
-import {isRehearsalNetwork, outputsEnv, stageInputs, unitInputPath} from "./Journal.sol";
+import {isRehearsalNetwork, outputsEnv, slashed, stageInputs, unitInputPath} from "./Journal.sol";
 import {Graph} from "./graph/Graph.sol";
 
 /// @notice Implements `Graph`'s hooks from the files in `<paths.deployments>/<network>/`. A project's
@@ -198,12 +199,67 @@ abstract contract FileGraph is Graph {
     ///      previous simulation did. The name falls under `paths.rehearsal`, which version control
     ///      must ignore.
     function _stage(string calldata network) internal override returns (string memory net) {
+        net = _stagedAs(network, "-rehearse-");
+    }
+
+    /// @dev As `_stage`, in `<paths.rehearsal>-plan-<network>`: a plan must not restage the copy that a
+    ///      kept rehearsal still uses. `sprue plan --simulate` names the same directory.
+    function _stageSimulation(string memory network) internal override returns (string memory net) {
+        net = _stagedAs(network, "-plan-");
+    }
+
+    function _stagedAs(string memory network, string memory infix) private returns (string memory net) {
         require(
             bytes(network).length != 0 && !vm.contains(network, "/") && !vm.contains(network, ".."),
             "the network is a directory under paths.deployments"
         );
-        net = string.concat(rehearsalPrefix(), "-rehearse-", network);
+        net = string.concat(rehearsalPrefix(), infix, network);
         stageInputs(network, net);
+    }
+
+    /// @dev Every top-level entry of every journal `<unit>.json` in `net` whose value is an address, as
+    ///      `<unit>.<key>` and the address. The other entries are the journal's bookkeeping (hashes,
+    ///      nonces), and a balance or a role no journal holds cannot be seen here.
+    function _journalState(string memory net) internal view override returns (string[] memory keys, string[] memory values) {
+        string memory dir = string.concat(deploymentsDir(), "/", net);
+        VmSafe.DirEntry[] memory files = vm.readDir(dir);
+        keys = new string[](0);
+        values = new string[](0);
+        for (uint256 f; f < files.length; ++f) {
+            if (files[f].isDir) continue;
+            string[] memory path = vm.split(slashed(files[f].path), "/");
+            string memory name = path[path.length - 1];
+            if (vm.indexOf(name, ".json") + 5 != bytes(name).length || _same(name, "network.json")) continue;
+            string memory unit = vm.replace(name, ".json", "");
+            // A journal is `<unit>.json`; `<unit>.input.json` and `<Role>.metadata.json` are not.
+            if (vm.indexOf(unit, ".") != type(uint256).max) continue;
+            string memory json = vm.readFile(files[f].path);
+            string[] memory names;
+            try vm.parseJsonKeys(json, "$") returns (string[] memory parsed) {
+                names = parsed;
+            } catch {
+                continue;
+            }
+            for (uint256 k; k < names.length; ++k) {
+                string memory value;
+                try vm.parseJsonString(json, string.concat(".", names[k])) returns (string memory text) {
+                    value = text;
+                } catch {
+                    continue;
+                }
+                if (bytes(value).length != 42 || bytes(value)[0] != "0" || bytes(value)[1] != "x") continue;
+                keys = _push(keys, string.concat(unit, ".", names[k]));
+                values = _push(values, value);
+            }
+        }
+    }
+
+    function _push(string[] memory list, string memory item) private pure returns (string[] memory grown) {
+        grown = new string[](list.length + 1);
+        for (uint256 i; i < list.length; ++i) {
+            grown[i] = list[i];
+        }
+        grown[list.length] = item;
     }
 
     function _prepareSender(string memory network, uint256 nodeIndex) internal virtual override returns (bool) {

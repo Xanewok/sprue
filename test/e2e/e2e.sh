@@ -207,6 +207,34 @@ scenario_live_graph() {
   echo "ok  the plan is the live graph's: a target absent from the saved export runs, one absent from the graph exits 2 cleanly"
 }
 
+# `plan --simulate` continues past the first send on simulated state, and changes nothing that a run reads.
+scenario_simulate() {
+  local plain sim before n0 token
+  fresh "$RPC"; network sim 31337 4102444800
+  tree() { (cd "$W" && { find deployments broadcast cache -path 'deployments/rehearsal*' -prune -o -type f ! -name solidity-files-cache.json -print 2>/dev/null || true; } | LC_ALL=C sort | xargs -r sha256sum); }
+  refused 'only plan takes it' G run --simulate sim vault.check
+  refused 'no sender for the steps without .by' env -u DEPLOYER G plan --simulate sim vault.check
+  before=$(tree); n0=$(nonce)
+  plain=$(G plan sim vault.check 2>>"$W/log")
+  sim=$(G plan --simulate sim vault.check 2>>"$W/log")
+  [ "$(tree)" = "$before" ] || die "simulate: a file a run reads changed"
+  [ "$(nonce)" = "$n0" ] || die "simulate: the plan sent a transaction"
+  [ ! -e broadcast ] || die "simulate: the plan left a record in broadcast/"
+  [ "$(G plan sim vault.check 2>>"$W/log")" = "$plain" ] || die "simulate: the plain plan changed after a simulated one"
+  [ "$(head -n "$(wc -l <<<"$plain")" <<<"$sim")" = "$plain" ] || die "simulate: its first lines are not the plain plan: $sim"
+  [ "$(grep '^# done' <<<"$sim" || true)" = "$(grep '^# done' <<<"$plain" || true)" ] || die "simulate: a done line came from simulation: $sim"
+  grep -vq '^#' <<<"$(tail -n +"$(($(wc -l <<<"$plain") + 1))" <<<"$sim")" && die "simulate: a line after the plain plan is not a comment: $sim"
+  grep -q '^# simulated value token\.token = 0x' <<<"$sim" || die "simulate: the created address is not marked: $sim"
+  grep -q '^# simulated due vault.deploy, after simulated send token.deploy$' <<<"$sim" || die "simulate: vault.deploy: $sim"
+  grep -q '^# simulated not before 4102444800 vault.fund, warped to it$' <<<"$sim" || die "simulate: the warp is not printed: $sim"
+  grep -q '^# simulated would be done vault.check, after simulated send token.deploy$' <<<"$sim" || die "simulate: vault.check: $sim"
+  # The prediction is the real run's: the same deployer at the same nonce creates the same token.
+  token=$(sed -n 's/^# simulated value token\.token = \(.*\), written by.*/\1/p' <<<"$sim")
+  G run sim vault.check >/dev/null 2>>"$W/log" || die "simulate: the run failed"
+  [ "$(jq -r .token deployments/sim/token.json | tr A-F a-f)" = "$(tr A-F a-f <<<"$token")" ] || die "simulate: the real token is not the simulated one $token"
+  echo "ok  plan --simulate prints the rest of the walk as simulated, sends and writes nothing a run reads, and predicts the run's addresses"
+}
+
 # A <dir>/cast (default ./stub) that makes every Anvil report itself as Geth, so the runner cannot set
 # its clock.
 geth_stub() {
@@ -917,7 +945,7 @@ setup
 cd "$W"
 # E2E_ONLY="<name> ..." runs only those scenarios, in this order. Called outside a condition, so that
 # set -e holds inside each.
-for s in mermaid refuses live_graph grammar failure rerun recover wait kill concurrent lag lag_wave two_chain rehearse attended tag; do
+for s in mermaid refuses live_graph simulate grammar failure rerun recover wait kill concurrent lag lag_wave two_chain rehearse attended tag; do
   if [ -n "${E2E_ONLY:-}" ] && [[ " $E2E_ONLY " != *" $s "* ]]; then continue; fi
   "scenario_$s"
 done

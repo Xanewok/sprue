@@ -116,15 +116,44 @@ abstract contract Graph is Script {
     ///         - `# then plan again <id>`: what follows depends on commands above that have not
     ///           landed. The plan ends here.
     function plan(string calldata network, string calldata target) external returns (string memory) {
-        return _plan(network, target, false);
+        return _plan(network, target, false, false);
     }
 
     /// @notice `plan`; `allUnits` also prints the `# warning` lines of units whose nodes are all done.
     function plan(string calldata network, string calldata target, bool allUnits) external returns (string memory) {
-        return _plan(network, target, allUnits);
+        return _plan(network, target, allUnits, false);
     }
 
-    function _plan(string memory network, string memory target, bool allUnits) private returns (string memory out) {
+    /// @notice `plan`, then, after its `# then plan again` line, the rest of the walk on simulated state.
+    ///         The lines before it are `plan`'s, read from the chain. Every line after it starts with
+    ///         `# simulated`, so no reader of a plan can take one for a command or a fact:
+    ///         - `# simulated below: ...`: opens the section; names the sender every step without `.by`
+    ///           is simulated as.
+    ///         - `# simulated not before <unix time> <id>, warped to it`: the clock was warped to the
+    ///           node's date.
+    ///         - `# simulated due <id>, after simulated send <id>`: the node's step would still have work.
+    ///           `# simulated command <command>` follows.
+    ///         - `# simulated would be done <id>, after simulated send <id>`: the node's check holds on
+    ///           the simulated state only.
+    ///         - `# simulated value <journal>.<key> = <value>, written by simulated send <id>`: what a
+    ///           simulated send recorded in a journal, such as an address it created.
+    ///         - `# simulated cannot reach <id>: <reason>`: the node's step or condition would refuse on
+    ///           the simulated state; the walk ends here.
+    ///         - `# simulated unknown <id>: <reason>`: the node is not judged: its step sends from
+    ///           another account or on another chain, or follows a node that ended the walk.
+    ///         The simulated sends run in a copy of the network's files (`_stageSimulation`), never in the
+    ///         network's own.
+    function planSimulated(string calldata network, string calldata target, bool allUnits)
+        external
+        returns (string memory)
+    {
+        return _plan(network, target, allUnits, true);
+    }
+
+    function _plan(string memory network, string memory target, bool allUnits, bool simulate)
+        private
+        returns (string memory out)
+    {
         string[] memory header = _chainLines(network);
         _home = _fork(type(uint256).max);
         (Visit[] memory visits, uint256 count) = _walk(network, target, new bool[](_nodes.length), false);
@@ -152,6 +181,7 @@ abstract contract Graph is Script {
             }
             if (visit.status == Status.NotJudged) {
                 out = _line(out, string.concat("# then plan again ", n.id));
+                if (simulate) out = _simulate(out, network, target, visits, count);
                 break;
             }
             if (visit.status == Status.Done) {
@@ -166,6 +196,241 @@ abstract contract Graph is Script {
             if (bytes(n.step).length == 0) continue;
             out = _line(out, _command(network, n));
         }
+    }
+
+    /// @dev What `_simulate` knows per node. `text` is a node's lines joined by "\n", set once.
+    struct Sim {
+        string net;
+        bool[] inPrefix;
+        bool[] passed;
+        string[] text;
+        uint256 stopAt;
+    }
+
+    /// @dev Continues the walk that `_plan` printed up to `count` visits, on the staged copy `net` and
+    ///      the plan's own fork. A due send is run as `_interpret` runs it, and the walk judges again.
+    ///      Contract: this reads and writes only `net`'s files and the forge process's EVM. Nothing it
+    ///      judges is printed as done without `simulated`, and the prefix's lines were built before it
+    ///      ran, so no simulated state reaches them.
+    function _simulate(
+        string memory out,
+        string memory network,
+        string memory target,
+        Visit[] memory prefix,
+        uint256 count
+    ) private returns (string memory) {
+        require(!_broadcasting(), "a simulated plan only simulates: send each command plan prints");
+        require(msg.sender != DEFAULT_SENDER, "pass --sender <deployer> to the plan");
+        Sim memory s;
+        s.net = _stageSimulation(network);
+        s.stopAt = NONE;
+        s.inPrefix = new bool[](_nodes.length);
+        s.passed = new bool[](_nodes.length);
+        s.text = new string[](_nodes.length);
+        for (uint256 i; i < count; ++i) {
+            // The node that ended the walk was not judged on the chain: it is the first this section judges.
+            if (prefix[i].status != Status.NotJudged) s.inPrefix[prefix[i].node] = true;
+        }
+        while (s.stopAt == NONE && _simulatePass(s, network, target)) {}
+        out = _line(
+            out,
+            string.concat(
+                "# simulated below: the commands above are assumed to land; nothing below is read from the chain. Steps without .by are simulated as ",
+                vm.toString(msg.sender)
+            )
+        );
+        bool[] memory needed = _closure(target);
+        for (uint256 i; i < _nodes.length; ++i) {
+            if (s.stopAt != NONE && bytes(s.text[i]).length == 0 && needed[i] && !s.inPrefix[i] && i != s.stopAt) {
+                if (bytes(_nodes[i].step).length == 0 && bytes(_nodes[i].until).length == 0) continue;
+                s.text[i] = string.concat(
+                    "# simulated unknown ", _nodes[i].id, ": not judged, the walk ended at ", _nodes[s.stopAt].id
+                );
+            }
+            if (bytes(s.text[i]).length == 0) continue;
+            string[] memory lines = vm.split(s.text[i], "\n");
+            for (uint256 l; l < lines.length; ++l) {
+                if (bytes(lines[l]).length != 0) out = _line(out, lines[l]);
+            }
+        }
+        return out;
+    }
+
+    /// @dev One walk on the simulated state. Returns whether to walk again.
+    function _simulatePass(Sim memory s, string memory network, string memory target) private returns (bool) {
+        (Visit[] memory visits, uint256 count) = _walk(s.net, target, s.passed, false);
+        bool advanced;
+        bool replan;
+        for (uint256 i; i < count; ++i) {
+            Visit memory visit = visits[i];
+            Node storage n = _nodes[visit.node];
+            if (visit.status == Status.Done) {
+                if (!s.inPrefix[visit.node] && !s.passed[visit.node] && bytes(s.text[visit.node]).length == 0) {
+                    if (bytes(n.step).length != 0 || bytes(n.until).length != 0) {
+                        s.text[visit.node] =
+                            string.concat("# simulated would be done ", n.id, _after(s, visit.node));
+                    }
+                }
+                continue;
+            }
+            string memory why = _cannotSimulate(network, n);
+            if (bytes(why).length != 0) {
+                s.text[visit.node] = string.concat(s.text[visit.node], "# simulated unknown ", n.id, ": ", why);
+                s.stopAt = visit.node;
+                return false;
+            }
+            if (visit.status == Status.NotJudged) {
+                if (visit.notBefore != 0) advanced = _simulateWarp(s, network, visit.node) || advanced;
+                replan = true;
+                break;
+            }
+            if (visit.status == Status.Waiting) {
+                // A send earlier in this pass may be what the node waits for.
+                if (advanced || _warpOnly(s, network, visit.node)) {
+                    replan = true;
+                    break;
+                }
+                s.text[visit.node] = string.concat(
+                    s.text[visit.node],
+                    "# simulated ",
+                    _cannotReach(n.id, visit.reason),
+                    bytes(n.step).length == 0 ? "" : string.concat("\n# simulated command ", _command(network, n))
+                );
+                s.stopAt = visit.node;
+                return false;
+            }
+            if (!_simulateSend(s, network, visit.node)) {
+                s.stopAt = visit.node;
+                return false;
+            }
+            advanced = true;
+        }
+        require(!replan || advanced, _cannotReach(target, "the simulation stalled"));
+        return replan;
+    }
+
+    /// @dev Warps to the node's date and records the line. Returns whether the clock moved.
+    function _simulateWarp(Sim memory s, string memory network, uint256 at) private returns (bool warped) {
+        Node storage n = _nodes[at];
+        warped = _warpToDate(s.net, n);
+        if (warped) {
+            s.text[at] = string.concat(
+                s.text[at],
+                "# simulated not before ",
+                vm.toString(block.timestamp),
+                _clockOn(network, n),
+                " ",
+                n.id,
+                ", warped to it\n"
+            );
+        }
+    }
+
+    function _warpOnly(Sim memory s, string memory network, uint256 at) private returns (bool) {
+        return bytes(_nodes[at].gate).length != 0 && _simulateWarp(s, network, at);
+    }
+
+    /// @dev Runs the node's step on the simulated state. Returns false, with the node's lines set, when it
+    ///      reverts.
+    function _simulateSend(Sim memory s, string memory network, uint256 at) private returns (bool) {
+        Node storage n = _nodes[at];
+        _simulateWarp(s, network, at);
+        if (!s.inPrefix[at]) {
+            s.text[at] = string.concat(
+                s.text[at],
+                "# simulated due ",
+                n.id,
+                _after(s, at),
+                "\n# simulated command ",
+                _command(network, n),
+                "\n"
+            );
+        }
+        (bool ok, string memory result) = _sendAndDiff(s.net, n);
+        if (!ok) {
+            s.text[at] = string.concat(s.text[at], "# simulated ", _cannotReach(n.id, result));
+            return false;
+        }
+        s.text[at] = string.concat(s.text[at], result);
+        s.passed[at] = true;
+        return true;
+    }
+
+    /// @dev The step's simulated send in `net`. On success, the `# simulated value` lines for what it
+    ///      recorded; else the reason it reverted.
+    function _sendAndDiff(string memory net, Node storage n) private returns (bool ok, string memory result) {
+        (string[] memory keys, string[] memory values) = _journalState(net);
+        bytes memory ret;
+        (ok, ret) = n.unit.call(_calldata(n, n.step, net));
+        if (!ok) {
+            // A revert leaves the step's broadcast open.
+            try vm.stopBroadcast() {} catch {}
+            return (false, string.concat("its simulated send reverted: ", _reason(n.id, ret)));
+        }
+        (string[] memory keysAfter, string[] memory valuesAfter) = _journalState(net);
+        result = _written(keys, values, keysAfter, valuesAfter, n.id);
+    }
+
+    /// @dev `, after simulated send <id>`: the earliest simulated send that `node` depends on, else the
+    ///      earliest simulated send at all, which still changed the state `node` is judged on.
+    function _after(Sim memory s, uint256 at) private view returns (string memory) {
+        bool[] memory needed = _closure(at);
+        for (uint256 j; j < _nodes.length; ++j) {
+            if (s.passed[j] && j != at && needed[j]) {
+                return string.concat(", after simulated send ", _nodes[j].id);
+            }
+        }
+        for (uint256 j; j < _nodes.length; ++j) {
+            if (s.passed[j] && j != at) {
+                return string.concat(", on the state after simulated send ", _nodes[j].id, ", which it does not need");
+            }
+        }
+        return ", on a simulated clock";
+    }
+
+    /// @dev One `# simulated value` line (each ending in "\n", the last without) for every entry of the
+    ///      journal state after that is new or changed against before.
+    function _written(
+        string[] memory before,
+        string[] memory valuesBefore,
+        string[] memory afterKeys,
+        string[] memory valuesAfter,
+        string memory id
+    ) private pure returns (string memory lines) {
+        for (uint256 j; j < afterKeys.length; ++j) {
+            bool same;
+            for (uint256 k; k < before.length && !same; ++k) {
+                same = keccak256(bytes(before[k])) == keccak256(bytes(afterKeys[j]))
+                    && keccak256(bytes(valuesBefore[k])) == keccak256(bytes(valuesAfter[j]));
+            }
+            if (same) continue;
+            lines = string.concat(
+                lines,
+                bytes(lines).length == 0 ? "" : "\n",
+                "# simulated value ",
+                afterKeys[j],
+                " = ",
+                valuesAfter[j],
+                ", written by simulated send ",
+                id
+            );
+        }
+    }
+
+    /// @dev Empty when the node's step can be simulated here: on the plan's fork, as the plan's sender.
+    ///      Otherwise the reason, which `# simulated unknown` prints.
+    function _cannotSimulate(string memory network, Node storage n) private view returns (string memory) {
+        if (n.ownForks) return "its step creates its own forks, which a simulated plan does not follow";
+        if (!_onDefaultChain(network, n)) {
+            return string.concat("it sends on ", n.on, ", and a simulated plan runs on the default chain only");
+        }
+        if (bytes(n.sender).length != 0) {
+            address sender = _senderAddress(network, n.sender);
+            if (sender != msg.sender) {
+                return string.concat("it is sent by ", vm.toString(sender), ", not by ", vm.toString(msg.sender));
+            }
+        }
+        return "";
     }
 
     /// @notice The nodes no other node depends on, in graph order.
@@ -666,6 +931,18 @@ abstract contract Graph is Script {
     function _requireChains(string memory, Node storage) internal view virtual {}
 
     function _stage(string calldata network) internal virtual returns (string memory);
+
+    /// @dev Replaces a copy of `network`'s files, the only place a simulated send may write, and returns
+    ///      its name. Contract: never the name `_stage` returns, which a rehearsal may keep.
+    function _stageSimulation(string memory) internal virtual returns (string memory) {
+        revert("this graph cannot simulate: it stages no copy of its files");
+    }
+
+    /// @dev The journals' entries in network `net` as `<journal>.<key>` and their values, so that a
+    ///      simulated send's records can be printed.
+    function _journalState(string memory) internal view virtual returns (string[] memory, string[] memory) {
+        return (new string[](0), new string[](0));
+    }
 
     function _prepareSender(string memory network, uint256 nodeIndex) internal virtual returns (bool);
 

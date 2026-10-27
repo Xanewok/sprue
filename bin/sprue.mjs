@@ -28,7 +28,7 @@ const WIN = process.platform === "win32";
 // Windows refuses, for a moment, to remove a file that another process still holds open (EBUSY, EPERM).
 const RM_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
 
-const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan [--verbose] <network> <target> | run [flags] <network> <target>
+const USAGE = `usage: ${NAME} list | json | mermaid [target] | plan [--verbose] [--simulate] <network> <target> | run [flags] <network> <target>
        ${NAME} rehearse [flags] <network> <target> | rehearse --stop <network>
 
 Flags may appear anywhere after the command.
@@ -36,9 +36,13 @@ Flags may appear anywhere after the command.
   list                      the targets: nodes no other node depends on
   json                      the graph from the units' code; the saved export, graph.generated.json beside the graph script, is it
   mermaid [target]          a flowchart of the graph, or of what target depends on
-  plan [--verbose] <network> <target>
+  plan [--verbose] [--simulate] <network> <target>
                             the commands that reach target; reads the default chain's rpc; sends nothing;
-                            --verbose also prints the # warning lines of done units
+                            --verbose also prints the # warning lines of done units;
+                            --simulate also continues past the first send on simulated state, in lines that
+                            start with "# simulated" and that run refuses to read; it needs DEPLOYER or
+                            network.json's deployer, the sender of the steps without .by, and writes only
+                            <paths.rehearsal>-plan-<network>/
   run [--wait] [--unsafe-unexpected-deployer] [--allow-dirty] [--account <name> | --ledger | --trezor] <network> <target>
                             sends what plan prints and plans again; DEPLOYER defaults to the pinned deployer, else the signer
   rehearse [--keep] [--block [<chain>=]<n>]... [--unsafe-unexpected-deployer] <network> <target>
@@ -427,7 +431,7 @@ async function main(argv) {
   const rehearsing = verb === "rehearse";
 
   // Flags may stand anywhere. The other arguments keep their order.
-  let wait = false, dirtyOk = false, keep = false, stopOnly = false, verbose = false;
+  let wait = false, dirtyOk = false, keep = false, stopOnly = false, verbose = false, simulate = false;
   const signers = [], blocks = [];
   // Only `attend` and `rehearse` set it: an inherited value would stamp a clean run's roles dirty.
   delete process.env.DEPLOY_TREE_DIRTY;
@@ -437,6 +441,9 @@ async function main(argv) {
     if (a === "--verbose") {
       if (verb !== "plan") fail(2, "refusing --verbose: only plan takes it");
       verbose = true;
+    } else if (a === "--simulate") {
+      if (verb !== "plan") fail(2, "refusing --simulate: only plan takes it");
+      simulate = true;
     } else if (verb === "plan") pos.push(a);
     else if (a === "--unsafe-unexpected-deployer") process.env.UNSAFE_UNEXPECTED_DEPLOYER = "1";
     else if (a === "--account" || a === "--ledger" || a === "--trezor") {
@@ -461,8 +468,8 @@ async function main(argv) {
   if (!stopOnly && !isFile(netfile)) fail(2, `unknown network '${network}': no ${netfile}`);
   // rehearse locks its copy before it stops a kept fork or restages a file that a run of it may use. A
   // plan of a copy locks too, since its simulations write the copy's journals.
-  const locked = rehearsing ? `${rehearsal}-${network}` : network;
-  if (verb !== "plan" || locked === rehearsal || locked.startsWith(`${rehearsal}-`)) {
+  const locked = rehearsing ? `${rehearsal}-${network}` : simulate ? `${rehearsal}-plan-${network}` : network;
+  if (verb !== "plan" || simulate || locked === rehearsal || locked.startsWith(`${rehearsal}-`)) {
     lock(locked);
     // Before any forge starts: without a listener, a signal would end the runner and leave forge running.
     handleSignals(true);
@@ -619,10 +626,26 @@ async function main(argv) {
   const planRpc = chainMap[home || chains[0]].rpc;
   // Where a rehearsal network's commands keep forge's records and resume data: never in broadcast/ and
   // cache/, which the real chain of the same id reads. The plan's probes of its steps keep them there too.
-  const broadcastDir = network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${network}/broadcast` : undefined;
-  const cacheDir = broadcastDir && `${DEPLOYMENTS}/${network}/cache`;
+  // A simulated plan sends its steps in a copy of the network's files, `<prefix>-plan-<network>`, so its records
+  // and resume data go there too.
+  const kept = simulate ? `${rehearsal}-plan-${network}` : network;
+  const broadcastDir = simulate || network === rehearsal || network.startsWith(`${rehearsal}-`) ? `${DEPLOYMENTS}/${kept}/broadcast` : undefined;
+  const cacheDir = broadcastDir && `${DEPLOYMENTS}/${kept}/cache`;
+  // The steps without .by are simulated as the sender, which is never guessed: DEPLOYER, else the pin, and a
+  // DEPLOYER against the pin is refused, as a run refuses it.
+  let simulator = [];
+  if (simulate) {
+    const pin = typeof net.deployer === "string" ? net.deployer : "";
+    const set = process.env.DEPLOYER || "";
+    const who = set || pin;
+    if (!who) fail(2, `refusing --simulate: ${network} has no sender for the steps without .by: set DEPLOYER, or pin the deployer in ${network}'s network.json`);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(who)) fail(2, `refusing --simulate: ${set ? "DEPLOYER" : "network.json's deployer"} is ${who}, which is not a 0x address`);
+    if (set && pin && set.toLowerCase() !== pin.toLowerCase()) fail(2, `refusing --simulate: DEPLOYER is ${set}, and ${network}'s network.json pins the deployer ${pin}; unset DEPLOYER`);
+    err(`simulating as deployer ${who}, from ${set ? "DEPLOYER" : "network.json"}\n`);
+    simulator = ["--sender", who];
+  }
   const plan = () =>
-    graph(GRAPH, "PLAN", verbose ? "plan(string,string,bool)" : "plan(string,string)", [network, target, ...(verbose ? ["true"] : []), "--rpc-url", planRpc], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
+    graph(GRAPH, "PLAN", simulate ? "planSimulated(string,string,bool)" : verbose ? "plan(string,string,bool)" : "plan(string,string)", [network, target, ...(verbose || simulate ? [String(verbose)] : []), "--rpc-url", planRpc, ...simulator], broadcastDir ? { FOUNDRY_BROADCAST: broadcastDir, FOUNDRY_CACHE_PATH: cacheDir } : {});
   if (verb === "plan") {
     for (const l of await plan()) out(`${l}\n`);
     return 0;
@@ -959,6 +982,10 @@ async function main(argv) {
         // The step's command follows and would refuse, so it is not sent.
         out(`${line}\n`);
         throw new Exit(3);
+      } else if (line.startsWith("# simulated ")) {
+        // Only `plan --simulate` prints these, and run never asks for it. Refused, not skipped, so that a
+        // simulated plan piped into a reader of plans can never pass for the plan that sends.
+        fail(2, `refusing: a simulated plan is for reading, not for run: ${line}`);
       } else if (line.startsWith("# warning ")) {
         if (!warned.has(line)) out(`${line}\n`);
         warned.add(line);

@@ -114,6 +114,13 @@ total=$((total + 1))
 if DEPLOYER="$DEPLOYER --ffi" run_line "$(grep -m1 -F '$DEPLOYER' "$CORPUS")" || [ -e MARK ] || ! grep -q 'DEPLOYER names the deployer .*, which is not a 0x address' out; then
   fail=$((fail + 1)); echo "FAIL DEPLOYER holding a flag: $(<out) $(<calls)" >&2
 fi
+# A simulated plan's lines are for reading: run refuses them, even among valid ones, and sends nothing.
+for simulated in '# simulated due x, after simulated send y' '# simulated command forge script a.s.sol --sig '"'"'f(string)'"'"' net'; do
+  total=$((total + 1))
+  printf '%s\n%s\n' "$(grep -m1 -F 'forge script' "$CORPUS")" "$simulated" >plan; : >calls
+  rc=0; node "${RUNNER:-$HERE/../../bin/sprue.mjs}" run net t >out 2>&1 </dev/null || rc=$?
+  { [ "$rc" = 2 ] && grep -q 'a simulated plan is for reading' out; } || { fail=$((fail + 1)); echo "FAIL a simulated line exited $rc: $(<out)" >&2; }
+done
 # Plan lines carry the paths unquoted, so a path that a shell would act on is refused.
 for bad in 'deployments(archive)' 'deployments$archive'; do
   total=$((total + 1))

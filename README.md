@@ -117,6 +117,12 @@ with `$DEPLOYER` as Anvil's dev key, the run's own signer here, and plans again 
 The example's [README](examples/token-vault/README.md) explains each step, then loses a journal and
 rebuilds it.
 
+`plan --simulate local vault.check` prints the same plan, then the rest of the walk on simulated state, in
+lines that start with `# simulated`: each node's decision, its command, the clock dates it warped to, and the
+addresses that a simulated send recorded. `run` refuses such a line. It sends nothing and writes only
+`<paths.rehearsal>-plan-<network>/`; it needs the sender of the steps without `.by` (`DEPLOYER`, or the pinned
+deployer), and it ends at a step of another account or chain, which it does not simulate.
+
 ## Install
 
 Install with `forge install foundry-rs/forge-std Xanewok/sprue@v0.1.5`. The remapping is

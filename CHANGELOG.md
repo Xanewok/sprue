@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`sprue plan --simulate <network> <target>` (graph function `planSimulated`) continues the plan past
+`# then plan again` on simulated state. The plan's own lines are unchanged and still read from the chain; each
+added line starts with `# simulated`, and `run` refuses such a line. `FileGraph` stages the copy in
+`<paths.rehearsal>-plan-<network>`; a graph that overrides `_stage` may override `_stageSimulation` and
+`_journalState` too, or its `planSimulated` reverts.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with
