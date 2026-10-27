@@ -16,8 +16,8 @@ import {ForgeTranscript} from "./ForgeTranscript.sol";
 ///      anywhere else in a run or a judgment, such as a `Due` view that broadcasts from any account, fails with
 ///      its sender. A predicate's `_meet` runs outside the recording as the world's act: a broadcast in it from a
 ///      watched account can fail the nonce reconciliation, and one from any other account is not seen. Each
-///      watched sender's nonce must move by its entries; the watched senders are the nodes' senders and forge's
-///      default sender. A body is entered from the graph, not from `--sender`; `quiet` probes it as the sender
+///      watched sender's nonce must move by its entries; the watched senders are the senders of the nodes a call
+///      runs or judges and forge's default sender. A body is entered from the graph, not from `--sender`; `quiet` probes it as the sender
 ///      too, up to its first send. A broadcaster that has code is outside the send count: the state diff does not
 ///      mark broadcasts, so its call looks like a nested one (DESIGN.md, "The steps the fixture judges").
 abstract contract GraphTest is ForgeTranscript, IFixtureHost {
@@ -85,8 +85,9 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     function quiet(string memory target) internal {
         bool[] memory needed = _closure(target);
         for (uint256 i; i < needed.length; ++i) {
+            if (!needed[i]) continue;
             Graph.Node memory n = _graph.node(i);
-            if (!needed[i] || bytes(n.step).length == 0) continue;
+            if (bytes(n.step).length == 0) continue;
             require(_judge(n.id) == Graph.Status.Done, string.concat(n.id, " is not done by the planner"));
             require(runNode(n.id).length == 0, string.concat(n.id, " sends on a rerun"));
             require(
@@ -133,7 +134,7 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     /// @dev The recording runs through the whole call: what it holds between steps was sent by a judgment of
     ///      the planner or by the graph itself, and the graph sends nothing.
     function _run(string memory id, bool alone) private exclusive returns (Sent[] memory) {
-        _transcriptBegin(_senders());
+        _transcriptBegin(_senders(alone ? _only(id) : _closure(id)));
         _recordStart();
         require(_graph.fixtureRun(_net, id, alone), string.concat("the fixture cannot reach ", id));
         _noSendOutside();
@@ -142,7 +143,7 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
 
     /// @dev The planner's verdict, with the senders' nonces and the recording watching the judgment.
     function _judge(string memory id) private exclusive returns (Graph.Status verdict) {
-        _transcriptBegin(_senders());
+        _transcriptBegin(_senders(_closure(id)));
         _recordStart();
         verdict = _graph.status(_net, id);
         _noSendOutside();
@@ -181,11 +182,14 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         return false;
     }
 
-    function _senders() private view returns (address[] memory who) {
-        who = new address[](_graph.nodeCount() + 1);
+    /// @dev Forge's default sender and the senders of the steps in `needed`: the only accounts a run or judgment of
+    ///      them may send from by name. Any other sender is caught by the state diff.
+    function _senders(bool[] memory needed) private view returns (address[] memory who) {
+        who = new address[](needed.length + 1);
         uint256 count;
         who[count++] = DEFAULT_SENDER;
-        for (uint256 i; i < _graph.nodeCount(); ++i) {
+        for (uint256 i; i < needed.length; ++i) {
+            if (!needed[i]) continue;
             Graph.Node memory n = _graph.node(i);
             if (bytes(n.step).length == 0) continue;
             address sender = _graph.fixtureSender(_net, n.id);
@@ -199,6 +203,11 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         assembly ("memory-safe") {
             mstore(who, count)
         }
+    }
+
+    function _only(string memory id) private view returns (bool[] memory needed) {
+        needed = new bool[](_graph.nodeCount());
+        needed[_indexOf(id)] = true;
     }
 
     function _closure(string memory target) private view returns (bool[] memory needed) {
