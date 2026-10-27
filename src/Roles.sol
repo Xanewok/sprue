@@ -221,7 +221,13 @@ abstract contract Roles is Deployment {
     function _at(Role memory r) internal returns (address addr) {
         if (!_own(r)) return _atOther(r);
         uint256 proved = _provedIndex(r.name);
-        if (proved != type(uint256).max) return _proved[proved].addr;
+        if (proved != type(uint256).max) {
+            if (r.kind != Kind.Extern || r.canonical == address(0)) return _proved[proved].addr;
+            // The canonical address, code and absence are live facts: re-prove them on every read.
+            addr = _externAddress(r, _inputFile(_unit()));
+            _proved[proved].addr = addr;
+            return addr;
+        }
         _requireDeclared(r);
         if (r.kind == Kind.Extern) {
             addr = _externAddress(r, _inputFile(_unit()));
@@ -361,7 +367,10 @@ abstract contract Roles is Deployment {
         for (uint256 i; i < declared.length; ++i) {
             if (!_own(declared[i])) continue;
             Proved memory p = _proved[_provedIndex(declared[i].name)];
-            if (p.kind == Kind.Extern) continue;
+            if (p.kind == Kind.Extern) {
+                if (declared[i].canonical != address(0)) _externAddress(declared[i], _inputFile(_unit()));
+                continue;
+            }
             _requireReceipt(journal, p.name, p.addr, p.kind == Kind.Create2);
         }
         return _done(false);

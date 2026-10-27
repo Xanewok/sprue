@@ -255,6 +255,22 @@ contract AtToy is ToyJournal {
         _done(false);
     }
 
+    function atExtTwice(string calldata network, bytes calldata codeBetween) external returns (address, address) {
+        _use(network);
+        address first = _at(ext());
+        vm.etch(canonical, codeBetween);
+        address second = _at(ext());
+        _done(false);
+        return (first, second);
+    }
+
+    function endAfter(string calldata network, bytes calldata codeBetween) external returns (string memory) {
+        _use(network);
+        _at(ext());
+        vm.etch(canonical, codeBetween);
+        return _endCheck();
+    }
+
     function readOther(string calldata network) external returns (address) {
         _use(network);
         return _atOther(ext().unit("at"));
@@ -928,6 +944,73 @@ contract RolesTest is Test {
         t.atExt(network);
         vm.expectRevert(bytes("ext is required on chain 31337: name it in the input"));
         t.readOther(network);
+    }
+
+    function test_extern_at_refusesAnEarlierProof_whenTheCodeAppearsInTheSameStep() public {
+        _network("extern-twice-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(
+            bytes(
+                string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+            )
+        );
+        t.atExtTwice(network, hex"00");
+    }
+
+    function test_extern_at_refusesAnEarlierProof_whenThePinnedCodeChangesInTheSameStep() public {
+        _network("extern-twice-code", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        vm.expectRevert(bytes("ext's code is not the code its role pins"));
+        t.atExtTwice(network, hex"00");
+    }
+
+    function test_extern_at_sameStepReadsAgree_whenNothingChanges() public {
+        _network("extern-twice-same", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        (address a, address b) = t.atExtTwice(network, ext.code);
+        assertEq(a, ext);
+        assertEq(b, ext);
+    }
+
+    function test_extern_endCheck_refusesAStaleAbsence() public {
+        _network("extern-end-absent", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(
+            bytes(
+                string.concat("ext is absent in the input, but ", vm.toString(ext), " holds code: name it in the input")
+            )
+        );
+        t.endAfter(network, hex"00");
+    }
+
+    function test_extern_at_refusesTheZeroAddress() public {
+        vm.expectRevert(bytes("ext's .at is the zero address"));
+        this.buildAtZero();
+    }
+
+    function buildAtZero() external pure {
+        extern("ext", bytes32(0)).at(address(0));
+    }
+
+    function test_extern_requiredOn_accumulates() public {
+        Role memory r = extern("ext", bytes32(0)).at(address(1)).optional().requiredOn(5).requiredOn(6);
+        assertEq(r.requiredChains.length, 2);
+        assertEq(r.requiredChains[0], 5);
+        assertEq(r.requiredChains[1], 6);
+    }
+
+    function test_extern_requiredOn_acceptsAPresentInput() public {
+        _network("extern-required-present", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        _atInput(string.concat('"', vm.toString(ext), '"'));
+        t.setRequired(31337);
+        assertEq(t.atExt(network), ext);
     }
 
     function test_extern_builders_refuseWhatTheyCannotMean() public {
