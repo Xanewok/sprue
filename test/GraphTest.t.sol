@@ -2,7 +2,9 @@
 pragma solidity ^0.8.27;
 
 import {rehearsalPrefix} from "../src/Chains.sol";
+import {FileGraph} from "../src/FileGraph.sol";
 import {Graph} from "../src/graph/Graph.sol";
+import {Declares, Step} from "../src/graph/Step.sol";
 import {FixtureVault} from "./FixtureVault.sol";
 import {GraphTest} from "./GraphTest.sol";
 import {LIMIT, SUPPLY, TokenUnit, VaultGraph, VaultUnit} from "./VaultGraph.sol";
@@ -201,5 +203,40 @@ contract GraphFixtureTest is GraphTest {
         fresh.trustTestCreationAt(sent[1].to, sent[1].data);
         vm.expectRevert(bytes("vault's witnessed creation sent other initcode or arguments than its input"));
         fresh.check(net);
+    }
+}
+
+/// @dev A registered unit that is not a `Deployment`.
+contract StandInUnit is Declares {
+    function steps() external view returns (Step[] memory s) {
+        s = new Step[](1);
+        s[0] = _step("standin.check", this.check, this.checkDue).needs("token.deploy");
+    }
+
+    function check(string calldata) external pure returns (string memory) {
+        return "";
+    }
+
+    function checkDue(string calldata) external pure returns (bool) {
+        return false;
+    }
+}
+
+contract StandInGraph is FileGraph {
+    constructor() {
+        _add(address(new TokenUnit()), "script/TokenUnit.s.sol:TokenUnit");
+        _add(address(new StandInUnit()), "script/StandInUnit.s.sol:StandInUnit");
+        _validateGraph();
+    }
+}
+
+contract GraphStandInTest is GraphTest {
+    function test_upTo_vouchesForACreationOnlyToUnitsThatCanTakeIt() public {
+        vm.chainId(31337);
+        string memory dir = "deployments/graphtest-source-standin";
+        vm.createDir(dir, true);
+        vm.writeFile(string.concat(dir, "/network.json"), '{"chains":{"l2":{"id":31337,"rpc":"local"}}}');
+        _useGraph(new StandInGraph(), "graphtest-source-standin", "standin");
+        assertEq(upTo("standin.check").length, 1);
     }
 }

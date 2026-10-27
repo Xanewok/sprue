@@ -121,14 +121,24 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
         _recordStart();
     }
 
-    /// @dev Vouches for each CREATE to every unit, so that a unit reads a role another unit created.
+    /// @dev Vouches for each CREATE to every unit that is a `Deployment`, so that a unit reads a role another unit
+    ///      created.
     function stepped(string calldata) external {
         require(msg.sender == address(_graph), "only the graph reports");
         (Sent[] memory sent, Created[] memory created) = _recordDrain();
         _transcriptAdd(sent);
         for (uint256 i; i < created.length; ++i) {
             for (uint256 u; u < _units.length; ++u) {
-                Deployment(_units[u]).trustTestCreationAt(created[i].at, created[i].initcode);
+                try Deployment(_units[u]).trustTestCreationAt(created[i].at, created[i].initcode) {}
+                catch (bytes memory reason) {
+                    // A unit that is not a Deployment has no such function and reverts without data; it proves
+                    // no creation, so it needs no vouching. Any other refusal is the unit's own.
+                    if (reason.length != 0) {
+                        assembly ("memory-safe") {
+                            revert(add(reason, 32), mload(reason))
+                        }
+                    }
+                }
             }
         }
         _recordStart();
