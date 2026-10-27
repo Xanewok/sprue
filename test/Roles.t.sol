@@ -245,8 +245,38 @@ contract AtToy is ToyJournal {
         (canonical, externHash) = (at_, hash);
     }
 
-    function ext() internal view returns (Role memory) {
-        return extern("ext", externHash).at(canonical).optional().requiredOn(requiredChain);
+    bool public rejects;
+
+    function setRejects() external {
+        rejects = true;
+    }
+
+    function _reject(address, bytes memory) private pure {
+        revert("ext's ensure rejects");
+    }
+
+    function ext() internal view returns (Role memory r) {
+        r = extern("ext", externHash).at(canonical).optional().requiredOn(requiredChain);
+        if (rejects) r = r.ensure(_reject);
+    }
+
+    function absentThenPresent(string calldata network, string calldata inputPath, string calldata input)
+        external
+        returns (address, address)
+    {
+        _use(network);
+        address first = _at(ext());
+        vm.etch(canonical, externCode);
+        vm.writeFile(inputPath, input);
+        address second = _at(ext());
+        _done(false);
+        return (first, second);
+    }
+
+    bytes public externCode;
+
+    function setCode(bytes calldata code) external {
+        externCode = code;
     }
 
     function atExt(string calldata network) external returns (address a) {
@@ -987,6 +1017,19 @@ contract RolesTest is Test {
             )
         );
         t.endAfter(network, hex"00");
+    }
+
+    function test_extern_at_runsEnsureOnTheFirstPresentReadOfAStep() public {
+        _network("extern-ensure-transition", vm.toString(ops));
+        (AtToy t, address ext) = _atFixture();
+        t.setCode(ext.code);
+        t.setRejects();
+        vm.etch(ext, "");
+        _atInput('"absent"');
+        vm.expectRevert(bytes("ext's ensure rejects"));
+        t.absentThenPresent(
+            network, string.concat(dir, "/at.input.json"), string.concat('{"ext":"', vm.toString(ext), '"}')
+        );
     }
 
     function test_extern_at_refusesTheZeroAddress() public {

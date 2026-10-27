@@ -221,12 +221,9 @@ abstract contract Roles is Deployment {
     function _at(Role memory r) internal returns (address addr) {
         if (!_own(r)) return _atOther(r);
         uint256 proved = _provedIndex(r.name);
-        if (proved != type(uint256).max) {
-            if (r.kind != Kind.Extern || r.canonical == address(0)) return _proved[proved].addr;
-            // The canonical address, code and absence are live facts: re-prove them on every read.
-            addr = _externAddress(r, _inputFile(_unit()));
-            _proved[proved].addr = addr;
-            return addr;
+        // A role with `.at` is re-proven in full on every read: its address, code and absence are live facts.
+        if (proved != type(uint256).max && (r.kind != Kind.Extern || r.canonical == address(0))) {
+            return _proved[proved].addr;
         }
         _requireDeclared(r);
         if (r.kind == Kind.Extern) {
