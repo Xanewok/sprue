@@ -37,6 +37,8 @@ abstract contract Deployment is ForgeBroadcasts {
     /// @dev Each contract this unit created in this run, by chain and address. A role that a simulation
     ///      created has no transaction for the identity proof to find.
     mapping(bytes32 deployment => bool) private _createdThisRun;
+    /// @dev The initcode a test saw a contract created from, by deployment.
+    mapping(bytes32 deployment => bytes) private _witnessedInitcode;
 
     /// @dev Lets a test pass the creation proofs of roles whose creation no transaction shows, as forge's
     ///      test commands keep none. Without it, a test refuses them as a script does, so a test that
@@ -52,6 +54,16 @@ abstract contract Deployment is ForgeBroadcasts {
     function trustTestCreationOf(string calldata journal, string calldata role) external {
         require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
         _createdThisRun[_deployment(_addr(journal, string.concat(".", role)))] = true;
+    }
+
+    /// @dev A test vouches that a CREATE it observed made `addr` from `initcode`. The creation proofs then take
+    ///      `addr` as created in this run, if `initcode` is the journal's recorded initcode and ends with the
+    ///      role's constructor arguments. Reverts outside forge's test commands.
+    function trustTestCreationAt(address addr, bytes calldata initcode) external {
+        require(vm.isContext(VmSafe.ForgeContext.TestGroup), "only a test trusts creations");
+        require(initcode.length != 0, "a witnessed creation needs its initcode");
+        _createdThisRun[_deployment(addr)] = true;
+        _witnessedInitcode[_deployment(addr)] = initcode;
     }
 
     /// @dev Lets a test send each step as that step's sender. Reverts outside forge's test commands,
@@ -1015,7 +1027,18 @@ abstract contract Deployment is ForgeBroadcasts {
             keccak256(vm.parseJsonBytes(journal, string.concat(key, "Args"))) == keccak256(args),
             string.concat(role, "'s constructor arguments differ from ", _unit(), ".json")
         );
-        if (_createdThisRun[_deployment(addr)]) return;
+        if (_createdThisRun[_deployment(addr)]) {
+            bytes memory witnessed = _witnessedInitcode[_deployment(addr)];
+            if (witnessed.length != 0) {
+                _requireKey(_unit(), journal, role, "InitcodeHash");
+                require(
+                    keccak256(witnessed) == vm.parseJsonBytes32(journal, string.concat(key, "InitcodeHash"))
+                        && witnessed.length >= args.length && _sentArgs(witnessed, args.length) == keccak256(args),
+                    string.concat(role, "'s witnessed creation sent other initcode or arguments than its input")
+                );
+            }
+            return;
+        }
         // A probe reverts its EVM state, so a proof is kept as a label: cheatcode state, which outlives the
         // revert and lasts one forge run, or one test. It names the block the creation landed in, and holds
         // only while the selected chain has that block: a block's hash commits to its transactions, so

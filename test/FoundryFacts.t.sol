@@ -7,12 +7,71 @@ import {Vm, VmSafe} from "forge-std/Vm.sol";
 contract FoundryFactsTarget {
     uint256 public value;
 
-    function touch() external {
+    function touch() external payable {
         ++value;
     }
 
     function forward(FoundryFactsTarget next) external {
         next.touch();
+    }
+}
+
+contract FoundryFactsCallee {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    address public caller;
+    uint256 public value;
+
+    function broadcast() external {
+        caller = msg.sender;
+        vm.startBroadcast(msg.sender);
+        ++value;
+        vm.stopBroadcast();
+    }
+}
+
+contract FoundryFactsPayload {
+    uint256 public immutable ARG;
+
+    constructor(uint256 arg, bool fail) payable {
+        require(!fail, "constructor refused");
+        ARG = arg;
+    }
+}
+
+contract FoundryFactsRelay {
+    function createThenRevert() external {
+        new FoundryFactsPayload(1, false);
+        revert("undone");
+    }
+
+    function callThenRevert(FoundryFactsTarget target) external {
+        target.touch();
+        revert("undone");
+    }
+}
+
+contract FoundryFactsProber {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function probe(address as_) external {
+        vm.startPrank(as_, as_);
+        address(this).call(abi.encodeCall(this.noop, ()));
+        vm.stopPrank();
+        revert("probed");
+    }
+
+    function noop() external {}
+}
+
+contract FoundryFactsHost {
+    Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function start() external {
+        vm.startStateDiffRecording();
+    }
+
+    function stop() external returns (VmSafe.AccountAccess[] memory) {
+        return vm.stopAndReturnStateDiff();
     }
 }
 
@@ -134,5 +193,192 @@ contract FoundryFactsTest is Test {
             if (accesses[i].kind == VmSafe.AccountAccessKind.Call && accesses[i].accessor.code.length == 0) ++sends;
         }
         assertEq(sends, 1);
+    }
+
+    /// @dev A fixture cannot enter a step as its sender with a prank and leave the step's broadcast to the step:
+    ///      the prank is still active in the called frame.
+    function test_prank_blocksTheCalledFramesBroadcast() public {
+        FoundryFactsCallee callee = new FoundryFactsCallee();
+        vm.prank(sender, sender);
+        (bool ok, bytes memory ret) = address(callee).call(abi.encodeCall(FoundryFactsCallee.broadcast, ()));
+        assertFalse(ok);
+        assertTrue(vm.contains(abi.decode(_strip(ret), (string)), "you have an active prank"));
+    }
+
+    function _strip(bytes memory data) private pure returns (bytes memory rest) {
+        rest = new bytes(data.length - 4);
+        for (uint256 i; i < rest.length; ++i) {
+            rest[i] = data[i + 4];
+        }
+    }
+
+    /// @dev A fixture that starts recording in a callback and drains it in a later one relies on the recording
+    ///      surviving the first callback's return, holding what happens between them in order.
+    function test_stateDiff_startedInACallbackSurvivesItsReturn() public {
+        FoundryFactsHost host = new FoundryFactsHost();
+        host.start();
+        vm.broadcast(sender);
+        a.touch();
+        vm.broadcast(sender);
+        b.touch();
+        VmSafe.AccountAccess[] memory accesses = host.stop();
+        uint256 sends;
+        address[2] memory order;
+        for (uint256 i; i < accesses.length; ++i) {
+            if (accesses[i].kind != VmSafe.AccountAccessKind.Call || accesses[i].accessor != sender) continue;
+            order[sends++] = accesses[i].account;
+        }
+        assertEq(sends, 2);
+        assertEq(order[0], address(a));
+        assertEq(order[1], address(b));
+    }
+
+    /// @dev A fixture that records a send as its envelope relies on these fields of a broadcast call and CREATE.
+    function test_broadcast_recordsValueCalldataInitcodeAndChain() public {
+        vm.deal(sender, 10);
+        vm.startStateDiffRecording();
+        vm.startBroadcast(sender);
+        (bool ok,) = address(a).call{value: 3}(abi.encodeCall(FoundryFactsTarget.touch, ()));
+        address made = address(new FoundryFactsPayload{value: 2}(7, false));
+        vm.stopBroadcast();
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        assertTrue(ok);
+        VmSafe.AccountAccess memory call = _access(accesses, VmSafe.AccountAccessKind.Call, address(a));
+        assertEq(call.value, 3);
+        assertEq(call.data, abi.encodeCall(FoundryFactsTarget.touch, ()));
+        assertEq(call.chainInfo.chainId, block.chainid);
+        VmSafe.AccountAccess memory create = _access(accesses, VmSafe.AccountAccessKind.Create, made);
+        assertEq(create.value, 2);
+        assertEq(create.chainInfo.chainId, block.chainid);
+        assertEq(create.data, bytes.concat(type(FoundryFactsPayload).creationCode, abi.encode(uint256(7), false)));
+    }
+
+    /// @dev A fixture that counts a reverted send relies on a CREATE whose constructor reverts being recorded
+    ///      as reverted, and on a call inside a reverted ancestor being marked reverted too.
+    function test_broadcast_revertedCreateAndAncestorAreMarked() public {
+        FoundryFactsRelay relay = new FoundryFactsRelay();
+        uint256 nonce = vm.getNonce(sender);
+        vm.startStateDiffRecording();
+        vm.startBroadcast(sender);
+        try new FoundryFactsPayload(1, true) {} catch {}
+        (bool ok,) = address(relay).call(abi.encodeCall(FoundryFactsRelay.callThenRevert, (a)));
+        (bool created,) = address(relay).call(abi.encodeCall(FoundryFactsRelay.createThenRevert, ()));
+        vm.stopBroadcast();
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        assertFalse(ok);
+        assertFalse(created);
+        uint256 creates;
+        for (uint256 i; i < accesses.length; ++i) {
+            if (accesses[i].kind == VmSafe.AccountAccessKind.Create) {
+                ++creates;
+                assertTrue(accesses[i].reverted);
+            }
+        }
+        // The constructor that reverts, and the one inside a reverted ancestor.
+        assertEq(creates, 2);
+        assertTrue(_access(accesses, VmSafe.AccountAccessKind.Call, address(a)).reverted);
+        assertEq(a.value(), 0);
+        // Each reverted top-level transaction still advanced the nonce: the CREATE and the two calls.
+        assertEq(vm.getNonce(sender), nonce + 3);
+    }
+
+    /// @dev `_broadcaster` reads the broadcaster and its nonce before a CREATE, and the CREATE lands there.
+    function test_readCallers_namesTheBroadcasterBeforeACreate() public {
+        vm.startBroadcast(sender);
+        (VmSafe.CallerMode mode, address caller,) = vm.readCallers();
+        uint256 nonce = vm.getNonce(sender);
+        address made = address(new FoundryFactsTarget());
+        vm.stopBroadcast();
+        assertEq(uint8(mode), uint8(VmSafe.CallerMode.RecurrentBroadcast));
+        assertEq(caller, sender);
+        assertEq(made, vm.computeCreateAddress(sender, nonce));
+    }
+
+    /// @dev A broadcast CREATE2 is recorded as a call to the factory with `salt ++ initcode`, from the sender.
+    function test_broadcast_create2IsAFactoryCall() public {
+        address factory = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
+        vm.etch(
+            factory,
+            hex"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
+        );
+        bytes32 salt = bytes32(uint256(5));
+        vm.startStateDiffRecording();
+        vm.startBroadcast(sender);
+        address made = address(new FoundryFactsTarget{salt: salt}());
+        vm.stopBroadcast();
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        VmSafe.AccountAccess memory call = _access(accesses, VmSafe.AccountAccessKind.Call, factory);
+        assertEq(call.accessor, sender);
+        assertEq(call.data, bytes.concat(salt, type(FoundryFactsTarget).creationCode));
+        assertGt(made.code.length, 0);
+    }
+
+    /// @dev Forge keeps no broadcast record of a test's sends, so a fixture's creations have no transaction
+    ///      for a proof to find.
+    function test_broadcast_leavesNoRecordUnderATest() public {
+        bytes32 before = _records();
+        vm.broadcast(sender);
+        a.touch();
+        assertEq(_records(), before);
+    }
+
+    /// @dev A digest of every path and content under `broadcast/`.
+    function _records() private view returns (bytes32 digest) {
+        if (!vm.exists("broadcast")) return bytes32(0);
+        VmSafe.DirEntry[] memory entries = vm.readDir("broadcast", 8);
+        for (uint256 i; i < entries.length; ++i) {
+            digest = keccak256(
+                abi.encode(
+                    digest,
+                    entries[i].path,
+                    entries[i].isDir ? bytes32(0) : keccak256(bytes(vm.readFile(entries[i].path)))
+                )
+            );
+        }
+    }
+
+    /// @dev A bare `vm.broadcast()` sends from forge's default sender, which a fixture always watches.
+    function test_broadcast_withoutASenderIsTheDefaultSender() public {
+        vm.startStateDiffRecording();
+        vm.broadcast();
+        a.touch();
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        assertEq(_access(accesses, VmSafe.AccountAccessKind.Call, address(a)).accessor, DEFAULT_SENDER);
+    }
+
+    /// @dev A fixture that finds sends by their accessor must tell a probe's call to its own unit, which a prank
+    ///      makes a call from the pranked account, from a send: the probe's frame is its parent in the diff.
+    function test_prank_makesAProbesSelfCallACallFromThePrankedAccount() public {
+        FoundryFactsProber prober = new FoundryFactsProber();
+        vm.startStateDiffRecording();
+        address(prober).call(abi.encodeCall(FoundryFactsProber.probe, (sender)));
+        VmSafe.AccountAccess[] memory accesses = vm.stopAndReturnStateDiff();
+        VmSafe.AccountAccess memory probe = _access(accesses, VmSafe.AccountAccessKind.Call, address(prober));
+        assertEq(probe.accessor, address(this));
+        uint256 found;
+        for (uint256 i; i < accesses.length; ++i) {
+            if (accesses[i].account != address(prober) || accesses[i].accessor != sender) continue;
+            ++found;
+            assertTrue(accesses[i].reverted);
+            assertEq(accesses[i].depth, probe.depth + 1);
+        }
+        assertEq(found, 1);
+    }
+
+    /// @dev A fixture drains and restarts the recording at every callback: each segment holds exactly what ran
+    ///      since the last restart.
+    function test_stateDiff_repeatedSegmentsEachHoldTheirOwnAccesses() public {
+        FoundryFactsHost host = new FoundryFactsHost();
+        for (uint256 round; round < 3; ++round) {
+            host.start();
+            vm.broadcast(sender);
+            a.touch();
+            VmSafe.AccountAccess[] memory accesses = host.stop();
+            uint256 sends;
+            for (uint256 i; i < accesses.length; ++i) {
+                if (accesses[i].kind == VmSafe.AccountAccessKind.Call && accesses[i].accessor == sender) ++sends;
+            }
+            assertEq(sends, 1);
+        }
     }
 }

@@ -48,6 +48,44 @@ What sprue relies on and cannot check.
   person. No agent or CI should hold a key for a public chain.
 - `sprue.json` and `network.json` are the project's to get right; sprue validates their shape, not their meaning.
 
+## What Foundry provides
+
+The test fixture (`test/GraphTest.sol`, which reads Foundry only through `test/ForgeTranscript.sol`) relies on
+these behaviours of `forge test`. Each is pinned in `test/FoundryFacts.t.sol`, so a Foundry upgrade that changes
+one fails there first, except those listed as not pinned below the table.
+
+| Behaviour | Pin |
+|---|---|
+| A broadcast call or CREATE is a state-diff access whose accessor is the broadcaster; a nested call names its caller | `test_broadcast_recordsSenderAsCallAndCreateAccessor`, `test_broadcast_onlyTopLevelCallHasSenderAsAccessor` |
+| The access carries the value, the calldata, the CREATE initcode with its arguments, and the chain id | `test_broadcast_recordsValueCalldataInitcodeAndChain` |
+| Each broadcast call and CREATE advances the sender's nonce, a static call does not, and a reverted top-level call still does | `test_broadcast_incrementsNonceForCallAndCreateButNotStaticCalls`, `test_broadcast_revertedCallIsRecordedAndStillAdvancesTheNonce` |
+| A reverted CREATE, and a CREATE or call inside a reverted ancestor, are marked reverted, and each reverted top-level transaction still advances the nonce | `test_broadcast_revertedCreateAndAncestorAreMarked` |
+| `readCallers` names the broadcaster before a CREATE, and the CREATE lands at its nonce | `test_readCallers_namesTheBroadcasterBeforeACreate` |
+| A broadcast CREATE2 is a call to the factory with `salt ++ initcode` | `test_broadcast_create2IsAFactoryCall` |
+| A bare `vm.broadcast()` sends from forge's default sender | `test_broadcast_withoutASenderIsTheDefaultSender` |
+| A test's sends leave no broadcast record | `test_broadcast_leavesNoRecordUnderATest` |
+| A recording started in one callback is drained in a later one, in order, and each restart holds only what ran since | `test_stateDiff_startedInACallbackSurvivesItsReturn`, `test_stateDiff_repeatedSegmentsEachHoldTheirOwnAccesses` |
+| A snapshot restores the clock and nonces but not files, and a replayed CREATE lands at its recorded address | `test_snapshot_restoresTimestampAndNonceButKeepsFileWrites`, `test_snapshot_replayedCreateLandsAtRecordedAddress` |
+| A prank makes a call from the pranked account, so a probe's call to its own unit shows as a send from that account; its parent is the probe's frame | `test_prank_makesAProbesSelfCallACallFromThePrankedAccount` |
+| A prank is still active in the called frame, so the fixture cannot enter a step as its sender; `quiet` probes each body as the step's sender instead (see below) | `test_prank_blocksTheCalledFramesBroadcast` |
+
+Not pinned: that a frame's parent is the nearest earlier frame one level up when siblings share a depth, and what
+happens to a frame whose parent was in an earlier recording segment (the fixture treats it as the graph's); that
+no record is written after a test ends; and that a script's dry run, broadcast and resume refuse the fixture's
+entry points (`test/FixtureGuard.s.sol` runs only as a dry run).
+
+### The steps the fixture judges
+
+`quiet` is sound for a step that does not catch sprue's own revert. A probe stops a step at its first send by
+reverting with `StepDue`, so a step body that catches that revert (a `try`/`catch` around `_send`, `_startBroadcast`
+or a journal write) looks done to the probe and is outside what `quiet` judges. A step that sends on a path only
+its own sender takes is judged by the probe as that sender, up to its first send.
+
+The fixture counts sends from accounts without code. A broadcaster that has code (a contract, or an EIP-7702
+delegated account) is outside the count: Foundry's state diff does not mark which accesses are broadcasts, so a
+call from an account with code cannot be told from a nested call. A real `forge script` deploy signs from an
+EOA.
+
 ## Invariants
 
 Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e.sh`).
