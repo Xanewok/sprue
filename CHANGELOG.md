@@ -135,8 +135,7 @@ opens a broadcast only when forge has none open, and `_done()` closes it and rep
 created a transaction, from the broadcaster's nonce.
 
 A CREATE role's creation is proven once per forge run: a later proof of the same address and arguments on
-the same chain reads no transaction or receipt again. Breaking: a step refuses a `network.json` in
-which two chains of one id name other `rpc`s, since the id names the chain whose proofs the run keeps.
+the same chain reads only the hash of the creation's block, and proves the creation again if it differs.
 
 Fixed: a done step behind a date not yet reached printed `# not before`, from a gate view, or stopped the
 plan, from an input date, so `run` exited 4 or warped the clock for a step with nothing to send. A done

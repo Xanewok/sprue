@@ -250,7 +250,8 @@ contract ReaderToy is ToyJournal {
     }
 }
 
-/// @dev The chain as a test confirms it: `confirmed` created the toy, and sent the toy's initcode.
+/// @dev The chain as a test confirms it: `confirmed` created the toy, and sent the toy's initcode; `history`
+///      names the chain's blocks.
 contract LandedToy is RolesToy {
     bytes32 public confirmed;
 
@@ -264,6 +265,16 @@ contract LandedToy is RolesToy {
 
     function _sentInput(bytes32) internal view override returns (bytes memory) {
         return bytes.concat(vm.getCode("ToyPayload.sol:ToyPayload"), abi.encode(uint256(1)));
+    }
+
+    bytes32 public history;
+
+    function setHistory(bytes32 history_) external {
+        history = history_;
+    }
+
+    function _blockHash(uint256 number) internal view override returns (bytes32) {
+        return keccak256(abi.encode(history, number));
     }
 }
 
@@ -581,26 +592,14 @@ contract RolesTest is Test {
         fresh.atToy(network);
     }
 
-    /// @dev A chain id names one chain's history, which a kept proof relies on: two names of it read one rpc.
-    function test_use_refusesTwoChainsOfOneIdWithOtherRpcs() public {
-        _network("one-id", vm.toString(ops));
-        vm.writeFile(
-            string.concat(dir, "/network.json"),
-            '{"chains":{"main":{"rpc":"main","id":31337},"mirror":{"rpc":"mirror","id":31337}}}'
-        );
-        vm.expectRevert(
-            bytes(
-                "network.json's chains main and mirror have one chain id but other rpcs: name one rpc for both, or give each its own id"
-            )
-        );
-        unit.deploy(network);
-        vm.writeFile(
-            string.concat(dir, "/network.json"),
-            '{"chains":{"main":{"rpc":"main","id":31337},"alias":{"rpc":"main","id":31337}}}'
-        );
-        // Past `_use`: the toy itself takes one chain.
-        vm.expectRevert(bytes("toy network: not exactly one chain"));
-        unit.deploy(network);
+    /// @dev A kept proof holds only on the history that showed it: another history of the same chain id, or a
+    ///      reorg of the creation's block, proves the creation again.
+    function test_at_aKeptProofHoldsOnlyOnTheHistoryThatShowedIt() public {
+        (LandedToy fresh, address toy) = _provenOnce("kept-history");
+        assertEq(fresh.atToy(network), toy);
+        fresh.setHistory("another");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
     }
 
     function test_check_runsOnEveryReuse_andItsRefusalStopsTheStep() public {

@@ -420,6 +420,19 @@ abstract contract ForgeBroadcasts is Journal {
         }
     }
 
+    /// @dev The hash of the selected chain's block `number`, or zero. Virtual only so a test with no RPC can
+    ///      supply it.
+    function _blockHash(uint256 number) internal virtual returns (bytes32) {
+        try VmRpcJson(address(vm))
+            .rpcJson("eth_getBlockByNumber", string.concat('["', _hex(number), '", false]')) returns (
+            string memory header
+        ) {
+            return _has(header, ".hash") ? vm.parseJsonBytes32(header, ".hash") : bytes32(0);
+        } catch {
+            return 0;
+        }
+    }
+
     /// @dev The address that the factory call `hash` (input: `salt ++ initcode`) created, else zero.
     ///      The receipt names no created address, and a broadcast record is a local, editable file.
     ///      So the address is computed from what the chain says was sent to the factory.
