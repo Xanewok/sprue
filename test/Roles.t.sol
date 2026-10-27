@@ -259,8 +259,18 @@ contract LandedToy is RolesToy {
         confirmed = hash;
     }
 
-    function _createdIn(bytes32 hash, address, bool create2) internal view override returns (uint256) {
-        return hash == confirmed && !create2 ? 5 : 0;
+    /// @dev A reorg right after the receipt is read, when `reorgAfterReceipt` is set.
+    function _creationBlock(bytes32 hash, address, bool create2) internal override returns (uint256, bytes32) {
+        if (hash != confirmed || create2) return (0, 0);
+        bytes32 blockHash = _blockHash(5);
+        if (reorgAfterReceipt) history = "reorged";
+        return (5, blockHash);
+    }
+
+    bool public reorgAfterReceipt;
+
+    function setReorgAfterReceipt(bool reorg) external {
+        reorgAfterReceipt = reorg;
     }
 
     function _sentInput(bytes32) internal view override returns (bytes memory) {
@@ -571,9 +581,9 @@ contract RolesTest is Test {
     /// @dev A kept proof is the address's: another address the chain shows no creation of is refused.
     function test_at_aKeptProofCoversNoOtherAddress() public {
         (LandedToy fresh, address toy) = _provenOnce("kept-addr");
-        address other = vm.computeCreateAddress(ops, 1);
-        vm.etch(other, toy.code);
-        _set(".toy", vm.toString(other));
+        address second = vm.computeCreateAddress(ops, 1);
+        vm.etch(second, toy.code);
+        _set(".toy", vm.toString(second));
         _set(".toyNonce", "1");
         vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
         fresh.atToy(network);
@@ -598,6 +608,22 @@ contract RolesTest is Test {
         (LandedToy fresh, address toy) = _provenOnce("kept-history");
         assertEq(fresh.atToy(network), toy);
         fresh.setHistory("another");
+        vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
+        fresh.atToy(network);
+    }
+
+    /// @dev A kept proof names the block of the receipt it checked: a reorg after that read leaves it unused.
+    function test_at_aKeptProofNamesTheBlockOfTheReceiptItChecked() public {
+        _network("kept-receipt", vm.toString(ops));
+        unit.deploy(network);
+        LandedToy fresh = new LandedToy();
+        fresh.setTestSender(ops);
+        bytes32 hash = keccak256("the toy's creation");
+        _set(".toyTx", vm.toString(hash));
+        fresh.confirm(hash);
+        fresh.setReorgAfterReceipt(true);
+        fresh.atToy(network);
+        fresh.confirm(0);
         vm.expectRevert(bytes("toyTx in roles.json did not create toy: a person must resolve it"));
         fresh.atToy(network);
     }

@@ -403,20 +403,34 @@ abstract contract ForgeBroadcasts is Journal {
 
     /// @dev The block in which `txHash` created `deployed` on the selected chain, or zero. A
     ///      candidate from another chain has no receipt here, or one the node refuses to serve.
-    ///      Virtual only so a test with no RPC can confirm a receipt.
-    function _createdIn(bytes32 txHash, address deployed, bool create2) internal virtual returns (uint256) {
+    function _createdIn(bytes32 txHash, address deployed, bool create2) internal returns (uint256 number) {
+        (number,) = _creationBlock(txHash, deployed, create2);
+    }
+
+    /// @dev `_createdIn`'s block, with its hash from the same receipt. Virtual only so a test with no RPC can
+    ///      confirm a receipt.
+    function _creationBlock(bytes32 txHash, address deployed, bool create2)
+        internal
+        virtual
+        returns (uint256 number, bytes32 blockHash)
+    {
         string memory hash = string.concat('["', vm.toString(txHash), '"]');
         try VmRpcJson(address(vm)).rpcJson("eth_getTransactionReceipt", hash) returns (string memory receipt) {
-            if (!_has(receipt, ".status") || _uint(receipt, ".status") != 1) return 0;
-            if (create2) return _factoryCreated(hash) == deployed ? _uint(receipt, ".blockNumber") : 0;
-            // A call's receipt names no created address.
-            try vm.parseJsonAddress(receipt, ".contractAddress") returns (address created) {
-                return created == deployed ? _uint(receipt, ".blockNumber") : 0;
-            } catch {
-                return 0;
+            if (!_has(receipt, ".status") || _uint(receipt, ".status") != 1) return (0, 0);
+            bool created;
+            if (create2) {
+                created = _factoryCreated(hash) == deployed;
+            } else {
+                // A call's receipt names no created address.
+                try vm.parseJsonAddress(receipt, ".contractAddress") returns (address at) {
+                    created = at == deployed;
+                } catch {}
             }
+            if (!created) return (0, 0);
+            bytes32 landedIn = _has(receipt, ".blockHash") ? vm.parseJsonBytes32(receipt, ".blockHash") : bytes32(0);
+            return (_uint(receipt, ".blockNumber"), landedIn);
         } catch {
-            return 0;
+            return (0, 0);
         }
     }
 

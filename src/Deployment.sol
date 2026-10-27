@@ -1046,7 +1046,7 @@ abstract contract Deployment is ForgeBroadcasts {
         }
         // The journal's arguments vouch for nothing: an edit can match them to the input while the contract
         // holds what its creation sent.
-        uint256 landed = _createdIn(hash, addr, false);
+        (uint256 landed, bytes32 landedHash) = _creationBlock(hash, addr, false);
         require(
             landed != 0,
             string.concat(role, "Tx in ", _unit(), ".json did not create ", role, ": a person must resolve it")
@@ -1056,7 +1056,7 @@ abstract contract Deployment is ForgeBroadcasts {
             input.length >= args.length && _sentArgs(input, args.length) == keccak256(args),
             string.concat(role, "'s creation sent other constructor arguments than its input: a person must resolve it")
         );
-        vm.label(proven, vm.toString(abi.encode(landed, _blockHash(landed))));
+        vm.label(proven, vm.toString(abi.encode(landed, landedHash)));
     }
 
     function _sentArgs(bytes memory input, uint256 length) private pure returns (bytes32 rest) {
