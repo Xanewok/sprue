@@ -38,6 +38,9 @@ abstract contract GraphTest is ForgeTranscript, IFixtureHost {
     /// @dev Copies `source`'s files into the session's rehearsal network, so that tests of one project
     ///      run in parallel, each on its own journals. `session` is unique per test function.
     function _useGraph(Graph g, string memory source, string memory session) internal {
+        // Forge leaves the deployment of a linked test library in the first recording, and it is not a send.
+        _recordStart();
+        _recordDrain();
         _graph = g;
         _net = string.concat(rehearsalPrefix(), "-", session);
         stageInputs(source, _net);

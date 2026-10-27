@@ -7,6 +7,13 @@ import {FixtureVault} from "./FixtureVault.sol";
 import {GraphTest} from "./GraphTest.sol";
 import {LIMIT, SUPPLY, TokenUnit, VaultGraph, VaultUnit} from "./VaultGraph.sol";
 
+/// @dev Linked, so forge deploys it with the test, and that deployment shows in the test's first recording.
+library Linked {
+    function one() external pure returns (uint256) {
+        return 1;
+    }
+}
+
 contract GraphFixtureTest is GraphTest {
     uint256 private constant OPEN_AT = 2_000_000_000;
 
@@ -68,6 +75,12 @@ contract GraphFixtureTest is GraphTest {
         assertEq(sent[3].to, role("token", ".token"));
         assertEq(sent[3].nonce, 2);
         assertEq(uint8(graph.status(net, "vault.check")), uint8(Graph.Status.Done));
+    }
+
+    function test_upTo_ignoresALinkedLibrarysDeployment() public {
+        _world("linked");
+        assertEq(Linked.one(), 1);
+        assertEq(upTo("token.check").length, 1);
     }
 
     function test_upTo_aSecondRunSendsNothing() public {
