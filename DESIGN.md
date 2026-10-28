@@ -61,6 +61,7 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
 | A deployed contract has the artifact's code, immutables aside, unless the unit overrides `_requireBuild`; a reused one has the journal's code hash, or the code that exactly the journaled initcode left where it landed (a CREATE2 address, or a CREATE's creation transaction, shows that initcode). | `test_deploy_refusesACreateThatIsNotTheArtifactAndRecordsNothing`, `test_deploy_aRoleThatLandedWithOtherCodeThanItsSimulation_isProvenByItsCreationInput`; `Create2Code.t.sol` |
 | A declared role is returned only when its address follows from the identity its journal records (deployer and nonce, or factory, salt and initcode hash), its code hash (as in the row above) and recorded arguments are the journal's and the declared ones, a CREATE's known creation transaction created it and sent the declared arguments, and its `.ensure` passes; another unit's role, by its identity and code. | `Roles.t.sol` `test_at_*`, `test_create2_*`, `test_extern_*`, `test_check_runsOnEveryReuse_andItsRefusalStopsTheStep` |
 | Where `network.json` pins a deployer, a declared CREATE role was created by the pin, and only the pin sends one, whatever the opt-in to another key. A CREATE2 role is proven whoever sent it. | `Roles.t.sol` `test_deploy_onAPinnedNetwork_refusesAnotherKey_evenWithTheOptIn`, `test_at_refusesARecordedDeployerOtherThanThePin`, `test_pin_aNetworkThatListsFormerDeployers_isRefusedByName`, `test_create2_isProvenWhoeverSentIt`; e2e `scenario_failure` |
+| A `child` or `runtime` role is journaled with the address its parent's getter returns, which the parent's code must hold (or the parent's own address), its code hash and metadata, only after its code is the artifact's (a `runtime`: the address's code starts with the artifact's program, as `_deploy` requires of every role of its parent's artifact); a later proof that finds the record describing that address and code trusts it, and any other proof checks the artifact again. A step refuses to journal a creation receipt while the creation's broadcast record lists a contract that has code and that no declared child is at. A role is used only as `_roles()` declares it. | `Children.t.sol` |
 | `recover` journals only one unambiguous, current deployment and writes nothing before every check passes. | `CoreUnit.t.sol` `test_recover_refuses*`, `test_recover_ofACompleteJournal_sendsAndWritesNothing`; e2e `scenario_recover` |
 | Node order is the lowest ready node by unit, then declaration; a cycle is refused with its ids. | `GraphOrder.t.sol` `testFuzz_order_*`, `testFuzz_cycleNamesARealLoop` |
 | Every step has a done rule. A `check` is judged live: once what it asserts changed, it is not done. | `StepBuilders.t.sol` `test_aStepWithoutADoneRuleIsRefused`; `Probe.t.sol` `test_plan_judgesACheckLive_andRefusesOnceWhatItAssertsChanged`; `Roles.t.sol` `test_endCheck_*` |
@@ -100,14 +101,15 @@ Each is checked by the named test or end-to-end scenario (`test/`, `test/e2e/e2e
    its first `_startBroadcast()` or journal write. A `<fn>Due` view (true while work remains). For a
    node with no step, a predicate (`until`) that anyone may satisfy. Construction refuses a step with
    none (`MissingDoneRule`). A `check` is an ordinary probed step: `_endCheck` makes it due only while a
-   deployed role's receipt is unjournaled and findable in the unit's records or on the chain.
+   deployed role's receipt is unjournaled and findable in the unit's records or on the chain, or a child's
+   record is missing or stale.
    The probe runs under a prank, because forge refuses its broadcast cheatcodes under one: forge keeps the
    transactions of a reverted call in the dry run, which `--resume` would send. It pranks as the step's
    sender, `.by` or the plan's own. A receipt still to journal is not work for a deploy step, since forge
    writes the record after the run; the unit's `check` journals it. A graph asks a unit whether it answers the probe with a static call, so asking runs
    nothing. Rejected: a certificate of a `check` that marks steps done (it hides drift after the
    certificate, and a changed bind stays done).
-7. **`check` settles only deployment evidence.** It journals receipts and the `<role>CodeHash` and `<role>Commit` of what it proves, and nothing else; a rerun leaves the journal unchanged.
+7. **`check` settles only deployment evidence.** It journals receipts, the `<role>CodeHash` and `<role>Commit` of what it proves, and the records of children, and nothing else; a rerun leaves the journal unchanged.
 8. **A node is a gate, a view, or a predicate on chain state.** A time gate reads a contract's view where
    one exists (movable until reached); a date in an input is only a forecast. The step's own read-only check
    decides due or done; making the contract enforce the condition when the step runs is the unit author's

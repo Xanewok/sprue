@@ -106,7 +106,7 @@ abstract contract ForgeBroadcasts is Journal {
         }
     }
 
-    function _freeMemory() private pure returns (uint256 at) {
+    function _freeMemory() internal pure returns (uint256 at) {
         assembly ("memory-safe") {
             at := mload(0x40)
         }
@@ -115,7 +115,7 @@ abstract contract ForgeBroadcasts is Journal {
     /// @dev Frees everything allocated since `_freeMemory` returned `at`; the caller must reference none of it.
     ///      A scan of many records calls it after each record that yields nothing: a step never frees memory,
     ///      and its gas grows with the square of what it holds, so a dozen records would end a probe.
-    function _releaseMemory(uint256 at) private pure {
+    function _releaseMemory(uint256 at) internal pure {
         assembly ("memory-safe") {
             mstore(0x40, at)
         }
@@ -224,6 +224,7 @@ abstract contract ForgeBroadcasts is Journal {
             console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
             return;
         }
+        if (bytes(record).length != 0) _requireCreatedDeclared(role, deployed, _alsoCreated(record, deployed));
         _put(string.concat(".", role, "Tx"), vm.toString(hash));
         _put(string.concat(".", role, "Block"), vm.toString(landed));
         if (bytes(record).length != 0) _settleCommit(journal, role, record);
@@ -392,6 +393,34 @@ abstract contract ForgeBroadcasts is Journal {
             _put(key, string.concat('"', commit, '"'));
         }
     }
+
+    /// @dev The contracts that `record`'s creation of `deployed` on the selected chain made besides it, as forge
+    ///      lists them. Keyed by the created address, not the hash: older forge versions wrote `transactions[]`
+    ///      hashes out of order. A CALL names its target in `contractAddress` too, so only a creation counts.
+    function _alsoCreated(string memory record, address deployed) internal view returns (address[] memory created) {
+        string memory run = _has(record, ".deployments")
+            ? string.concat("$.deployments[?(@.chain == ", vm.toString(block.chainid), ")]")
+            : "$";
+        bytes memory found = vm.parseJson(
+            record,
+            string.concat(
+                run,
+                ".transactions[?(@.contractAddress == '",
+                vm.toLowercase(vm.toString(deployed)),
+                "' && @.transactionType != 'CALL')].additionalContracts[*].address"
+            )
+        );
+        if (found.length != 32) return found.length == 0 ? created : abi.decode(found, (address[]));
+        created = new address[](1);
+        created[0] = abi.decode(found, (address));
+    }
+
+    /// @dev Reverts unless the unit declares each contract in `created` that `role`'s creation also made.
+    ///      Checked once, before the receipt is journaled: a later run reads the journaled receipt.
+    function _requireCreatedDeclared(string memory role, address deployed, address[] memory created)
+        internal
+        view
+        virtual {}
 
     /// @dev forge returns no match as no bytes, one as itself and several as an array.
     function _matches(string memory json, string memory path) private pure returns (bytes32[] memory hashes) {

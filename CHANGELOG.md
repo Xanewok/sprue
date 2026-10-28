@@ -2,12 +2,27 @@
 
 ## Unreleased
 
+Roles a constructor creates: `child(name, artifact, parent, getter)` is a contract at the address that the
+parent's getter returns, given by its selector and held in the parent's code as an immutable is, and
+`runtime(name, artifact, parent)` the program a parent's constructor returned in place of its own, at the
+parent's address. A refusal of an undeclared contract prints the `child` declaration to add. Each is journaled with `<name>`, `<name>CodeHash` and
+`<name>Metadata` when `_deploy` first journals its parent or `recover` finds it, and by `check` where the
+journal lacks it or no longer describes it; it has no commit or `.args` of its own. `_at` reads them, and
+another unit's `_at` reads a child of a CREATE or CREATE2 role. `_deploy` requires every role of an
+artifact that a `runtime`'s parent has to run the runtime's program, and such a unit no longer needs a
+`_requireBuild` override. Breaking:
+
+- a step refuses to journal a receipt while forge's broadcast record of that creation lists a contract that
+  has code and that no declared `child` is at, so a unit whose constructors create contracts declares them;
+- `_at` and `_deploy` refuse a role whose kind, artifact, key, parent or pinned code hash differs from the
+  role of that name in `_roles()`.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with
 `_endCheck()`, which refuses unless the step proved every role of `_roles()` and journals the receipts of
-the deployed ones; a probe judges the step due only while a receipt is unjournaled and findable, so a rerun
-of an unchanged deployment sends and writes nothing. Migrating a unit:
+the deployed ones; a probe judges the step due only while a receipt is unjournaled and findable, or a
+child's record is missing or stale, so a rerun of an unchanged deployment sends and writes nothing. Migrating a unit:
 
 - `_certify()`, `_certify(_certificate().with...())`, `_certificate`, `_beginChecked`, `_certifyRole` and
   `Certificate` become `_endCheck()`. What a certificate carried (extra facts, `withCode`, `withAddress`)

@@ -33,8 +33,11 @@ end-to-end scenario for each invariant.
   no journal records. An address in the journal's `retired` list passes both checks.
 - A unit's proof of its own CREATE role requires that the role's creation transaction created it and sent
   its declared constructor arguments, whatever its journal records.
-- A deployed contract's code is the build artifact's, immutables aside, unless the unit overrides
-  `_requireBuild` for a constructor-returned runtime and proves the code in its `check` step.
+- A deployed contract's code is the build artifact's, immutables aside. A `runtime` role's parent instead
+  runs code that starts with the runtime's program, and what follows it, such as a table's rows, is for
+  the unit's `check` to prove. A unit that overrides `_requireBuild` proves the code itself.
+- A `child`'s address must be in its parent's code, as an immutable is, so the parent's proven code hash
+  fixes it. A getter that reads storage is refused: a call could point it at another contract.
 
 ## What stays with the unit author
 
