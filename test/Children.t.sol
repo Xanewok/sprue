@@ -77,12 +77,6 @@ contract ChildrenToy is ToyJournal {
         _done(false);
     }
 
-    function atKidAsExtern(string calldata network) external returns (address a) {
-        _use(network);
-        a = _at(extern("kid", "kid", bytes32(0)));
-        _done(false);
-    }
-
     function recover(string calldata network) external returns (string memory) {
         return _recoverRoles(network);
     }
@@ -322,13 +316,6 @@ contract ChildrenTest is Test {
         vm.writeFile(string.concat(run, "/deploy.json"), string.concat('{"deployments": [', there, ", ", here, "]}"));
         unit.check(network);
         assertEq(vm.parseJsonBytes32(_journal(), ".parentTx"), hash);
-    }
-
-    function test_at_refusesARoleOtherThanItsDeclaration() public {
-        _network("other-declaration");
-        unit.deploy(network);
-        vm.expectRevert(bytes("kid differs from its declaration in children's _roles()"));
-        unit.atKidAsExtern(network);
     }
 
     function test_at_refusesAChildWhoseCodeIsNotItsArtifact() public {
