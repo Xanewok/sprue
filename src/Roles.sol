@@ -401,53 +401,12 @@ abstract contract Roles is Deployment {
                     role,
                     "'s creation also created ",
                     vm.toString(created[i]),
-                    ": declare it in _roles(), such as ",
-                    _declarationFor(role, deployed, created[i])
+                    ": declare it in _roles() as child(name, artifact, <the ",
+                    role,
+                    " role>, <its getter>.selector)"
                 )
             );
         }
-    }
-
-    /// @dev A `child` declaration of `created` by the first getter of `parent` that returns it, typed from the
-    ///      getter's return type, or the shape of one if no getter does.
-    function _declarationFor(string memory parent, address parentAddr, address created)
-        private
-        view
-        returns (string memory)
-    {
-        string memory artifact = _declared(parent).artifact;
-        string memory json = vm.readFile(string.concat("out/", artifact, ".sol/", artifact, ".json"));
-        string memory role = string.concat("<the ", parent, " role>");
-        for (uint256 i; _has(json, string.concat(".abi[", vm.toString(i), "]")); ++i) {
-            string memory f = string.concat(".abi[", vm.toString(i), "]");
-            if (
-                keccak256(bytes(vm.parseJsonString(json, string.concat(f, ".type")))) != keccak256("function")
-                    || _has(json, string.concat(f, ".inputs[0]")) || !_has(json, string.concat(f, ".outputs[0]"))
-                    || _has(json, string.concat(f, ".outputs[1]"))
-                    || keccak256(bytes(vm.parseJsonString(json, string.concat(f, ".outputs[0].type"))))
-                        != keccak256("address")
-            ) continue;
-            string memory name = vm.parseJsonString(json, string.concat(f, ".name"));
-            (bool ok, bytes memory ret) = parentAddr.staticcall(abi.encodeWithSignature(string.concat(name, "()")));
-            if (!ok || ret.length != 32 || abi.decode(ret, (address)) != created) continue;
-            string[] memory typed =
-                vm.split(vm.parseJsonString(json, string.concat(f, ".outputs[0].internalType")), " ");
-            string memory childArtifact = typed.length == 2 ? typed[1] : "<its artifact>";
-            return string.concat(
-                'child("',
-                vm.toLowercase(name),
-                '", "',
-                childArtifact,
-                '", ',
-                role,
-                ", ",
-                artifact,
-                "(address(0)).",
-                name,
-                ".selector)"
-            );
-        }
-        return string.concat("child(name, artifact, ", role, ", <its getter>.selector)");
     }
 
     /// @dev Whether a child of `parent` (at `parentAddr`), or a child of one, is at `addr`.

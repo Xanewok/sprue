@@ -439,7 +439,7 @@ contract ChildrenTest is Test {
                 string.concat(
                     "parent's creation also created ",
                     vm.toString(kid),
-                    ": declare it in _roles(), such as child(\"child\", \"ChildPayload\", <the parent role>, ParentPayload(address(0)).CHILD.selector)"
+                    ": declare it in _roles() as child(name, artifact, <the parent role>, <its getter>.selector)"
                 )
             )
         );
@@ -569,7 +569,7 @@ contract ChildrenTest is Test {
                 string.concat(
                     "parent's creation also created ",
                     vm.toString(kid),
-                    ": declare it in _roles(), such as child(\"child\", \"ChildPayload\", <the parent role>, ParentPayload(address(0)).CHILD.selector)"
+                    ": declare it in _roles() as child(name, artifact, <the parent role>, <its getter>.selector)"
                 )
             )
         );

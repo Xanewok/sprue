@@ -43,7 +43,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
    not deploy, at the input's `<key>`. A contract that a role's constructor creates is
    `child(name, artifact, parent, Parent(address(0)).HOOK.selector)`, at the address that the parent's
-   getter returns; the compiler checks the getter, and the function that declares the role is `view`. The
+   getter returns; the compiler checks the getter, and the function that declares the role is `view`. A
+   parent that can receive ether needs `Parent(payable(address(0)))`. The
    address must be in the parent's code, as an immutable is. A constructor that returns another
    program's runtime in place of its own makes `runtime(name, artifact, parent)`, at the parent's address.
    Both are journaled with an address, code hash and metadata when the parent is, and by `check` where an
