@@ -37,7 +37,8 @@ end-to-end scenario for each invariant.
   runs code that starts with the runtime's program, and what follows it, such as a table's rows, is for
   the unit's `check` to prove. A unit that overrides `_requireBuild` proves the code itself.
 - A `child` is where its parent's getter points, and nothing checks that the parent's code fixes that
-  address: a getter that reads storage some call can change makes the child's proof refuse once it moves.
+  address: where a getter reads storage that some call can change, the journal follows it, and the next
+  `check` journals the new address after the same artifact check.
 
 ## What stays with the unit author
 

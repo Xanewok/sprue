@@ -3,8 +3,9 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {Role, child, create, runtime} from "../src/Roles.sol";
+import {Role, child, create, extern, runtime} from "../src/Roles.sol";
 import {Probes} from "../src/Probes.sol";
+import {NestPayload} from "./NestPayload.sol";
 import {ParentPayload} from "./ParentPayload.sol";
 import {ToyJournal} from "./ToyUnit.sol";
 
@@ -64,6 +65,20 @@ contract ChildrenToy is ToyJournal {
         _done(false);
     }
 
+    function atKidAsExtern(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(extern("kid", "kid", bytes32(0)));
+        _done(false);
+    }
+
+    function recover(string calldata network) external returns (string memory) {
+        return _recoverRoles(network);
+    }
+
+    function childWithArgs() external view {
+        kid().args(abi.encode(uint256(3)));
+    }
+
     function _creationBlock(bytes32 hash, address, bool create2) internal view override returns (uint256, bytes32) {
         if (hash != confirmed || create2) return (0, 0);
         return (5, 0);
@@ -76,6 +91,45 @@ contract ChildrenToy is ToyJournal {
 
     function _unit() internal pure override returns (string memory) {
         return "children";
+    }
+}
+
+/// @dev A child of a child: `nest` creates `mid`, which creates `leaf`.
+contract NestToy is ToyJournal {
+    function nest() internal pure returns (Role memory) {
+        return create("nest", "NestPayload");
+    }
+
+    function mid() internal pure returns (Role memory) {
+        return child("mid", "ParentPayload", nest(), "PARENT()");
+    }
+
+    bytes32 public confirmed;
+
+    function confirm(bytes32 hash) external {
+        confirmed = hash;
+    }
+
+    function deploy(string calldata network) external step(network) {
+        _deploy(nest());
+    }
+
+    function _creationBlock(bytes32 hash, address, bool create2) internal view override returns (uint256, bytes32) {
+        if (hash != confirmed || create2) return (0, 0);
+        return (5, 0);
+    }
+
+    function check(string calldata network) external step(network) {
+        _at(nest());
+        _endCheck();
+    }
+
+    function _roles() internal pure override returns (Role[] memory) {
+        return _list(nest(), mid(), child("leaf", "ChildPayload", mid(), "CHILD()"));
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "nest";
     }
 }
 
@@ -165,13 +219,32 @@ contract ChildrenTest is Test {
         assertFalse(Probes.due(address(unit), abi.encodeCall(ChildrenToy.check, (network)), ops));
     }
 
-    function test_check_refusesARecordedChildItsParentNoLongerNames() public {
-        _network("moved");
+    /// @dev As when the child landed with other code than the simulation that journaled it.
+    function test_check_journalsAgainAChildRecordThatNoLongerDescribesIt() public {
+        _network("stale");
         unit.deploy(network);
-        unit.check(network);
+        address kid = vm.parseJsonAddress(_journal(), ".kid");
         _set(".kid", vm.toString(makeAddr("elsewhere")));
-        vm.expectRevert(bytes("kid is no longer the contract the journal records: a person must resolve it"));
+        assertTrue(Probes.due(address(unit), abi.encodeCall(ChildrenToy.check, (network)), ops));
         unit.check(network);
+        assertEq(vm.parseJsonAddress(_journal(), ".kid"), kid);
+        assertFalse(Probes.due(address(unit), abi.encodeCall(ChildrenToy.check, (network)), ops));
+    }
+
+    function test_deploy_ofAnOlderParent_leavesItsNewChildToCheck() public {
+        _network("older-parent");
+        _deployWithoutKid();
+        string memory journal = _journal();
+        assertFalse(Probes.due(address(unit), abi.encodeCall(ChildrenToy.deploy, (network)), ops));
+        unit.deploy(network);
+        assertEq(_journal(), journal);
+    }
+
+    function test_at_refusesARoleOtherThanItsDeclaration() public {
+        _network("other-declaration");
+        unit.deploy(network);
+        vm.expectRevert(bytes("kid differs from its declaration in children's _roles()"));
+        unit.atKidAsExtern(network);
     }
 
     function test_at_refusesAChildWhoseCodeIsNotItsArtifact() public {
@@ -186,8 +259,10 @@ contract ChildrenTest is Test {
     function test_deploy_refusesARuntimeWhoseParentRunsAnotherProgram() public {
         _network("other-program");
         unit.setArtifacts("ChildPayload", "ChildPayload");
-        vm.expectRevert(bytes("tabler's code does not start with ChildPayload's program"));
+        address tabler = vm.computeCreateAddress(ops, vm.getNonce(ops) + 1);
+        vm.expectRevert(bytes(string.concat(vm.toString(tabler), "'s code does not start with ChildPayload's program")));
         unit.deploy(network);
+        assertFalse(vm.keyExistsJson(_journal(), ".tabler"));
     }
 
     function test_deploy_refusesAChild() public {
@@ -203,34 +278,52 @@ contract ChildrenTest is Test {
         ChildReader reader = new ChildReader();
         reader.setTestSender(ops);
         assertEq(reader.read(network), vm.parseJsonAddress(_journal(), ".kid"));
-        _set(".kid", vm.toString(makeAddr("elsewhere")));
-        vm.expectRevert(bytes("kid is no longer the contract the journal records: a person must resolve it"));
+        _set(".parentNonce", "99");
+        vm.expectRevert(bytes("parent's address is not its recorded deployer's CREATE at its recorded nonce"));
         reader.read(network);
     }
 
     // ==== Detection ====
 
-    /// @dev A broadcast record of the parent's creation, listing what its constructor also created.
-    function _recordParentCreation(address also) private returns (bytes32 hash) {
+    /// @dev A broadcast record of `parent`'s creation, listing what its constructor also created. Its
+    ///      `transactions[]` hashes are swapped, as older forge versions wrote them: only `receipts[]` pairs a
+    ///      hash with the created address.
+    function _recordCreation(address parent, address[] memory also) private returns (bytes32 hash) {
         hash = keccak256("the parent's creation");
-        unit.confirm(hash);
-        address parent = vm.parseJsonAddress(_journal(), ".parent");
+        string memory listed;
+        for (uint256 i; i < also.length; ++i) {
+            listed = string.concat(listed, i == 0 ? "" : ", ", '{"address": "', vm.toString(also[i]), '"}');
+        }
         string memory chainDir = string.concat(dir, "/broadcast/ToyUnit.sol/", vm.toString(block.chainid));
         vm.createDir(chainDir, true);
-        vm.writeFile(
-            string.concat(chainDir, "/deploy-latest.json"),
-            string.concat(
-                '{"chain": 31337, "transactions": [{"hash": "',
-                vm.toString(hash),
-                '", "additionalContracts": [{"transactionType": "CREATE", "address": "',
-                vm.toString(also),
-                '"}]}], "receipts": [{"contractAddress": "',
-                vm.toLowercase(vm.toString(parent)),
-                '", "transactionHash": "',
-                vm.toString(hash),
-                '", "blockNumber": "0x5"}], "commit": "def456"}'
-            )
+        string memory txs = string.concat(
+            '{"chain": 31337, "transactions": [{"hash": "',
+            vm.toString(keccak256("another creation")),
+            '", "contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "additionalContracts": [',
+            listed,
+            ']}, {"hash": "',
+            vm.toString(hash),
+            '", "contractAddress": "',
+            vm.toLowercase(vm.toString(makeAddr("another"))),
+            '", "additionalContracts": []}]'
         );
+        string memory receipts = string.concat(
+            ', "receipts": [{"contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "transactionHash": "',
+            vm.toString(hash),
+            '", "blockNumber": "0x5"}], "commit": "def456"}'
+        );
+        vm.writeFile(string.concat(chainDir, "/deploy-latest.json"), string.concat(txs, receipts));
+    }
+
+    function _recordParentCreation(address also) private returns (bytes32 hash) {
+        address[] memory list = new address[](1);
+        list[0] = also;
+        hash = _recordCreation(vm.parseJsonAddress(_journal(), ".parent"), list);
+        unit.confirm(hash);
     }
 
     function test_receipt_ofACreationThatMadeAnUndeclaredContract_isRefused() public {
@@ -262,5 +355,128 @@ contract ChildrenTest is Test {
         assertEq(vm.parseJsonBytes32(journal, ".parentTx"), hash);
         assertEq(vm.parseJsonAddress(journal, ".kid"), kid);
         assertEq(vm.parseJsonString(journal, ".parentCommit"), "def456");
+    }
+
+    function test_receipt_ofACreationWhoseChildMadeAChild_coversBoth() public {
+        _network("nest-receipt");
+        NestToy nest = new NestToy();
+        nest.setTestSender(ops);
+        nest.deploy(network);
+        string memory journal = vm.readFile(string.concat(dir, "/nest.json"));
+        address[] memory also = new address[](2);
+        (also[0], also[1]) = (vm.parseJsonAddress(journal, ".mid"), vm.parseJsonAddress(journal, ".leaf"));
+        nest.confirm(_recordCreation(vm.parseJsonAddress(journal, ".nest"), also));
+        nest.check(network);
+        assertTrue(vm.keyExistsJson(vm.readFile(string.concat(dir, "/nest.json")), ".nestTx"));
+    }
+
+    function test_deploy_journalsAChildOfAChild() public {
+        _network("nest");
+        NestToy nest = new NestToy();
+        nest.setTestSender(ops);
+        nest.deploy(network);
+        string memory journal = vm.readFile(string.concat(dir, "/nest.json"));
+        address mid = address(NestPayload(vm.parseJsonAddress(journal, ".nest")).PARENT());
+        assertEq(vm.parseJsonAddress(journal, ".mid"), mid);
+        assertEq(vm.parseJsonAddress(journal, ".leaf"), address(ParentPayload(mid).CHILD()));
+    }
+
+    // ==== Recovery ====
+
+    /// @dev Deletes the journal and writes forge's record of both parents' creations.
+    function _loseTheJournal() private {
+        _loseTheJournal("");
+    }
+
+    /// @dev `alsoCreated`: an `additionalContracts` entry for the parent's creation.
+    function _loseTheJournal(string memory alsoCreated) private {
+        string memory lost = _journal();
+        vm.removeFile(string.concat(dir, "/children.json"));
+        string memory records = string.concat(dir, "/broadcast/ChildrenToy.s.sol/records");
+        vm.createDir(records, true);
+        vm.writeFile(
+            string.concat(records, "/0-latest.json"),
+            string.concat(
+                '{"chain": 31337, "transactions": [',
+                _create(
+                    "ParentPayload",
+                    vm.parseJsonAddress(lost, ".parent"),
+                    vm.parseJsonUint(lost, ".parentNonce"),
+                    alsoCreated
+                ),
+                ", ",
+                _create(
+                    "ReturnsTable", vm.parseJsonAddress(lost, ".tabler"), vm.parseJsonUint(lost, ".tablerNonce"), ""
+                ),
+                "]}"
+            )
+        );
+    }
+
+    function _create(string memory name, address addr, uint256 nonce, string memory alsoCreated)
+        private
+        view
+        returns (string memory)
+    {
+        return string.concat(
+            '{"transactionType": "CREATE", "contractName": "',
+            name,
+            '", "contractAddress": "',
+            vm.toLowercase(vm.toString(addr)),
+            '", "additionalContracts": [',
+            alsoCreated,
+            '], "transaction": {"from": "',
+            vm.toLowercase(vm.toString(ops)),
+            '", "nonce": "',
+            vm.toString(bytes32(nonce)),
+            '", "input": "',
+            vm.toString(vm.getCode(string.concat(name, ".sol:", name))),
+            '"}}'
+        );
+    }
+
+    function test_recover_journalsTheChildrenOfTheRolesItFinds() public {
+        _network("recover");
+        unit.deploy(network);
+        address kid = vm.parseJsonAddress(_journal(), ".kid");
+        _loseTheJournal();
+        unit.recover(network);
+        assertEq(vm.parseJsonAddress(_journal(), ".kid"), kid);
+        assertEq(vm.parseJsonAddress(_journal(), ".table"), vm.parseJsonAddress(_journal(), ".tabler"));
+    }
+
+    function test_recover_refusingAChild_journalsNothing() public {
+        _network("recover-refused");
+        unit.deploy(network);
+        address kid = vm.parseJsonAddress(_journal(), ".kid");
+        _loseTheJournal();
+        unit.setArtifacts("TablePayload", "TablePayload");
+        vm.expectRevert(bytes(string.concat(vm.toString(kid), " is not TablePayload.sol:TablePayload")));
+        unit.recover(network);
+        assertFalse(vm.exists(string.concat(dir, "/children.json")));
+    }
+
+    function test_recover_ofACreationThatMadeAnUndeclaredContract_journalsNothing() public {
+        _network("recover-undeclared");
+        unit.setUndeclared(true);
+        unit.deploy(network);
+        address kid = address(ParentPayload(vm.parseJsonAddress(_journal(), ".parent")).CHILD());
+        _loseTheJournal(string.concat('{"address": "', vm.toString(kid), '"}'));
+        vm.expectRevert(
+            bytes(
+                string.concat(
+                    "parent's creation also created ",
+                    vm.toString(kid),
+                    ": declare it in _roles() as child(name, artifact, parent, getter)"
+                )
+            )
+        );
+        unit.recover(network);
+        assertFalse(vm.exists(string.concat(dir, "/children.json")));
+    }
+
+    function test_args_ofAChild_isRefused() public {
+        vm.expectRevert(bytes("kid's constructor arguments are its parent's: drop .args"));
+        unit.childWithArgs();
     }
 }

@@ -224,7 +224,7 @@ abstract contract ForgeBroadcasts is Journal {
             console.log("neither a local receipt under broadcast/ nor the chain shows the creation of", role);
             return;
         }
-        if (bytes(record).length != 0) _requireCreatedDeclared(role, deployed, _alsoCreated(record, hash));
+        if (bytes(record).length != 0) _requireCreatedDeclared(role, deployed, _alsoCreated(record, deployed));
         _put(string.concat(".", role, "Tx"), vm.toString(hash));
         _put(string.concat(".", role, "Block"), vm.toString(landed));
         if (bytes(record).length != 0) _settleCommit(journal, role, record);
@@ -394,11 +394,16 @@ abstract contract ForgeBroadcasts is Journal {
         }
     }
 
-    /// @dev The contracts that transaction `hash` of `record` created besides its target, as forge lists them.
-    function _alsoCreated(string memory record, bytes32 hash) private pure returns (address[] memory created) {
+    /// @dev The contracts that `record`'s creation of `deployed` made besides it, as forge lists them. Keyed by
+    ///      the created address, not the hash: older forge versions wrote `transactions[]` hashes out of order.
+    function _alsoCreated(string memory record, address deployed) internal pure returns (address[] memory created) {
         bytes memory found = vm.parseJson(
             record,
-            string.concat("$..transactions[?(@.hash == '", vm.toString(hash), "')].additionalContracts[*].address")
+            string.concat(
+                "$..transactions[?(@.contractAddress == '",
+                vm.toLowercase(vm.toString(deployed)),
+                "')].additionalContracts[*].address"
+            )
         );
         if (found.length != 32) return found.length == 0 ? created : abi.decode(found, (address[]));
         created = new address[](1);
