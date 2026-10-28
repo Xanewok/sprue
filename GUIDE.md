@@ -42,8 +42,9 @@ then differ from the commit, the build is not the commit's, and an attended `run
    deployer, `create2(name, artifact, key)` for a CREATE2 at the address that `<unit>.input.json` gives
    under `<key>.address`, with `<key>.salt`, and `extern(name, key, codeHash)` for a contract the unit did
    not deploy, at the input's `<key>`. A contract that a role's constructor creates is
-   `child(name, artifact, parent, getter)`, at the address the parent's `getter` (such as `"HOOK()"`)
-   returns; the parent's code must fix it, as an immutable does. A constructor that returns another
+   `child(name, artifact, parent, Parent(address(0)).HOOK.selector)`, at the address that the parent's
+   getter returns; the compiler checks the getter, and the function that declares the role is `view`. The
+   address must be in the parent's code, as an immutable is. A constructor that returns another
    program's runtime in place of its own makes `runtime(name, artifact, parent)`, at the parent's address.
    Both are journaled with an address, code hash and metadata when the parent is, and by `check` where an
    older journal lacks them; a child takes no `.args`. A step refuses to journal a creation's receipt

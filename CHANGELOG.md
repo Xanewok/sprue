@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-Roles a constructor creates: `child(name, artifact, parent, getter)` is a contract at the address the
-parent's getter returns, and `runtime(name, artifact, parent)` the program a parent's constructor returned
-in place of its own, at the parent's address. Each is journaled with `<name>`, `<name>CodeHash` and
+Roles a constructor creates: `child(name, artifact, parent, getter)` is a contract at the address that the
+parent's getter returns, given by its selector and held in the parent's code as an immutable is, and
+`runtime(name, artifact, parent)` the program a parent's constructor returned in place of its own, at the
+parent's address. A refusal of an undeclared contract prints the `child` declaration to add. Each is journaled with `<name>`, `<name>CodeHash` and
 `<name>Metadata` when `_deploy` first journals its parent or `recover` finds it, and by `check` where the
 journal lacks it or no longer describes it; it has no commit or `.args` of its own. `_at` reads them, and
 another unit's `_at` reads a child of a CREATE or CREATE2 role. `_deploy` requires every role of an

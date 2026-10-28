@@ -22,10 +22,11 @@ struct Role {
     string artifact;
     Kind kind;
     /// @dev `create2`: the input key that holds `salt` and `address`. `extern`: the input key of the address.
-    ///      `child`: the parent's getter; empty for a `runtime`.
     string key;
     /// @dev `child` and `runtime` only: the role whose creation made this one.
     string parent;
+    /// @dev `child` only: the selector of the parent's getter; zero for a `runtime`.
+    bytes4 getter;
     /// @dev `extern` only.
     bytes32 codeHash;
     bool computed;
@@ -64,16 +65,16 @@ function extern(string memory name, string memory key, bytes32 codeHash) pure re
     r.ensureFn = _ensureNothing;
 }
 
-/// @dev A contract that `parent`'s constructor creates, at the address `parent`'s `getter` (such as `"HOOK()"`)
-///      returns. The parent's code should fix that address: an immutable, or storage only its constructor
-///      writes. It takes no `.args`, and its `.ensure` gets empty arguments: the parent passed them.
-function child(string memory name, string memory artifact, Role memory parent, string memory getter)
+/// @dev A contract that `parent`'s constructor creates, at the address that the parent's getter returns, such
+///      as `Launcher.HOOK.selector`, which the compiler checks. The parent's code must hold that address, as an
+///      immutable does. It takes no `.args`, and its `.ensure` gets empty arguments: the parent passed them.
+function child(string memory name, string memory artifact, Role memory parent, bytes4 getter)
     pure
     returns (Role memory r)
 {
     r = create(name, artifact);
     r.kind = Kind.Child;
-    r.key = getter;
+    r.getter = getter;
     r.parent = parent.name;
 }
 
@@ -81,7 +82,7 @@ function child(string memory name, string memory artifact, Role memory parent, s
 ///      after it, at `parent`'s address. `parent` keeps the build that created it, and this role names the
 ///      program the address runs.
 function runtime(string memory name, string memory artifact, Role memory parent) pure returns (Role memory r) {
-    r = child(name, artifact, parent, "");
+    r = child(name, artifact, parent, bytes4(0));
 }
 
 /// @dev Each builder edits the memory struct it is given and returns that same struct.
@@ -263,8 +264,9 @@ abstract contract Roles is Deployment {
                 parent.kind == Kind.Create2 || _has(journal, string.concat(".", r.parent, "Deployer")),
                 string.concat("another unit reads only a child of a CREATE or CREATE2 role, and ", r.parent, " is not")
             );
-            addr = _childOf(r, _atOther(parent));
-            if (!_describes(journal, r, addr)) _requireChildCode(r, addr);
+            address at = _atOther(parent);
+            addr = _childOf(r, at);
+            if (!_describes(journal, r, addr)) _requireChildCode(r, at, addr);
             return addr;
         }
         addr = _addr(journal, key);
@@ -294,7 +296,7 @@ abstract contract Roles is Deployment {
 
     /// @dev What fixes how a role is proven; its arguments and `.ensure` are the unit's code, and are not compared.
     function _declarationOf(Role memory r) private pure returns (bytes32) {
-        return keccak256(abi.encode(r.kind, r.artifact, r.key, r.parent, r.codeHash));
+        return keccak256(abi.encode(r.kind, r.artifact, r.key, r.parent, r.getter, r.codeHash));
     }
 
     function _undeclared(Role memory r) private pure returns (string memory) {
@@ -311,9 +313,12 @@ abstract contract Roles is Deployment {
 
     /// @dev `r`'s address given its parent's.
     function _childOf(Role memory r, address parent) private view returns (address) {
-        if (bytes(r.key).length == 0) return parent;
-        (bool ok, bytes memory ret) = parent.staticcall(abi.encodeWithSignature(r.key));
-        require(ok && ret.length == 32, string.concat(r.parent, ".", r.key, " returns no address"));
+        if (r.getter == 0) return parent;
+        (bool ok, bytes memory ret) = parent.staticcall(abi.encodeWithSelector(r.getter));
+        require(
+            ok && ret.length == 32,
+            string.concat(r.parent, "'s getter ", vm.toString(abi.encodePacked(r.getter)), " returns no address")
+        );
         return abi.decode(ret, (address));
     }
 
@@ -326,13 +331,29 @@ abstract contract Roles is Deployment {
             && addr.codehash == vm.parseJsonBytes32(journal, string.concat(key, "CodeHash"));
     }
 
-    function _requireChildCode(Role memory r, address addr) private view {
+    function _requireChildCode(Role memory r, address parent, address addr) private view {
         _requireCode(addr, r.name);
         // An artifact is large, and a step that proves a parent has read the parent's already.
         uint256 mark = _freeMemory();
-        if (bytes(r.key).length != 0) _requireBuild(addr, r.artifact);
-        else _requireProgram(addr, r.artifact);
+        if (r.getter != 0) {
+            // In the parent's code, the address is fixed by the parent's proven code hash. A getter that reads
+            // storage could name another contract tomorrow, which no record of a creation may follow.
+            require(
+                vm.indexOf(vm.toString(parent.code), _word(addr)) != type(uint256).max,
+                string.concat(
+                    r.parent, "'s getter for ", r.name, " does not return an immutable: read it with _at as an extern"
+                )
+            );
+            _requireBuild(addr, r.artifact);
+        } else {
+            _requireProgram(addr, r.artifact);
+        }
         _releaseMemory(mark);
+    }
+
+    /// @dev `addr` as the 64 hex digits of the word an immutable holds.
+    function _word(address addr) private pure returns (string memory) {
+        return string.concat("000000000000000000000000", vm.split(vm.toLowercase(vm.toString(addr)), "0x")[1]);
     }
 
     function _requireProgram(address addr, string memory artifact) private view {
@@ -356,7 +377,7 @@ abstract contract Roles is Deployment {
         Role[] memory declared = _roles();
         for (uint256 i; i < declared.length; ++i) {
             Role memory r = declared[i];
-            if (r.kind != Kind.Child || bytes(r.key).length != 0 || !_own(r)) continue;
+            if (r.kind != Kind.Child || r.getter != 0 || !_own(r)) continue;
             if (keccak256(bytes(_declared(r.parent).artifact)) == keccak256(bytes(artifact))) {
                 return _requireProgram(addr, r.artifact);
             }
@@ -380,12 +401,53 @@ abstract contract Roles is Deployment {
                     role,
                     "'s creation also created ",
                     vm.toString(created[i]),
-                    ": declare it in _roles() as child(name, artifact, ",
-                    role,
-                    ", getter)"
+                    ": declare it in _roles(), such as ",
+                    _declarationFor(role, deployed, created[i])
                 )
             );
         }
+    }
+
+    /// @dev A `child` declaration of `created` by the first getter of `parent` that returns it, typed from the
+    ///      getter's return type, or the shape of one if no getter does.
+    function _declarationFor(string memory parent, address parentAddr, address created)
+        private
+        view
+        returns (string memory)
+    {
+        string memory artifact = _declared(parent).artifact;
+        string memory json = vm.readFile(string.concat("out/", artifact, ".sol/", artifact, ".json"));
+        string memory role = string.concat("<the ", parent, " role>");
+        for (uint256 i; _has(json, string.concat(".abi[", vm.toString(i), "]")); ++i) {
+            string memory f = string.concat(".abi[", vm.toString(i), "]");
+            if (
+                keccak256(bytes(vm.parseJsonString(json, string.concat(f, ".type")))) != keccak256("function")
+                    || _has(json, string.concat(f, ".inputs[0]")) || !_has(json, string.concat(f, ".outputs[0]"))
+                    || _has(json, string.concat(f, ".outputs[1]"))
+                    || keccak256(bytes(vm.parseJsonString(json, string.concat(f, ".outputs[0].type"))))
+                        != keccak256("address")
+            ) continue;
+            string memory name = vm.parseJsonString(json, string.concat(f, ".name"));
+            (bool ok, bytes memory ret) = parentAddr.staticcall(abi.encodeWithSignature(string.concat(name, "()")));
+            if (!ok || ret.length != 32 || abi.decode(ret, (address)) != created) continue;
+            string[] memory typed =
+                vm.split(vm.parseJsonString(json, string.concat(f, ".outputs[0].internalType")), " ");
+            string memory childArtifact = typed.length == 2 ? typed[1] : "<its artifact>";
+            return string.concat(
+                'child("',
+                vm.toLowercase(name),
+                '", "',
+                childArtifact,
+                '", ',
+                role,
+                ", ",
+                artifact,
+                "(address(0)).",
+                name,
+                ".selector)"
+            );
+        }
+        return string.concat("child(name, artifact, ", role, ", <its getter>.selector)");
     }
 
     /// @dev Whether a child of `parent` (at `parentAddr`), or a child of one, is at `addr`.
@@ -405,8 +467,9 @@ abstract contract Roles is Deployment {
     }
 
     function _proveChild(Role memory r, string memory journal) private returns (address addr) {
-        addr = _childOf(r, _at(_declared(r.parent)));
-        if (!_describes(journal, r, addr)) _requireChildCode(r, addr);
+        address parent = _at(_declared(r.parent));
+        addr = _childOf(r, parent);
+        if (!_describes(journal, r, addr)) _requireChildCode(r, parent, addr);
         _enterCheck(r);
         r.ensureFn(addr, "");
         _checking[keccak256(bytes(r.name))] = false;
@@ -549,8 +612,9 @@ abstract contract Roles is Deployment {
         for (uint256 i; i < rs.length; ++i) {
             Role memory r = rs[i];
             if (r.kind != Kind.Child || !_own(r) || !_foundBy(r)) continue;
-            children[i] = _foundAddress(r);
-            _requireChildCode(r, children[i]);
+            address parent = _foundAddress(_declared(r.parent));
+            children[i] = _childOf(r, parent);
+            _requireChildCode(r, parent, children[i]);
         }
         _journalRecovered(journal, names, found);
         journal = _journal();

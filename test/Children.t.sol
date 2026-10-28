@@ -7,6 +7,7 @@ import {Role, child, create, create2, extern, runtime} from "../src/Roles.sol";
 import {Probes} from "../src/Probes.sol";
 import {NestPayload} from "./NestPayload.sol";
 import {ParentPayload} from "./ParentPayload.sol";
+import {StoragePayload} from "./StoragePayload.sol";
 import {ToyJournal} from "./ToyUnit.sol";
 
 function PARENT() pure returns (Role memory) {
@@ -37,7 +38,7 @@ contract ChildrenToy is ToyJournal {
     }
 
     function kid() internal view returns (Role memory) {
-        return child("kid", kidArtifact, PARENT(), "CHILD()");
+        return child("kid", kidArtifact, PARENT(), ParentPayload(address(0)).CHILD.selector);
     }
 
     function table() internal view returns (Role memory) {
@@ -106,8 +107,8 @@ contract NestToy is ToyJournal {
         return create("nest", "NestPayload");
     }
 
-    function mid() internal pure returns (Role memory) {
-        return child("mid", "ParentPayload", nest(), "PARENT()");
+    function mid() internal view returns (Role memory) {
+        return child("mid", "ParentPayload", nest(), NestPayload(address(0)).PARENT.selector);
     }
 
     bytes32 public confirmed;
@@ -130,8 +131,8 @@ contract NestToy is ToyJournal {
         _endCheck();
     }
 
-    function _roles() internal pure override returns (Role[] memory) {
-        return _list(nest(), mid(), child("leaf", "ChildPayload", mid(), "CHILD()"));
+    function _roles() internal view override returns (Role[] memory) {
+        return _list(nest(), mid(), child("leaf", "ChildPayload", mid(), ParentPayload(address(0)).CHILD.selector));
     }
 
     function _unit() internal pure override returns (string memory) {
@@ -139,12 +140,32 @@ contract NestToy is ToyJournal {
     }
 }
 
+/// @dev A child that its parent keeps in storage, not in an immutable.
+contract StorageToy is ToyJournal {
+    function store() internal pure returns (Role memory) {
+        return create("store", "StoragePayload");
+    }
+
+    function deploy(string calldata network) external step(network) {
+        _deploy(store());
+    }
+
+    function _roles() internal view override returns (Role[] memory) {
+        return _list(store(), child("kept", "ChildPayload", store(), StoragePayload(address(0)).child.selector));
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "store";
+    }
+}
+
 /// @dev Another unit, which reads `leaf` from the nest unit's journal.
 contract LeafReader is ToyJournal {
     function read(string calldata network) external returns (address a) {
         _use(network);
-        Role memory mid = child("mid", "ParentPayload", create("nest", "NestPayload"), "PARENT()");
-        a = _at(child("leaf", "ChildPayload", mid, "CHILD()").unit("nest"));
+        Role memory mid =
+            child("mid", "ParentPayload", create("nest", "NestPayload"), NestPayload(address(0)).PARENT.selector);
+        a = _at(child("leaf", "ChildPayload", mid, ParentPayload(address(0)).CHILD.selector).unit("nest"));
         _done(false);
     }
 
@@ -157,7 +178,7 @@ contract LeafReader is ToyJournal {
 contract ChildReader is ToyJournal {
     function read(string calldata network) external returns (address a) {
         _use(network);
-        a = _at(child("kid", "ChildPayload", PARENT(), "CHILD()").unit("children"));
+        a = _at(child("kid", "ChildPayload", PARENT(), ParentPayload(address(0)).CHILD.selector).unit("children"));
         _done(false);
     }
 
@@ -418,7 +439,7 @@ contract ChildrenTest is Test {
                 string.concat(
                     "parent's creation also created ",
                     vm.toString(kid),
-                    ": declare it in _roles() as child(name, artifact, parent, getter)"
+                    ": declare it in _roles(), such as child(\"child\", \"ChildPayload\", <the parent role>, ParentPayload(address(0)).CHILD.selector)"
                 )
             )
         );
@@ -548,7 +569,7 @@ contract ChildrenTest is Test {
                 string.concat(
                     "parent's creation also created ",
                     vm.toString(kid),
-                    ": declare it in _roles() as child(name, artifact, parent, getter)"
+                    ": declare it in _roles(), such as child(\"child\", \"ChildPayload\", <the parent role>, ParentPayload(address(0)).CHILD.selector)"
                 )
             )
         );
@@ -570,5 +591,13 @@ contract ChildrenTest is Test {
         unit.confirm(hash);
         unit.check(network);
         assertEq(vm.parseJsonBytes32(_journal(), ".parentTx"), hash);
+    }
+
+    function test_deploy_refusesAChildThatItsParentKeepsInStorage() public {
+        _network("storage");
+        StorageToy store = new StorageToy();
+        store.setTestSender(ops);
+        vm.expectRevert(bytes("store's getter for kept does not return an immutable: read it with _at as an extern"));
+        store.deploy(network);
     }
 }
