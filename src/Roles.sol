@@ -371,7 +371,10 @@ abstract contract Roles is Deployment {
     {
         Role[] memory declared = _roles();
         for (uint256 i; i < created.length; ++i) {
-            if (created[i] == deployed || _covers(declared, role, deployed, created[i])) continue;
+            // An address with no code holds nothing to journal: a helper that self-destructed, or a simulated
+            // address that the landed transaction did not use.
+            if (created[i] == deployed || created[i].code.length == 0) continue;
+            if (_covers(declared, role, deployed, created[i])) continue;
             revert(
                 string.concat(
                     role,
@@ -440,6 +443,12 @@ abstract contract Roles is Deployment {
     function _recordChild(Role memory r, address addr) private {
         _recordCode(r.name, addr, r.artifact);
         _put(string.concat(".", r.name), vm.toString(addr));
+    }
+
+    /// @dev `r`'s address, from the address this recovery found for the role it descends from.
+    function _foundAddress(Role memory r) private view returns (address) {
+        if (r.kind != Kind.Child) return _proved[_provedIndex(r.name)].addr;
+        return _childOf(r, _foundAddress(_declared(r.parent)));
     }
 
     /// @dev Whether this recovery found the role that `r` descends from. The children of a role journaled before
@@ -534,11 +543,14 @@ abstract contract Roles is Deployment {
             _requireCurrent(found[i], r.artifact, a);
             _requireCreatedDeclared(r.name, found[i].addr, _alsoCreated(found[i].record, found[i].addr));
         }
-        // Children are proven before anything is journaled, so that a refusal leaves no key behind.
+        // Children's code is checked before anything is journaled, so that a refusal leaves no key behind. As for
+        // the roles found, no `.ensure` runs: one may read a role whose proof writes.
         address[] memory children = new address[](rs.length);
         for (uint256 i; i < rs.length; ++i) {
             Role memory r = rs[i];
-            if (r.kind == Kind.Child && _own(r) && _foundBy(r)) children[i] = _at(r);
+            if (r.kind != Kind.Child || !_own(r) || !_foundBy(r)) continue;
+            children[i] = _foundAddress(r);
+            _requireChildCode(r, children[i]);
         }
         _journalRecovered(journal, names, found);
         journal = _journal();

@@ -380,12 +380,12 @@ contract ChildrenTest is Test {
         }
         string memory chainDir = string.concat(dir, "/broadcast/ToyUnit.sol/", vm.toString(block.chainid));
         vm.createDir(chainDir, true);
-        // A later call to the parent that creates a contract is no constructor's child.
+        // A later call to the parent that creates a contract, here one with code, is no constructor's child.
         string memory call = string.concat(
             '{"transactionType": "CALL", "contractAddress": "',
             vm.toLowercase(vm.toString(parent)),
             '", "additionalContracts": [{"address": "',
-            vm.toString(makeAddr("made by a call")),
+            vm.toString(address(this)),
             '"}]}'
         );
         string memory txs = string.concat(
@@ -572,5 +572,16 @@ contract ChildrenTest is Test {
     function test_args_ofAChild_isRefused() public {
         vm.expectRevert(bytes("kid's constructor arguments are its parent's: drop .args"));
         unit.childWithArgs();
+    }
+
+    function test_receipt_ignoresACreatedAddressWithNoCode() public {
+        _network("no-code");
+        unit.deploy(network);
+        address[] memory also = new address[](2);
+        (also[0], also[1]) = (vm.parseJsonAddress(_journal(), ".kid"), makeAddr("a simulated address"));
+        bytes32 hash = _recordCreation(vm.parseJsonAddress(_journal(), ".parent"), also);
+        unit.confirm(hash);
+        unit.check(network);
+        assertEq(vm.parseJsonBytes32(_journal(), ".parentTx"), hash);
     }
 }

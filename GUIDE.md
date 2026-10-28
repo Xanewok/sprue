@@ -47,8 +47,8 @@ then differ from the commit, the build is not the commit's, and an attended `run
    program's runtime in place of its own makes `runtime(name, artifact, parent)`, at the parent's address.
    Both are journaled with an address, code hash and metadata when the parent is, and by `check` where an
    older journal lacks them; a child takes no `.args`. A step refuses to journal a creation's receipt
-   while its broadcast record lists a contract that no `child` names. `artifact` is a contract's name, in
-   a source file of the same name.
+   while its broadcast record lists a contract with code that no `child` names. `artifact` is a contract's
+   name, in a source file of the same name.
    `.args(...)` gives the constructor arguments, as bytes or as a function that builds them from the
    inputs and other roles. `.ensure(fn)` runs `fn(address, args)` on every proof, and reverts on what later
    transactions can change, such as an admin or a proxy's implementation. `.unit("<unit>")` is the role as

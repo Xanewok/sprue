@@ -7,11 +7,12 @@ parent's getter returns, and `runtime(name, artifact, parent)` the program a par
 in place of its own, at the parent's address. Each is journaled with `<name>`, `<name>CodeHash` and
 `<name>Metadata` when `_deploy` first journals its parent or `recover` finds it, and by `check` where the
 journal lacks it or no longer describes it; it has no commit or `.args` of its own. `_at` reads them, and
-another unit's `_at` reads a child of a CREATE or CREATE2 role. Every role of an artifact that a `runtime`'s parent has must run the runtime's program, and no
-longer needs a `_requireBuild` override. Breaking:
+another unit's `_at` reads a child of a CREATE or CREATE2 role. `_deploy` requires every role of an
+artifact that a `runtime`'s parent has to run the runtime's program, and such a unit no longer needs a
+`_requireBuild` override. Breaking:
 
 - a step refuses to journal a receipt while forge's broadcast record of that creation lists a contract that
-  no declared `child` is at, so a unit whose constructors create contracts declares them;
+  has code and that no declared `child` is at, so a unit whose constructors create contracts declares them;
 - `_at` and `_deploy` refuse a role whose kind, artifact, key, parent or pinned code hash differs from the
   role of that name in `_roles()`.
 
