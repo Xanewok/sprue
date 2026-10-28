@@ -3,7 +3,7 @@ pragma solidity ^0.8.27;
 
 import {Test} from "forge-std/Test.sol";
 
-import {Role, child, create, extern, runtime} from "../src/Roles.sol";
+import {Role, child, create, create2, extern, runtime} from "../src/Roles.sol";
 import {Probes} from "../src/Probes.sol";
 import {NestPayload} from "./NestPayload.sol";
 import {ParentPayload} from "./ParentPayload.sol";
@@ -62,6 +62,18 @@ contract ChildrenToy is ToyJournal {
     function atKid(string calldata network) external returns (address a) {
         _use(network);
         a = _at(kid());
+        _done(false);
+    }
+
+    function atKidThenAsExtern(string calldata network) external step(network) {
+        _at(PARENT());
+        _at(kid());
+        _at(extern("kid", "kid", bytes32(0)));
+    }
+
+    function atParentAsCreate2(string calldata network) external returns (address a) {
+        _use(network);
+        a = _at(create2("parent", "ParentPayload", ""));
         _done(false);
     }
 
@@ -130,6 +142,20 @@ contract NestToy is ToyJournal {
 
     function _unit() internal pure override returns (string memory) {
         return "nest";
+    }
+}
+
+/// @dev Another unit, which reads `leaf` from the nest unit's journal.
+contract LeafReader is ToyJournal {
+    function read(string calldata network) external returns (address a) {
+        _use(network);
+        Role memory mid = child("mid", "ParentPayload", create("nest", "NestPayload"), "PARENT()");
+        a = _at(child("leaf", "ChildPayload", mid, "CHILD()").unit("nest"));
+        _done(false);
+    }
+
+    function _unit() internal pure override returns (string memory) {
+        return "leaf-reader";
     }
 }
 
@@ -240,6 +266,64 @@ contract ChildrenTest is Test {
         assertEq(_journal(), journal);
     }
 
+    function test_at_refusesARoleOtherThanItsDeclaration_evenOnceTheNameIsProven() public {
+        _network("other-declaration-cached");
+        unit.deploy(network);
+        vm.expectRevert(bytes("kid differs from its declaration in children's _roles()"));
+        unit.atKidThenAsExtern(network);
+    }
+
+    function test_at_ofAnotherUnitsChildOfAChild_isRefusedByName() public {
+        _network("leaf-reader");
+        NestToy nest = new NestToy();
+        nest.setTestSender(ops);
+        nest.deploy(network);
+        LeafReader reader = new LeafReader();
+        reader.setTestSender(ops);
+        vm.expectRevert(bytes("another unit reads only a child of a CREATE or CREATE2 role, and mid is not"));
+        reader.read(network);
+    }
+
+    function test_at_refusesARoleOfAnotherKind() public {
+        _network("other-kind");
+        unit.deploy(network);
+        vm.expectRevert(bytes("parent differs from its declaration in children's _roles()"));
+        unit.atParentAsCreate2(network);
+    }
+
+    function test_receipt_inAMultiChainRecord_readsOnlyTheSelectedChainsCreation() public {
+        _network("multi");
+        unit.deploy(network);
+        address parent = vm.parseJsonAddress(_journal(), ".parent");
+        address kid = vm.parseJsonAddress(_journal(), ".kid");
+        bytes32 hash = keccak256("the parent's creation");
+        unit.confirm(hash);
+        string memory run = string.concat(dir, "/broadcast/multi/ToyUnit.sol-1");
+        vm.createDir(run, true);
+        string memory here = string.concat(
+            '{"chain": 31337, "transactions": [{"transactionType": "CREATE", "contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "additionalContracts": [{"address": "',
+            vm.toString(kid),
+            '"}]}], "receipts": [{"contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "transactionHash": "',
+            vm.toString(hash),
+            '", "blockNumber": "0x5"}]}'
+        );
+        // The same deployer and nonce made the parent on another chain, whose child is elsewhere.
+        string memory there = string.concat(
+            '{"chain": 999, "transactions": [{"transactionType": "CREATE", "contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "additionalContracts": [{"address": "',
+            vm.toString(makeAddr("the other chain's child")),
+            '"}]}], "receipts": []}'
+        );
+        vm.writeFile(string.concat(run, "/deploy.json"), string.concat('{"deployments": [', there, ", ", here, "]}"));
+        unit.check(network);
+        assertEq(vm.parseJsonBytes32(_journal(), ".parentTx"), hash);
+    }
+
     function test_at_refusesARoleOtherThanItsDeclaration() public {
         _network("other-declaration");
         unit.deploy(network);
@@ -296,18 +380,28 @@ contract ChildrenTest is Test {
         }
         string memory chainDir = string.concat(dir, "/broadcast/ToyUnit.sol/", vm.toString(block.chainid));
         vm.createDir(chainDir, true);
+        // A later call to the parent that creates a contract is no constructor's child.
+        string memory call = string.concat(
+            '{"transactionType": "CALL", "contractAddress": "',
+            vm.toLowercase(vm.toString(parent)),
+            '", "additionalContracts": [{"address": "',
+            vm.toString(makeAddr("made by a call")),
+            '"}]}'
+        );
         string memory txs = string.concat(
-            '{"chain": 31337, "transactions": [{"hash": "',
+            '{"chain": 31337, "transactions": [{"transactionType": "CREATE", "hash": "',
             vm.toString(keccak256("another creation")),
             '", "contractAddress": "',
             vm.toLowercase(vm.toString(parent)),
             '", "additionalContracts": [',
             listed,
-            ']}, {"hash": "',
+            ']}, {"transactionType": "CREATE", "hash": "',
             vm.toString(hash),
             '", "contractAddress": "',
             vm.toLowercase(vm.toString(makeAddr("another"))),
-            '", "additionalContracts": []}]'
+            '", "additionalContracts": []}, ',
+            call,
+            "]"
         );
         string memory receipts = string.concat(
             ', "receipts": [{"contractAddress": "',

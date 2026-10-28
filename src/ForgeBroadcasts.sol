@@ -394,15 +394,20 @@ abstract contract ForgeBroadcasts is Journal {
         }
     }
 
-    /// @dev The contracts that `record`'s creation of `deployed` made besides it, as forge lists them. Keyed by
-    ///      the created address, not the hash: older forge versions wrote `transactions[]` hashes out of order.
-    function _alsoCreated(string memory record, address deployed) internal pure returns (address[] memory created) {
+    /// @dev The contracts that `record`'s creation of `deployed` on the selected chain made besides it, as forge
+    ///      lists them. Keyed by the created address, not the hash: older forge versions wrote `transactions[]`
+    ///      hashes out of order. A CALL names its target in `contractAddress` too, so only a creation counts.
+    function _alsoCreated(string memory record, address deployed) internal view returns (address[] memory created) {
+        string memory run = _has(record, ".deployments")
+            ? string.concat("$.deployments[?(@.chain == ", vm.toString(block.chainid), ")]")
+            : "$";
         bytes memory found = vm.parseJson(
             record,
             string.concat(
-                "$..transactions[?(@.contractAddress == '",
+                run,
+                ".transactions[?(@.contractAddress == '",
                 vm.toLowercase(vm.toString(deployed)),
-                "')].additionalContracts[*].address"
+                "' && @.transactionType != 'CALL')].additionalContracts[*].address"
             )
         );
         if (found.length != 32) return found.length == 0 ? created : abi.decode(found, (address[]));

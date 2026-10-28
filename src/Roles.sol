@@ -142,6 +142,8 @@ abstract contract Roles is Deployment {
         Kind kind;
         /// @dev A step may select several forks: a proof holds on its own chain only.
         uint256 chainId;
+        /// @dev `_declarationOf` the role proven, which a later `_at` of the name must match.
+        bytes32 declaration;
     }
 
     /// @dev This unit's roles that `_deploy` or `_at` proved in the open step, or that `recover` found. A dry
@@ -215,7 +217,10 @@ abstract contract Roles is Deployment {
     function _at(Role memory r) internal returns (address addr) {
         if (!_own(r)) return _atOther(r);
         uint256 proved = _provedIndex(r.name);
-        if (proved != type(uint256).max) return _proved[proved].addr;
+        if (proved != type(uint256).max) {
+            require(_proved[proved].declaration == _declarationOf(r), _undeclared(r));
+            return _proved[proved].addr;
+        }
         _requireDeclared(r);
         if (r.kind == Kind.Extern) {
             addr = _requiredAddress(_inputFile(_unit()), r.key);
@@ -254,6 +259,10 @@ abstract contract Roles is Deployment {
             // The parent's code fixes the child's address, so a proven parent proves where the child is.
             Role memory parent = create(r.parent, "").unit(r.declaredBy);
             if (_has(journal, string.concat(".", r.parent, "Salt"))) parent.kind = Kind.Create2;
+            require(
+                parent.kind == Kind.Create2 || _has(journal, string.concat(".", r.parent, "Deployer")),
+                string.concat("another unit reads only a child of a CREATE or CREATE2 role, and ", r.parent, " is not")
+            );
             addr = _childOf(r, _atOther(parent));
             if (!_describes(journal, r, addr)) _requireChildCode(r, addr);
             return addr;
@@ -280,13 +289,16 @@ abstract contract Roles is Deployment {
 
     /// @dev `recover` and `_endCheck` take the roles from `_roles()`, so a role the unit uses must be there.
     function _requireDeclared(Role memory r) private view {
-        Role memory d = _declared(r.name);
-        // The builders fix a role's kind by these fields.
-        require(
-            keccak256(abi.encode(d.artifact, d.key, d.parent, d.codeHash))
-                == keccak256(abi.encode(r.artifact, r.key, r.parent, r.codeHash)),
-            string.concat(r.name, " differs from its declaration in ", _unit(), "'s _roles()")
-        );
+        require(_declarationOf(_declared(r.name)) == _declarationOf(r), _undeclared(r));
+    }
+
+    /// @dev What fixes how a role is proven; its arguments and `.ensure` are the unit's code, and are not compared.
+    function _declarationOf(Role memory r) private pure returns (bytes32) {
+        return keccak256(abi.encode(r.kind, r.artifact, r.key, r.parent, r.codeHash));
+    }
+
+    function _undeclared(Role memory r) private pure returns (string memory) {
+        return string.concat(r.name, " differs from its declaration in ", _unit(), "'s _roles()");
     }
 
     function _declared(string memory name) private view returns (Role memory) {
@@ -430,11 +442,12 @@ abstract contract Roles is Deployment {
         _put(string.concat(".", r.name), vm.toString(addr));
     }
 
-    /// @dev Whether the role that `r` descends from is journaled or was found by this recovery.
-    function _rooted(Role memory r, string memory journal) private view returns (bool) {
+    /// @dev Whether this recovery found the role that `r` descends from. The children of a role journaled before
+    ///      are `check`'s: proving that role here can write its journal before every check has passed.
+    function _foundBy(Role memory r) private view returns (bool) {
         Role memory root = r;
         while (root.kind == Kind.Child) root = _declared(root.parent);
-        return _provedIndex(root.name) != type(uint256).max || _has(journal, string.concat(".", root.name));
+        return _provedIndex(root.name) != type(uint256).max;
     }
 
     function _own(Role memory r) private pure returns (bool) {
@@ -453,7 +466,9 @@ abstract contract Roles is Deployment {
 
     function _proven(Role memory r, address addr) private {
         if (!_own(r) || !_stepOpen) return;
-        if (_provedIndex(r.name) == type(uint256).max) _proved.push(Proved(r.name, addr, r.kind, block.chainid));
+        if (_provedIndex(r.name) == type(uint256).max) {
+            _proved.push(Proved(r.name, addr, r.kind, block.chainid, _declarationOf(r)));
+        }
     }
 
     function _provedIndex(string memory name) private view returns (uint256) {
@@ -515,7 +530,7 @@ abstract contract Roles is Deployment {
             bytes memory a = _argsOf(r);
             found[i] = _createToRecover(journal, r.name, r.artifact, sender, _initcodeHash(r.artifact, a));
             if (found[i].addr == address(0)) continue;
-            _proved.push(Proved(r.name, found[i].addr, Kind.Create, block.chainid));
+            _proved.push(Proved(r.name, found[i].addr, Kind.Create, block.chainid, _declarationOf(r)));
             _requireCurrent(found[i], r.artifact, a);
             _requireCreatedDeclared(r.name, found[i].addr, _alsoCreated(found[i].record, found[i].addr));
         }
@@ -523,7 +538,7 @@ abstract contract Roles is Deployment {
         address[] memory children = new address[](rs.length);
         for (uint256 i; i < rs.length; ++i) {
             Role memory r = rs[i];
-            if (r.kind == Kind.Child && _own(r) && _rooted(r, journal)) children[i] = _at(r);
+            if (r.kind == Kind.Child && _own(r) && _foundBy(r)) children[i] = _at(r);
         }
         _journalRecovered(journal, names, found);
         journal = _journal();
