@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide rl; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link" "$W.crlf"
 }
 trap cleanup EXIT
 
@@ -672,6 +672,13 @@ scenario_attended() {
   git config core.autocrlf true; rm README.md; git checkout -q README.md
   refused 'other line endings than the commit' tty no "${run[@]}"
   git config --unset core.autocrlf; rm README.md; git checkout -q README.md
+  # A submodule's file committed with CRLF is what its commit holds; the later runs reach the question.
+  git init -q "$W.crlf"; printf 'a\r\n' >"$W.crlf/crlf.txt"; printf 'a\n' >"$W.crlf/lf.txt"
+  git -C "$W.crlf" add -A; git -C "$W.crlf" -c user.email=t@t -c user.name=t commit -qm crlf
+  git -c protocol.file.allow=always submodule add -q "$W.crlf" crlf; git commit -qm crlf
+  git -C crlf config core.autocrlf true; rm crlf/lf.txt; git -C crlf checkout -q lf.txt
+  refused 'other line endings than the commit' tty no "${run[@]}"
+  git -C crlf config --unset core.autocrlf; rm crlf/lf.txt; git -C crlf checkout -q lf.txt
   DEPLOYER=0x70997970C51812dc3A010C7d01b50e0d17dc79C8 refused 'this run signs only as' tty no "${run[@]}"
   # A pin is the default deployer: a wallet that is not it is refused at the start, one that is it sends.
   local plain; plain=$(<"deployments/$net/network.json")

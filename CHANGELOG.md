@@ -149,6 +149,11 @@ Fixed: `_recordReceipt` finds a CREATE's transaction on the chain, by the journa
 nonce, when no broadcast record holds its receipt, as after a killed forge. Before, the role had no
 `<role>Tx` until the records came back.
 
+Fixed: an attended run refused a clean checkout whose submodule commits a file with CRLF line endings, as
+OpenZeppelin's test vectors do, with `git checked files out with other line endings than the commit holds`.
+`git ls-files --eol --recurse-submodules` reports `i/none` for a submodule's files, so the check now asks
+each repository for its own files.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM
