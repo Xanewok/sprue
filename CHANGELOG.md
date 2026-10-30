@@ -154,6 +154,10 @@ OpenZeppelin's test vectors do, with `git checked files out with other line endi
 `git ls-files --eol --recurse-submodules` reports `i/none` for a submodule's files, so the check now asks
 each repository for its own files.
 
+Faster: an attended run reads the sender's latest and pending nonces on every endpoint at once, before the
+dry run and after the answer. Before, it ran the `cast nonce` calls one after another: six in sequence on a
+network of three chains.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM

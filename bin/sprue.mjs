@@ -739,16 +739,32 @@ async function main(argv) {
     settleDeployer(me, (d) => same(d, me), `this run signs only as ${me}`);
   }
 
-  // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any.
-  const nonces = (sender) =>
-    endpoints
-      .map((rpc) => {
-        const at = (block) => must("cast", ["nonce", sender, "--block", block, "--rpc-url", rpc]);
-        const latest = at("latest");
-        if (latest !== at("pending")) fail(2, `refusing: ${sender} has a pending transaction at ${rpc}; wait for it or replace it`);
+  // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any. The reads
+  // run at once: each is a cast process and a round trip, and none depends on another.
+  const nonces = async (sender) => {
+    const at = (rpc, block) =>
+      new Promise((resolve, reject) => {
+        const child = spawn("cast", ["nonce", sender, "--block", block, "--rpc-url", rpc], { stdio: ["ignore", "pipe", "inherit"] });
+        let out = "";
+        child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
+        child.on("error", reject);
+        child.on("close", (code) => (code === 0 ? resolve(out.replace(/[\r\n]+$/, "")) : reject(new Exit(code ?? 1))));
+      });
+    let read;
+    try {
+      read = await Promise.all(endpoints.map((rpc) => Promise.all([at(rpc, "latest"), at(rpc, "pending")])));
+    } catch (e) {
+      if (e instanceof Exit) throw e;
+      fail(1, `cannot run cast: ${e.message}`);
+    }
+    return endpoints
+      .map((rpc, i) => {
+        const [latest, pending] = read[i];
+        if (latest !== pending) fail(2, `refusing: ${sender} has a pending transaction at ${rpc}; wait for it or replace it`);
         return `${latest} `;
       })
       .join("");
+  };
   // The working-tree changes that matter while the person is asked to confirm: git status, minus the
   // journals and metadata the run itself writes (<unit>.json and *.metadata.json). Known gap: the send
   // runs forge again, so any other state that forge reads may differ from the dry run the person saw.
@@ -799,7 +815,7 @@ async function main(argv) {
   async function attend(line, cmd) {
     const sender = cmd.args[cmd.args.indexOf("--sender") + 1];
     if (sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
-    const snap = nonces(sender);
+    const snap = await nonces(sender);
     const sha = head();
     const seen = tree();
     // The journal records this for a role the step creates: the tree at the send, not at a later
@@ -831,7 +847,7 @@ async function main(argv) {
       out("  no transactions in the dry run\n");
     }
     if (ask(`${line}\nSend this as ${sender}? Type yes: `) !== "yes") fail(6, "not sent: the answer was not yes");
-    if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
+    if ((await nonces(sender)) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
     if (head() !== sha) fail(2, "refusing: HEAD moved since before the dry run; run again");
     if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
     const pre = new Set(porcelain());
