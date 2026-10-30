@@ -918,13 +918,31 @@ async function main(argv) {
   let wave = new Set();
   // A warning repeats in every plan of the run: it is printed once.
   const warned = new Set();
+  // The submodule checkouts, nested ones included: git reads each .gitmodules (quoting, sections), the
+  // files say which are checked out. One git process per .gitmodules, not one per submodule.
+  const checkouts = (dir, seen) => {
+    if (!isFile(join(dir, ".gitmodules"))) return [];
+    const paths = exec("git", ["config", "--file", join(dir, ".gitmodules"), "--get-regexp", "^submodule\\..*\\.path$"]).out;
+    return paths
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => join(dir, l.slice(l.indexOf(" ") + 1)))
+      .filter((d) => existsSync(join(d, ".git")) && !seen.has(resolve(d)) && seen.add(resolve(d)))
+      .flatMap((d) => [d, ...checkouts(d, seen)]);
+  };
+  let checked;
   outer: for (;;) {
     const text = (await plan()).join("\n").replace(/\n+$/, "");
     // git status hides a CRLF checkout of LF files (Git for Windows' core.autocrlf), and solc builds those bytes.
-    // After each plan: its forge may have just installed a submodule. Each repository reports its own files:
-    // --recurse-submodules reports i/none for a submodule's files, so a CRLF file it commits would read as converted.
+    // After each plan: a dirty tree does not stop a run under way. The submodules again only after a plan
+    // whose forge checked out a new one; a file converted inside an existing submodule's checkout during the
+    // run goes unseen until the next run. Each repository reports its own files: --recurse-submodules reports
+    // i/none for a submodule's files, so a CRLF file it commits would read as converted.
+    const now = attended ? checkouts(".", new Set([resolve(".")])).join("\n") : checked;
+    const subs = now !== checked;
+    checked = now;
     const eol = (args) => must("git", args, "refusing: git ls-files failed");
-    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(`${eol(["ls-files", "--eol", ":/"])}\n${eol(["submodule", "foreach", "--quiet", "--recursive", "git ls-files --eol"])}`)) {
+    if (attended && /^i\/(?!crlf)\S*\s+w\/crlf/m.test(`${eol(["ls-files", "--eol", ":/"])}\n${subs ? eol(["submodule", "foreach", "--quiet", "--recursive", "git ls-files --eol"]) : ""}`)) {
       fail(2, "refusing: git checked files out with other line endings than the commit holds (core.autocrlf); run git config --global core.autocrlf false, which applies to all your repositories, then clone the project again");
     }
     // A plan equal to the one just sent shows no progress in planning. Stop instead of sending the same

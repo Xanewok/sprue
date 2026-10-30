@@ -154,6 +154,10 @@ OpenZeppelin's test vectors do, with `git checked files out with other line endi
 `git ls-files --eol --recurse-submodules` reports `i/none` for a submodule's files, so the check now asks
 each repository for its own files.
 
+Faster: an attended run checks line endings after its first plan, and again only after a plan whose forge
+checked out a new submodule. Before, it ran `git submodule foreach` after every plan, about 0.9 s each in a
+project with 30 nested submodules.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM
