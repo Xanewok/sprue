@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide rl; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link" "$W.crlf"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link" "$W.crlf" "$W.order"
 }
 trap cleanup EXIT
 
@@ -708,6 +708,13 @@ scenario_attended() {
   refused 'pending transaction' tty no "${run[@]}"
   cast rpc evm_setAutomine true --rpc-url "$LIVE" >/dev/null; cast rpc evm_mine --rpc-url "$LIVE" >/dev/null
   n0=$((n0 + 1))
+  # An endpoint reads latest, then pending: a transaction sent between the two still shows as pending.
+  mkdir -p "$W.order"
+  printf '#!/bin/sh\ncase "$*" in\n  "nonce "*"--block latest"*) %s "$@"; r=$?; sleep 0.3; echo latest >>"%s"; exit $r;;\n  "nonce "*"--block pending"*) echo pending >>"%s";;\nesac\nexec %s "$@"\n' \
+    "$(command -v cast)" "$W.order/log" "$W.order/log" "$(command -v cast)" >"$W.order/cast"
+  chmod +x "$W.order/cast"
+  rc=0; (unset DEPLOYER; PATH=$W.order:$PATH tty no "${run[@]}") >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 6 ] && [ "$(head -2 "$W.order/log" | tr '\n' ' ')" = "latest pending " ] || die "attended: pending was read before latest answered ($rc): $(cat "$W.order/log")"
 
   rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
   [ "$rc" = 6 ] || die "attended: an answer of no exited $rc, not 6"

@@ -739,8 +739,9 @@ async function main(argv) {
     settleDeployer(me, (d) => same(d, me), `this run signs only as ${me}`);
   }
 
-  // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any. The reads
-  // run at once: each is a cast process and a round trip, and none depends on another.
+  // The sender's latest nonce on each endpoint, refusing if it has a pending transaction at any. An endpoint
+  // reads latest, then pending, so a transaction sent between the two still shows as pending. The endpoints
+  // read at once, and are judged in network order: the first endpoint's refusal or failure wins.
   const nonces = async (sender) => {
     const at = (rpc, block) =>
       new Promise((resolve, reject) => {
@@ -750,16 +751,14 @@ async function main(argv) {
         child.on("error", reject);
         child.on("close", (code) => (code === 0 ? resolve(out.replace(/[\r\n]+$/, "")) : reject(new Exit(code ?? 1))));
       });
-    let read;
-    try {
-      read = await Promise.all(endpoints.map((rpc) => Promise.all([at(rpc, "latest"), at(rpc, "pending")])));
-    } catch (e) {
-      if (e instanceof Exit) throw e;
-      fail(1, `cannot run cast: ${e.message}`);
-    }
+    const reads = await Promise.allSettled(endpoints.map(async (rpc) => [await at(rpc, "latest"), await at(rpc, "pending")]));
     return endpoints
       .map((rpc, i) => {
-        const [latest, pending] = read[i];
+        if (reads[i].status === "rejected") {
+          if (reads[i].reason instanceof Exit) throw reads[i].reason;
+          fail(1, `cannot run cast: ${reads[i].reason.message}`);
+        }
+        const [latest, pending] = reads[i].value;
         if (latest !== pending) fail(2, `refusing: ${sender} has a pending transaction at ${rpc}; wait for it or replace it`);
         return `${latest} `;
       })
