@@ -18,7 +18,7 @@ cleanup() {
   for p in $PIDS; do kill "$p" 2>/dev/null || true; done
   # A failed check can leave a --keep fork running.
   for n in main mute wide rl; do (cd "$W" && node lib/sprue/bin/sprue.mjs rehearse --stop $n) >/dev/null 2>&1 || true; done
-  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link" "$W.crlf"
+  [ -n "${E2E_KEEP:-}" ] && echo "kept $W" >&2 || rm -rf "$W" "$W".node-*.log "$W.bin" "$W.remote" "$W.pty.py" "$W.home" "$W.link" "$W.crlf" "$W.late" "$W.plans"
 }
 trap cleanup EXIT
 
@@ -708,6 +708,20 @@ scenario_attended() {
   refused 'pending transaction' tty no "${run[@]}"
   cast rpc evm_setAutomine true --rpc-url "$LIVE" >/dev/null; cast rpc evm_mine --rpc-url "$LIVE" >/dev/null
   n0=$((n0 + 1))
+  # A submodule that a later plan's forge checks out, converted, is checked too: the check's answer from
+  # the first plan does not stand for a checkout made after it. The send is undone after.
+  mkdir -p "$W.late"
+  printf '#!/bin/sh\ncase "$*" in *"plan(string,string)"*) n=$(cat "%s" 2>/dev/null || echo 0); echo $((n + 1)) >"%s"
+  if [ "$n" = 1 ]; then git -c protocol.file.allow=always submodule add -q "%s" late; git -C late config core.autocrlf true; rm late/lf.txt; git -C late checkout -q lf.txt; fi;; esac
+exec %s "$@"\n' "$W.plans" "$W.plans" "$W.crlf" "$(command -v forge)" >"$W.late/forge"
+  chmod +x "$W.late/forge"
+  local snap; snap=$(cast rpc evm_snapshot --rpc-url "$LIVE" | tr -d '"'); cp -a "deployments/$net" "$W.late/net"
+  (unset DEPLOYER; PATH=$W.late:$PATH refused 'other line endings than the commit' tty yes "${run[@]}")
+  [ "$(cat "$W.plans")" = 2 ] || die "attended: the converted submodule was not checked out by the second plan"
+  git rm -qf --cached late; rm -rf late .git/modules/late; git checkout -q HEAD -- .gitmodules; git config --remove-section submodule.late
+  [ -z "$(git status --porcelain --ignore-submodules=none)" ] || die "attended: the late submodule left the tree dirty: $(git status --porcelain)"
+  [ "$(cast rpc evm_revert "$snap" --rpc-url "$LIVE")" = true ] || die "evm_revert"
+  rm -rf "deployments/$net"; mv "$W.late/net" "deployments/$net"
 
   rc=0; out=$(tty no "${run[@]}" 2>&1) || rc=$?
   [ "$rc" = 6 ] || die "attended: an answer of no exited $rc, not 6"
