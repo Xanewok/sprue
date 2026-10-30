@@ -752,9 +752,9 @@ async function main(argv) {
   // The working-tree changes that matter while the person is asked to confirm: git status, minus the
   // journals and metadata the run itself writes (<unit>.json and *.metadata.json). Known gap: the send
   // runs forge again, so any other state that forge reads may differ from the dry run the person saw.
-  const changes = () => {
+  const changes = (status) => {
     const dir = `${DEPLOYMENTS}/${network}/`;
-    return porcelain().filter((l) => {
+    return status.filter((l) => {
       const p = l.slice(3);
       return !(p.startsWith(dir) && (p.endsWith(".metadata.json") || (p.endsWith(".json") && units.has(p.slice(dir.length, -5)))));
     });
@@ -765,7 +765,7 @@ async function main(argv) {
   // not.
   const ours = new Set();
   const digest = (f) => (isFile(f) ? [`${f} ${createHash("sha256").update(readFileSync(f)).digest("hex")}`] : []);
-  const tree = () => [...changes(), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
+  const tree = (status) => [...changes(status), ...digest(".env"), ...digest(join(homedir(), ".foundry", "foundry.toml"))].join("\n");
   const head = () => must("git", ["rev-parse", "HEAD"], "refusing: git rev-parse failed");
 
   // Repeats forge's last `Error:` line, where a long run buries it, and exits with forge's code.
@@ -801,10 +801,12 @@ async function main(argv) {
     if (sender.toLowerCase() !== me.toLowerCase()) fail(2, `refusing: this step sends as ${sender}, not the signer ${me}: ${line}`);
     const snap = nonces(sender);
     const sha = head();
-    const seen = tree();
+    // One git status per moment: before the dry run, after the answer, after the send.
+    const before = porcelain();
+    const seen = tree(before);
     // The journal records this for a role the step creates: the tree at the send, not at a later
     // recovery.
-    if (changes().some((l) => !ours.has(l))) process.env.DEPLOY_TREE_DIRTY = "1";
+    if (changes(before).some((l) => !ours.has(l))) process.env.DEPLOY_TREE_DIRTY = "1";
     else delete process.env.DEPLOY_TREE_DIRTY;
     const dry = await forgeShowingCompile(cmd.args, cmd.env);
     if (dry.error) fail(1, `cannot run forge: ${dry.error.message}`);
@@ -833,8 +835,9 @@ async function main(argv) {
     if (ask(`${line}\nSend this as ${sender}? Type yes: `) !== "yes") fail(6, "not sent: the answer was not yes");
     if (nonces(sender) !== snap) fail(2, "refusing: the sender's nonce moved since before the dry run; run again");
     if (head() !== sha) fail(2, "refusing: HEAD moved since before the dry run; run again");
-    if (tree() !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
-    const pre = new Set(porcelain());
+    const answered = porcelain();
+    if (tree(answered) !== seen) fail(2, "refusing: the working tree changed since before the dry run; run again");
+    const pre = new Set(answered);
     await step(cmd);
     // Ownership is by path: the new untracked records under this step's script directory (its chain id
     // is not known here). A concurrent run of the same script is not told apart.

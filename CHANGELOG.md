@@ -154,6 +154,10 @@ OpenZeppelin's test vectors do, with `git checked files out with other line endi
 `git ls-files --eol --recurse-submodules` reports `i/none` for a submodule's files, so the check now asks
 each repository for its own files.
 
+Faster: an attended step runs `git status` three times, before the dry run, after the answer and after the
+send, instead of five. The comparison before the send and the dirty mark in the journal read the same
+snapshots as before.
+
 ## 0.1.5
 
 Breaking: a signal to `rehearse` exits with 128 plus the signal's number, as it does for `run`: SIGTERM
