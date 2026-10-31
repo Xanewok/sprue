@@ -312,7 +312,7 @@ function askSecret(prompt) {
   const raw = new TtyReadStream(rd);
   raw.setRawMode(true);
   write(wr, prompt);
-  const secret = Buffer.allocUnsafeSlow(256).fill(0);
+  const secret = Buffer.allocUnsafeSlow(4096).fill(0);
   process.once("exit", () => secret.fill(0));
   const b = Buffer.alloc(1);
   let n = 0;
@@ -328,10 +328,14 @@ function askSecret(prompt) {
       }
       if (got === 0 || b[0] === 13 || b[0] === 10) break;
       if (b[0] === 3) throw new Exit(130);
+      // A NUL cannot pass in an argument: spawn would refuse it in an error that prints the password.
+      if (b[0] === 0) fail(2, "refusing: the keystore password contains a NUL byte");
       if (b[0] === 127 || b[0] === 8) {
-        if (n) secret[--n] = 0;
+        // Erases one character: a UTF-8 character's continuation bytes go with it.
+        while (n && (secret[--n] & 0xc0) === 0x80) secret[n] = 0;
+        secret[n] = 0;
       } else if (n < secret.length) secret[n++] = b[0];
-      else fail(2, "refusing: the keystore password is longer than 256 bytes");
+      else fail(2, `refusing: the keystore password is longer than ${secret.length} bytes`);
     }
   } finally {
     b.fill(0);

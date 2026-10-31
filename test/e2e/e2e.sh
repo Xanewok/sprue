@@ -720,10 +720,13 @@ scenario_attended() {
   # A password that does not unlock the keystore is refused before any plan.
   KEYSTORE_PW=wrong refused 'is missing or the password does not unlock it' tty no "${run[@]}"
   [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: a wrong password sent"
+  # A NUL cannot reach forge, and the refusal does not print what was typed.
+  out=$(KEYSTORE_PW='secret^@x' tty no "${run[@]}" 2>&1) && die "attended: a NUL in the password passed"
+  grep -q 'contains a NUL byte' <<<"$out" && ! grep -aq secret <<<"$out" || die "attended: a NUL in the password was not refused, or was printed: ${out: -600}"
   # Every step is asked, the check too, and the password once for the run. Its extra Enter is typed ahead
-  # of the questions, and answers none of them.
+  # of the questions, and answers none of them. A backspace erases the whole UTF-8 character before it.
   # Without DEPLOYER the run sends as its signer.
-  out=$( (unset DEPLOYER; KEYSTORE_PW=$KEYSTORE_PW$'\n' tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
+  out=$( (unset DEPLOYER; KEYSTORE_PW=${KEYSTORE_PW:0:1}é$'\x7f'${KEYSTORE_PW:1}$'\n' tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
   [ "$(grep -ac 'assword' <<<"$out")" = 1 ] || die "attended: the password was not asked exactly once: ${out: -600}"
   grep -aq 'no transactions in the dry run' <<<"$out" || die "attended: the check's empty dry run was not shown as such"
