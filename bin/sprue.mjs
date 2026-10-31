@@ -6,10 +6,11 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync,
-  statSync, writeFileSync, writeSync,
+  statSync, writeFileSync, writeSync, constants as FS,
 } from "node:fs";
 import { constants, homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { ReadStream as TtyReadStream } from "node:tty";
 
 const NAME = "sprue";
 const PROJECT = "sprue.json";
@@ -49,7 +50,7 @@ Flags may appear anywhere after the command.
 run, on a network whose chains sprue.json lists all as local, sends unattended, sending from Anvil's unlocked
 accounts, or signing with KEY (Anvil's dev key if unset) on another node. On any other chain it is attended: it needs a
 terminal and no CI variable. A rehearsal network (the name that paths.rehearsal ends in, or it and -<suffix>) requires
-Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender, and starts only on a clean git checkout (uncommitted journals of an
+Anvil or a chains.local id on every chain; any other network refuses a development node. It signs through exactly one of --account, --ledger and --trezor, as the step's sender; --account asks the keystore password once, at the start, and passes it to forge as --password, which every local user can read in the process list while forge runs. It starts only on a clean git checkout (uncommitted journals of an
 interrupted run included: commit them). Each step's dry run is shown with its transactions and cost,
 and every step is asked: it is sent only after \`yes\` is typed at the terminal, with no pending
 transaction and the sender's nonces, the git HEAD and status (but for the journals the run writes),
@@ -287,10 +288,69 @@ async function graph(GRAPH, tag, sig, rest = [], env = {}) {
 function openTty() {
   try { return [openSync(WIN ? "CONIN$" : "/dev/tty", "r"), openSync(WIN ? "CONOUT$" : "/dev/tty", WIN ? "r+" : "w")]; } catch {}
 }
+// Lines typed before a question is shown answer nothing: an Enter left over from an earlier prompt must
+// not read as this one's answer. A Windows console has no non-blocking read, so there they stay.
+function drainTty() {
+  if (WIN) return;
+  let fd;
+  try { fd = openSync("/dev/tty", FS.O_RDONLY | FS.O_NONBLOCK); } catch { return; }
+  const b = Buffer.alloc(256);
+  try { while (readSync(fd, b, 0, b.length, null) > 0); } catch {}
+  b.fill(0);
+  closeSync(fd);
+}
+// The keystore password, read with echo off into memory that is zeroed at exit. forge takes a password
+// only as an argument or a regular file: an argument is readable by every local user while forge runs
+// (ps, /proc/<pid>/cmdline, unless /proc is mounted hidepid). A pipe would not be, but forge refuses a pipe
+// as --password-file. The string forge is given is a copy that cannot be zeroed.
+function askSecret(prompt) {
+  const tty = openTty();
+  if (!tty) fail(2, "refusing: no terminal to ask on");
+  const [rd, wr] = tty;
+  drainTty();
+  // Raw before the prompt: a password typed as soon as the prompt shows is never echoed.
+  const raw = new TtyReadStream(rd);
+  raw.setRawMode(true);
+  write(wr, prompt);
+  const secret = Buffer.allocUnsafeSlow(4096).fill(0);
+  process.once("exit", () => secret.fill(0));
+  const b = Buffer.alloc(1);
+  let n = 0;
+  try {
+    for (;;) {
+      let got;
+      try {
+        got = readSync(rd, b, 0, 1, null);
+      } catch (e) {
+        if (e.code !== "EAGAIN") throw e;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        continue;
+      }
+      if (got === 0 || b[0] === 13 || b[0] === 10) break;
+      if (b[0] === 3) throw new Exit(130);
+      // A NUL cannot pass in an argument: spawn would refuse it in an error that prints the password.
+      if (b[0] === 0) fail(2, "refusing: the keystore password contains a NUL byte");
+      if (b[0] === 127 || b[0] === 8) {
+        // Erases one character: a UTF-8 character's continuation bytes go with it.
+        while (n && (secret[--n] & 0xc0) === 0x80) secret[n] = 0;
+        secret[n] = 0;
+      } else if (n < secret.length) secret[n++] = b[0];
+      else fail(2, `refusing: the keystore password is longer than ${secret.length} bytes`);
+    }
+  } finally {
+    b.fill(0);
+    raw.setRawMode(false);
+    write(wr, "\n");
+    raw.destroy();
+    closeSync(wr);
+  }
+  return secret.subarray(0, n);
+}
 function ask(prompt) {
   const tty = openTty();
   if (!tty) fail(2, "refusing: no terminal to ask on");
   const [rd, wr] = tty;
+  drainTty();
   write(wr, prompt);
   handleSignals(false);
   const bytes = [];
@@ -734,7 +794,9 @@ async function main(argv) {
       if (!dev && broadcastDir) fail(2, `refusing ${network}: ${rpc} is not a development node (${v.out}, chain ${id}); a rehearsal requires Anvil or a chains.local id`);
     }
     signer = signers[0];
-    me = must("cast", ["wallet", "address", ...signer], undefined, ["inherit", "pipe", "inherit"]);
+    // One password for the run: forge's own prompt would ask at every send.
+    if (signer[0] === "--account") signer = [...signer, "--password", askSecret(`Enter keystore password for ${signer[1]}: `).toString()];
+    me = must("cast", ["wallet", "address", ...signer], signer[0] === "--account" ? `refusing: the keystore ${signer[1]} is missing or the password does not unlock it` : undefined, ["ignore", "pipe", "inherit"]);
     out(`signer ${me}\n`);
     settleDeployer(me, (d) => same(d, me), `this run signs only as ${me}`);
   }

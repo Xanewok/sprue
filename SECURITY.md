@@ -68,6 +68,12 @@ end-to-end scenario for each invariant.
 - sprue does not wait for finality. A reorg can undo a step the journal records. A step that
   reads the role through `_at` re-reads its code before it sends and refuses if the
   code is gone; a `.needs(...)` edge alone does not re-read it.
+- `--account` passes the keystore password to every forge and cast it runs as `--password`, so every
+  local user can read it in the process list while one runs (`ps`, `/proc/<pid>/cmdline`, unless `/proc`
+  is mounted with `hidepid`). On a machine others log in to, sign with `--ledger` or `--trezor`. A pipe
+  would keep the password out of the process list, but forge's `--password-file` requires a regular
+  file and refuses a pipe. sprue holds the password in a buffer it zeroes at exit; the strings handed to
+  forge and cast are copies it cannot zero.
 - An RPC node can lag behind the node that took the last send. The run then stops at the step that
   cannot see that send yet, with "has no code" or exit 5 and the plan unchanged; run again once the
   node catches up. forge's nonce check refuses a send simulated before the sender's own last
