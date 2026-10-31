@@ -717,10 +717,15 @@ scenario_attended() {
   # Ctrl-C at the question ends the run at once: no listener holds the signal until Enter.
   rc=0; tty ^C "${run[@]}" >/dev/null 2>&1 || rc=$?
   [ "$rc" = 130 ] && [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: Ctrl-C at the question exited $rc, not 130, or sent"
-  # Every step is asked, the check too.
+  # A password that does not unlock the keystore is refused before any plan.
+  KEYSTORE_PW=wrong refused 'is missing or the password does not unlock it' tty no "${run[@]}"
+  [ "$(nonce "$LIVE")" = "$n0" ] || die "attended: a wrong password sent"
+  # Every step is asked, the check too, and the password once for the run. Its extra Enter is typed ahead
+  # of the questions, and answers none of them.
   # Without DEPLOYER the run sends as its signer.
-  out=$( (unset DEPLOYER; tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
+  out=$( (unset DEPLOYER; KEYSTORE_PW=$KEYSTORE_PW$'\n' tty yes "${run[@]}") 2>&1) || die "attended: yes failed: ${out: -600}"
   [ "$(grep -ac 'Type yes: ' <<<"$out")" = 2 ] || die "attended: the deployment and the check were not both asked"
+  [ "$(grep -ac 'assword' <<<"$out")" = 1 ] || die "attended: the password was not asked exactly once: ${out: -600}"
   grep -aq 'no transactions in the dry run' <<<"$out" || die "attended: the check's empty dry run was not shown as such"
   [ "$(nonce "$LIVE")" = $((n0 + 1)) ] || die "attended: the run did not send once"
   # The fork keeps chain id 1, so records in broadcast/ would read as that chain's.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Changed: an attended run with `--account` asks the keystore password once, at the start, with echo off,
+and passes it to forge and cast as `--password`; a password that does not unlock the keystore is refused
+before the first plan. Before, cast asked at the start and forge again at every send. The password is
+visible in the process list while forge or cast runs (SECURITY.md, Limits). Lines typed before a question
+is shown no longer answer it: an Enter left over from a password prompt read as the answer to `Type yes:`.
+
 Breaking: completion is decided only by live checks. The `checked` certificate is gone, and a journal's
 `checked` object is ignored as completion; it still counts as evidence that a role landed, so a journal that
 has one but no `<role>Tx` is refused a resend while its address shows no code. A `check` step ends with
